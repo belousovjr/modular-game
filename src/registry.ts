@@ -1,4 +1,5 @@
 import { groundModule } from './modules/ground/index.ts';
 import { beaconModule } from './modules/beacon/index.ts';
-export const modules = [groundModule, beaconModule];
-export const defaultModules = ['ground', 'beacon'];
+import { simulationModule } from './modules/simulation/index.tsx';
+export const modules = [simulationModule, groundModule, beaconModule];
+export const defaultModules = ['simulation', 'ground', 'beacon'];

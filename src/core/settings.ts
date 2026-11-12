@@ -9,3 +9,13 @@ export function readSelection<C>(raw: string | null, registry: readonly ModuleDe
   } catch { return [...defaults]; }
 }
 export function encodeSelection(ids: readonly string[]) { return JSON.stringify({ version: 1, enabled: ids }); }
+
+export const CATEGORIES_STORAGE_KEY = 'modular-game.categories';
+export function readCollapsedCategories(raw: string | null, names: readonly string[]): string[] {
+  try {
+    const value: unknown = JSON.parse(raw ?? 'null');
+    if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1 ||
+        !('collapsed' in value) || !Array.isArray(value.collapsed) || !value.collapsed.every(name => typeof name === 'string')) return [];
+    return [...new Set(value.collapsed.filter(name => names.includes(name)))];
+  } catch { return []; }
+}

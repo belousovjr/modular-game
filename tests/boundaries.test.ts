@@ -14,7 +14,12 @@ test('import boundaries reject private, core-to-feature and browser dependencies
     const path = join(cwd, 'src/modules/a/index.ts');
     writeFileSync(path, 'import { b } from "../b/index.ts";');
     assert.equal(run().status, 0);
+    writeFileSync(path, 'import { b } from "../b/index.tsx";');
+    assert.equal(run().status, 0);
     for (const [file, source] of [
+      [join(cwd, 'src/modules/a/panel.tsx'), 'import { b } from "../b/private.tsx"; const panel = <p />;'],
+      [join(cwd, 'src/simulation/panel.tsx'), 'import { useState } from "react";'],
+      [join(cwd, 'src/simulation/view.tsx'), 'const panel = <p />;'],
       [path, 'import { b } from "../b/private.ts";'],
       [join(cwd, 'src/core/test.ts'), 'export { b } from "../modules/b/index.ts";'],
       [join(cwd, 'src/simulation/test.ts'), 'import type { Scene } from "@babylonjs/core";'],

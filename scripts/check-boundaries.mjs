@@ -7,12 +7,13 @@ async function walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = resolve(dir, entry.name);
     if (entry.isDirectory()) { await walk(path); continue; }
-    if (!path.endsWith('.ts')) continue;
+    if (!/\.tsx?$/.test(path)) continue;
     const { program: file, errors } = parseSync(path, await readFile(path, 'utf8'));
     if (errors.length) throw new Error(`Cannot parse ${path}`);
     const owner = relative(root, path).split(sep);
     function fail(message) { console.error(`${relative(root, path)}: ${message}`); failures++; }
     function visit(node) {
+      if (owner[0] === 'simulation' && ['JSXElement', 'JSXFragment'].includes(node.type)) fail('Headless simulation cannot use JSX');
       let spec;
       if (['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(node.type) && node.source) spec = node.source.value;
       if (node.type === 'ImportExpression' || (node.type === 'CallExpression' && node.callee?.name === 'require')) {
@@ -22,7 +23,7 @@ async function walk(dir) {
         const target = spec.startsWith('.') ? relative(root, resolve(dir, spec)).split(sep) : spec.split('/');
         if (owner[0] === 'simulation' && (!spec.startsWith('.') || target[0] !== 'simulation')) fail(`Headless simulation cannot import ${spec}`);
         if (owner[0] === 'core' && target[0] === 'modules') fail('Core cannot import feature modules');
-        if (owner[0] === 'modules' && target[0] === 'modules' && owner[1] !== target[1] && !(target.length === 3 && target[2] === 'index.ts')) fail(`Use the public module entry point: ${spec}`);
+        if (owner[0] === 'modules' && target[0] === 'modules' && owner[1] !== target[1] && !(target.length === 3 && /^index\.tsx?$/.test(target[2]))) fail(`Use the public module entry point: ${spec}`);
       }
       for (const value of Object.values(node)) {
         if (Array.isArray(value)) { for (const child of value) if (child?.type) visit(child); }

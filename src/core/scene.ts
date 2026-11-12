@@ -4,26 +4,28 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
-import { createLocalAuthority, type Snapshot } from '../simulation/authority.ts';
+import { Observable } from '@babylonjs/core/Misc/observable';
+import type { Panels } from './panels.ts';
 import { startModules, type ModuleDefinition } from './modules.ts';
 import type { CoreContext } from './context.ts';
-export function createViewport(canvas: HTMLCanvasElement, report: (snapshot: Snapshot) => void) {
+export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: number) => void, panels: Panels) {
   const engine = new Engine(canvas, true);
-  let session: { scene: Scene; dispose(): void; authority: ReturnType<typeof createLocalAuthority>; mode: 'edit' | 'play' } | undefined;
+  let session: { scene: Scene; onFrame: Observable<number>; dispose(): void } | undefined;
   let last = performance.now();
   engine.runRenderLoop(() => {
     const now = performance.now();
     const delta = now - last;
     last = now;
     if (!session) return;
-    if (session.mode === 'play') session.authority.advance(delta);
-    report(session.authority.snapshot());
+    session.onFrame.notifyObservers(delta);
     session.scene.render();
+    reportFps(engine.getFps());
   });
   const resize = () => engine.resize();
-  window.addEventListener('resize', resize);
+  const observer = new ResizeObserver(resize);
+  observer.observe(canvas);
   return {
-    restart(registry: readonly ModuleDefinition<CoreContext>[], selected: readonly string[], mode: 'edit' | 'play') {
+    restart(registry: readonly ModuleDefinition<CoreContext>[], selected: readonly string[]) {
       const old = session;
       session = undefined;
       old?.dispose();
@@ -35,14 +37,14 @@ export function createViewport(canvas: HTMLCanvasElement, report: (snapshot: Sna
         camera.upperRadiusLimit = 35;
         camera.attachControl(canvas, true);
         new HemisphericLight('light', new Vector3(0, 1, 0), scene);
-        const authority = createLocalAuthority();
-        const running = startModules(registry, selected, { scene, snapshot: () => authority.snapshot() });
-        session = { scene, authority, mode, dispose() { try { running.dispose(); } finally { scene.dispose(); } } };
+        const onFrame = new Observable<number>();
+        const running = startModules(registry, selected, { scene, onFrame, panels });
+        session = { scene, onFrame, dispose() { try { running.dispose(); } finally { onFrame.clear(); scene.dispose(); } } };
         last = performance.now();
       } catch (error) { scene.dispose(); throw error; }
     },
     dispose() {
-      try { session?.dispose(); } finally { session = undefined; window.removeEventListener('resize', resize); engine.dispose(); }
+      try { session?.dispose(); } finally { session = undefined; observer.disconnect(); engine.dispose(); }
     },
   };
 }

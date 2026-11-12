@@ -3,6 +3,7 @@ export interface ModuleContext<C, D> { core: C; deps: D; scope: Scope }
 export interface ModuleDefinition<C, A = unknown> {
   readonly id: string;
   readonly title: string;
+  readonly category: string;
   readonly requires: Readonly<Record<string, ModuleDefinition<C>>>;
   readonly required?: boolean;
   setup(context: ModuleContext<C, never>): A;
@@ -10,7 +11,7 @@ export interface ModuleDefinition<C, A = unknown> {
 type APIs<D> = { readonly [K in keyof D]: D[K] extends ModuleDefinition<never, infer A> ? A : never };
 export function moduleFactory<C>() {
   return function defineModule<const D extends Record<string, ModuleDefinition<C>>, A>(definition: {
-    id: string; title: string; required?: boolean; requires: D;
+    id: string; title: string; category: string; required?: boolean; requires: D;
     setup(context: ModuleContext<C, APIs<D>>): A;
   }): ModuleDefinition<C, A> {
     return definition as ModuleDefinition<C, A>;
