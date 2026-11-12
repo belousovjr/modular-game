@@ -105,6 +105,7 @@ try {
         if (moduleList.scrollHeight <= moduleList.clientHeight || moduleList.clientHeight > Math.min(420, innerHeight * 0.5) + 1) throw new Error('Module list is not height-limited');
         moduleList.focus();
         moduleList.scrollTop = moduleList.scrollHeight; await nextPaint();
+        if (moduleList.scrollWidth > moduleList.clientWidth + 1) throw new Error('Module list has horizontal overflow');
         if (moduleList.scrollTop <= 0 || controls.some((control, index) => control.getBoundingClientRect().top !== positions[index])) throw new Error('Module list scrolling moved the controls');
       } finally { categories.forEach(category => category.remove()); moduleList.scrollTop = 0; }
 
@@ -284,6 +285,14 @@ try {
         const headings = [...header.querySelectorAll('th')];
         const cells = [...body.firstElementChild.children];
         if (headings.some((heading, index) => Math.abs(heading.getBoundingClientRect().left - cells[index].getBoundingClientRect().left) > 1)) throw new Error('Result columns are misaligned');
+        const panel = document.querySelector('.test-panel');
+        try {
+          panel.style.width = '340px'; panel.style.right = 'auto';
+          await nextPaint();
+          const viewport = document.querySelector('.test-results [data-radix-scroll-area-viewport]');
+          if (viewport.scrollWidth > viewport.clientWidth + 1 || body.scrollWidth > body.clientWidth + 1 || panel.scrollWidth > panel.clientWidth + 1) throw new Error('Test results have horizontal overflow on a narrow panel');
+        } finally { panel.style.width = ''; panel.style.right = ''; }
+
       } finally { clones.forEach(row => row.remove()); body.scrollTop = 0; }
       document.getElementById('close-test-results').click();
       await nextPaint();

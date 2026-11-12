@@ -158,7 +158,7 @@ function App() {
                   catch { setStatus('Браузер не разрешил сохранить состояние категорий.'); }
                 }}>
                   <Flex width="100%" justify="between" align="center" gap="2">
-                  <Text>{category.title} ({category.modules.length})</Text>
+                  <Text className="module-title" wrap="wrap">{category.title} ({category.modules.length})</Text>
                   {collapsed.has(category.title) ? <ChevronRight size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
                   </Flex>
                 </Button>
@@ -173,7 +173,7 @@ function App() {
                 const note = module.required ? 'Обязательный модуль' : visibleConsumers.length ? `Нужен:\n${formatModuleGroups(visibleConsumers)}` : dependencies.length ? dependencyNote : '';
                 const panel = entries.find(entry => entry.id === module.id);
                 return <Flex key={module.id} data-module-id={module.id} align="center" justify="between" gap="3">
-                  <Flex align="center" gap="2">
+                  <Flex className="module-name" align="center" gap="2">
                   <Tooltip content={<Flex direction="column">{(note || module.title).split('\n').map((line, index) => <Text key={index}>{line}</Text>)}</Flex>}>
                   <Text as="label" size="2" tabIndex={0}>
                     <Flex align="center" gap="2">
@@ -181,12 +181,12 @@ function App() {
                         onCheckedChange={checked => {
                           syncModules(checked === true ? [...enabled, module.id] : [...enabled].filter(id => id !== module.id));
                         }} />
-                      {module.title}
+                      <span className="module-title">{module.title}</span>
                     </Flex>
                   </Text>
                   </Tooltip>
                   </Flex>
-                  <Flex align="center" gap="2">
+                  <Flex className="module-actions" align="center" gap="2">
                   {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   {panel && <Tooltip content={`Детали: ${module.title}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${module.title}`}
                     aria-expanded={panel.open} onClick={() => panels.toggle(module.id)}><Info size={16} aria-hidden="true" /></IconButton></Tooltip>}
