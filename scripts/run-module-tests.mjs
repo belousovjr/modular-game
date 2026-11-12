@@ -25,6 +25,7 @@ function chromiumPath() {
 
 // Uses Chromium's DevTools protocol and Node's WebSocket; no automation dependency.
 const fpsMode = process.argv.includes('--fps');
+const headless = process.argv.includes('--headless') || (fpsMode && !process.argv.includes('--headed'));
 const reportPath = resolve('artifacts/fps-report.json');
 let profile;
 let browser;
@@ -46,7 +47,7 @@ try {
   profile = await mkdtemp(join(tmpdir(), 'modular-game-test-'));
   browser = spawn(executable, [
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
-    ...(fpsMode || process.argv.includes('--headless') ? ['--headless=new', '--enable-unsafe-swiftshader'] : []),
+    ...(headless ? ['--headless=new', '--enable-unsafe-swiftshader'] : []),
     'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] });
   const endpoint = await new Promise((resolve, reject) => {
@@ -262,7 +263,7 @@ try {
       const canvas = document.querySelector('canvas');
       const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
       const debug = gl?.getExtension('WEBGL_debug_renderer_info');
-      const environment = { userAgent: navigator.userAgent, width: canvas.width, height: canvas.height,
+      const environment = { headless: ${headless}, userAgent: navigator.userAgent, width: canvas.width, height: canvas.height,
         devicePixelRatio, renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : 'unknown' };
       const results = await window.moduleTests.run(${JSON.stringify(ids) ?? 'undefined'}, ${seconds ?? 'undefined'});
       await nextPaint();
