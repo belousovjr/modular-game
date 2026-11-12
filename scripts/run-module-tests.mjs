@@ -96,6 +96,18 @@ try {
       const nextPaint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const trigger = document.getElementById('modules-trigger');
       if (trigger.getAttribute('aria-expanded') === 'false') { trigger.click(); await nextPaint(); }
+      const moduleList = document.getElementById('modules');
+      const categories = Array.from({ length: 30 }, () => moduleList.firstElementChild.cloneNode(true));
+      try {
+        moduleList.append(...categories); await nextPaint();
+        const controls = [document.getElementById('test-all'), document.getElementById('reset'), document.querySelector('[role="tablist"]')];
+        const positions = controls.map(control => control.getBoundingClientRect().top);
+        if (moduleList.scrollHeight <= moduleList.clientHeight || moduleList.clientHeight > Math.min(420, innerHeight * 0.5) + 1) throw new Error('Module list is not height-limited');
+        moduleList.focus();
+        moduleList.scrollTop = moduleList.scrollHeight; await nextPaint();
+        if (moduleList.scrollTop <= 0 || controls.some((control, index) => control.getBoundingClientRect().top !== positions[index])) throw new Error('Module list scrolling moved the controls');
+      } finally { categories.forEach(category => category.remove()); moduleList.scrollTop = 0; }
+
       if (${fpsMode}) {
         // Enable the entire registry through the UI, including non-default modules.
         for (const checkbox of document.querySelectorAll('#modules [role="checkbox"]')) {
@@ -291,7 +303,7 @@ try {
           transaction.onabort = () => { db.close(); reject(transaction.error); };
         };
       });
-      return { uiChecks: { settingsSave: true, settingsUndoRedo: true, settingsExportImport: true, play: true, playAll: true, overallProgress: tests.length > 1, summary: results.length > 1, closeResults: true, controlsLocked: true, progress: true, stop: true, controlsRestored: true }, environment, enabledModules, results };
+      return { uiChecks: { moduleListScroll: true, settingsSave: true, settingsUndoRedo: true, settingsExportImport: true, play: true, playAll: true, overallProgress: tests.length > 1, summary: results.length > 1, closeResults: true, controlsLocked: true, progress: true, stop: true, controlsRestored: true }, environment, enabledModules, results };
     })()`,
     awaitPromise: true, returnByValue: true,
   }, sessionId);

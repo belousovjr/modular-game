@@ -148,7 +148,7 @@ function App() {
               </Tabs.List>
             <Tabs.Content value={preferences.tab}>
             <Text size="1" color="gray">{preferences.tab === 'hidden' ? 'Кандидаты в core · всегда включены' : preferences.tab === 'archived' ? 'Кандидаты на удаление · всегда отключены' : 'Рабочий набор модулей'}</Text>
-            <Flex id="modules" direction="column" gap="3">
+            <Flex id="modules" role="region" aria-label="Категории и модули" tabIndex={0} direction="column" gap="3">
               {groupModules(modules.filter(module => (preferences.statuses[module.id] ?? 'working') === preferences.tab)).map((category, index) => <Flex key={category.title} direction="column" gap="3">
                 <Button variant="soft" size="1" aria-expanded={!collapsed.has(category.title)} aria-controls={`category-${index}`} onClick={() => {
                   const next = new Set(collapsed);
