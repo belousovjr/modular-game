@@ -1,4 +1,4 @@
 {
   "metric": "average",
-  "passGrades": ["yellow", "green"]
+  "passGrades": ["orange", "yellow", "green"]
 }
