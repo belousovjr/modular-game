@@ -3,5 +3,6 @@ import { beaconModule } from './modules/beacon/index.ts';
 import { simulationModule } from './modules/simulation/index.tsx';
 import { lightingModule } from './modules/lighting/index.ts';
 import { geometryModule } from './modules/geometry/index.ts';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule];
+import { objectTemplatesModule } from './modules/object-templates/index.ts';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

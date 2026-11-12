@@ -37,15 +37,20 @@ export const geometryModule = defineModule({
       models.clear();
     });
 
-    function createModel(name: string, parts: readonly GeometryPart[], owner: Scope): GeometryModel {
+    function validateParts(parts: readonly GeometryPart[]) {
       if (stopped) throw new Error('Модуль геометрии остановлен');
-      if (!name.trim() || !parts.length) throw new Error('Нужны имя модели и хотя бы одна деталь');
+      if (!parts.length) throw new Error('Нужна хотя бы одна деталь');
       for (const part of parts) {
         if (!part.surface.trim() || part.size.length !== 3 || !part.size.every(value => Number.isFinite(value) && value > 0) ||
             [part.position, part.rotation].some(value => value !== undefined && (value.length !== 3 || !value.every(Number.isFinite)))) {
           throw new Error('Некорректная поверхность, размер или преобразование детали');
         }
       }
+    }
+
+    function createModel(name: string, parts: readonly GeometryPart[], owner: Scope): GeometryModel {
+      validateParts(parts);
+      if (!name.trim()) throw new Error('Нужно имя модели');
       const root = new TransformNode(name, core.scene);
       owner.onDispose(() => root.dispose());
       models.add(root);
@@ -66,6 +71,6 @@ export const geometryModule = defineModule({
       } catch (error) { root.dispose(); throw error; }
       return { root, surfaces };
     }
-    return { createModel };
+    return { createModel, validateParts };
   },
 });

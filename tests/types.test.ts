@@ -1,5 +1,16 @@
 import { moduleFactory } from '../src/core/modules.ts';
+import { defineModule } from '../src/core/context.ts';
+import { objectTemplatesModule } from '../src/modules/object-templates/index.ts';
 const define = moduleFactory<{}>();
+defineModule({ id: 'template-types', title: '', category: 'Тесты', requires: { templates: objectTemplatesModule }, setup({ deps, scope }) {
+  // @ts-expect-error template parameters currently accept only numbers
+  deps.templates.resolve('building', { height: 'tall' });
+  // @ts-expect-error LOD is selected by numeric index
+  deps.templates.createModel('building', 'example', {}, scope, 'far');
+  // @ts-expect-error transitive geometry dependency does not grant direct API access
+  deps.geometry.validateParts([]);
+  return {};
+} });
 const source = define({ id: 'source', category: 'Тесты', title: '', requires: {}, setup() { return { read: () => 42 }; } });
 define({ id: 'consumer', category: 'Тесты', title: '', requires: { source }, setup({ deps }) {
   const answer: number = deps.source.read();
