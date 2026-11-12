@@ -1,7 +1,6 @@
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
-import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
 import { Observable } from '@babylonjs/core/Misc/observable';
@@ -65,7 +64,6 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
         camera.lowerRadiusLimit = 3;
         camera.upperRadiusLimit = 35;
         camera.attachControl(canvas, true);
-        new HemisphericLight('light', new Vector3(0, 1, 0), scene);
         const onFrame = new Observable<number>();
         const running = startModules(registry, selected, { scene, onFrame, panels });
         session = { scene, onFrame, tests: running.tests, dispose() { try { running.dispose(); } finally { onFrame.clear(); scene.dispose(); } } };
