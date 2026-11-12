@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
 import { Observable } from '@babylonjs/core/Misc/observable.js';
-import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
-import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { defineModule } from '../src/core/context.ts';
 import { startModules, type Scope } from '../src/core/modules.ts';
 import { createPanels } from '../src/core/panels.ts';
@@ -96,23 +94,4 @@ test('geometry validates before allocation and cleans models on stop or partial 
   assert.equal(scene.geometries.length, 0);
   assert.equal(scene.materials.length, 0);
   assert.throws(() => api.createModel('late', [{ surface: 'body', size: [1, 1, 1] }], owner), /остановлен/);
-});
-
-test('geometry scenario can repeat without retaining temporary models or shared resources', t => {
-  const { scene, session, owner, disposeOwner } = fixture(t);
-  const scenario = session.tests[0];
-  assert.ok(scenario);
-  assert.throws(() => scenario.setup(owner), /ArcRotateCamera/);
-  const camera = new ArcRotateCamera('test-camera', 0, 1, 10, Vector3.Zero(), scene);
-  t.after(() => camera.dispose());
-  for (let repeat = 0; repeat < 3; repeat++) {
-    const update = scenario.setup(owner);
-    assert.equal(scene.meshes.length, 51);
-    assert.equal(scene.geometries.length, 1);
-    update(0); update(0.5); update(1);
-    disposeOwner();
-    assert.equal(scene.meshes.length, 1);
-    assert.equal(scene.transformNodes.length, 0);
-    assert.equal(scene.materials.length, 1);
-  }
 });

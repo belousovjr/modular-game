@@ -1,5 +1,3 @@
-import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
-import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
@@ -69,27 +67,5 @@ export const geometryModule = defineModule({
       return { root, surfaces };
     }
     return { createModel };
-  },
-  test: {
-    durationSeconds: 4,
-    setup({ core, api, scope }) {
-      const camera = core.scene.activeCamera;
-      if (!(camera instanceof ArcRotateCamera)) throw new Error('Для обзора нужна ArcRotateCamera');
-      for (let x = -2; x <= 2; x++) {
-        for (let z = -2; z <= 2; z++) {
-          const model = api.createModel(`geometry-test-${x}-${z}`, [
-            { surface: 'walls', size: [1.5, 2, 1.5], position: [0, 1, 0] },
-            { surface: 'roof', size: [1.8, 0.2, 1.8], position: [0, 2.1, 0] },
-          ], scope);
-          model.root.position.set(x * 3, 0, z * 3);
-        }
-      }
-      camera.setTarget(new Vector3(0, 1, 0));
-      return progress => {
-        camera.alpha = -Math.PI / 2 + progress * Math.PI * 2;
-        camera.beta = 0.9;
-        camera.radius = 23;
-      };
-    },
   },
 });
