@@ -15,3 +15,14 @@ define({ id: 'isolated', category: 'Тесты', title: '', requires: {}, setup(
 
 // @ts-expect-error every module must declare its category
 define({ id: 'uncategorized', title: '', requires: {}, setup() {} });
+
+define({ id: 'tested', category: 'Тесты', title: '', requires: { source }, setup() { return { value: 1 }; },
+  test: { durationSeconds: 1, setup({ api, deps }) {
+    const value: number = api.value + deps.source.read();
+    // @ts-expect-error test scenarios cannot bypass declared dependencies
+    deps.other.read();
+    // @ts-expect-error own API stays typed in scenarios
+    api.missing();
+    return () => { void value; };
+  } },
+});

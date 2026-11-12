@@ -1,3 +1,5 @@
+import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
+import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
@@ -22,5 +24,19 @@ export const beaconModule = defineModule({
     });
     scope.onDispose(() => { core.scene.onBeforeRenderObservable.remove(observer); mesh.dispose(); material.dispose(); });
     return {};
+  },
+  test: {
+    durationSeconds: 4,
+    setup({ core }) {
+      const camera = core.scene.activeCamera;
+      if (!(camera instanceof ArcRotateCamera)) throw new Error('Для облёта нужна ArcRotateCamera');
+      camera.setTarget(new Vector3(0, 2, 0));
+      return progress => {
+        const angle = progress * Math.PI * 4;
+        camera.alpha = -Math.PI / 2 + angle;
+        camera.beta = 0.85 + Math.sin(angle) * 0.35;
+        camera.radius = 6 + Math.cos(angle / 2) * 2;
+      };
+    },
   },
 });

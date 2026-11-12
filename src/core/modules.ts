@@ -1,11 +1,22 @@
 export interface Scope { onDispose(cleanup: () => void): void }
 export interface ModuleContext<C, D> { core: C; deps: D; scope: Scope }
+export interface ModuleTest<C, D, A> {
+  readonly durationSeconds: number;
+  setup(context: ModuleContext<C, D> & { api: A }): (progress: number) => void;
+}
+export interface RunnableTest {
+  id: string;
+  title: string;
+  durationSeconds: number;
+  setup(scope: Scope): (progress: number) => void;
+}
 export interface ModuleDefinition<C, A = unknown> {
   readonly id: string;
   readonly title: string;
   readonly category: string;
   readonly requires: Readonly<Record<string, ModuleDefinition<C>>>;
   readonly required?: boolean;
+  readonly test?: ModuleTest<C, never, A>;
   setup(context: ModuleContext<C, never>): A;
 }
 type APIs<D> = { readonly [K in keyof D]: D[K] extends ModuleDefinition<never, infer A> ? A : never };
@@ -13,6 +24,7 @@ export function moduleFactory<C>() {
   return function defineModule<const D extends Record<string, ModuleDefinition<C>>, A>(definition: {
     id: string; title: string; category: string; required?: boolean; requires: D;
     setup(context: ModuleContext<C, APIs<D>>): A;
+    test?: ModuleTest<C, APIs<D>, NoInfer<A>>;
   }): ModuleDefinition<C, A> {
     return definition as ModuleDefinition<C, A>;
   };
@@ -47,6 +59,7 @@ export function startModules<C>(registry: readonly ModuleDefinition<C>[], select
   const ordered = resolveModules(registry, selected);
   const apis = new Map<string, unknown>();
   const cleanups: (() => void)[] = [];
+  const tests: RunnableTest[] = [];
   function dispose() {
     const errors: unknown[] = [];
     for (const cleanup of cleanups.splice(0).reverse()) {
@@ -58,12 +71,17 @@ export function startModules<C>(registry: readonly ModuleDefinition<C>[], select
   try {
     for (const module of ordered) {
       const deps = Object.fromEntries(Object.entries(module.requires).map(([name, dep]) => [name, apis.get(dep.id)]));
-      const api = module.setup({ core, deps: deps as never, scope: { onDispose: cleanup => cleanups.push(cleanup) } });
+      const context = { core, deps: deps as never, scope: { onDispose: (cleanup: () => void) => cleanups.push(cleanup) } };
+      const api = module.setup(context);
+      const test = module.test;
+      if (test) tests.push({ id: module.id, title: module.title, durationSeconds: test.durationSeconds,
+        setup: scope => test.setup({ ...context, scope, api }),
+      });
       apis.set(module.id, api);
     }
   } catch (error) {
     try { dispose(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Ошибка запуска и очистки'); }
     throw error;
   }
-  return { dispose, ids: ordered.map(module => module.id) };
+  return { dispose, tests, ids: ordered.map(module => module.id) };
 }

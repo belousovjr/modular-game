@@ -1,6 +1,6 @@
 import '@radix-ui/themes/styles.css';
 import './style.css';
-import { Check, ChevronDown, ChevronRight, Info, Layers, RotateCcw } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Info, Layers, Play, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip } from '@radix-ui/themes';
@@ -11,11 +11,18 @@ import { modules, defaultModules } from './registry.ts';
 import { formatModuleGroups, groupModules } from './core/module-categories.ts';
 import { resolveModules } from './core/modules.ts';
 import { readSelection, encodeSelection, STORAGE_KEY, readCollapsedCategories, CATEGORIES_STORAGE_KEY } from './core/settings.ts';
+import { TestPanel } from './core/test-panel.tsx';
+import type { TestState } from './core/test-runner.ts';
 import { createViewport } from './core/scene.ts';
+
+declare global {
+  interface Window { moduleTests?: ReturnType<typeof createViewport>['tests'] }
+}
 
 const categories = groupModules(modules);
 
 function App() {
+  const [testState, setTestState] = useState<TestState>({ running: false, title: '', progress: 0, index: 0, total: 0, results: [] });
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => {
     try { return new Set(readCollapsedCategories(localStorage.getItem(CATEGORIES_STORAGE_KEY), categories.map(category => category.title))); }
     catch { return new Set(); }
@@ -45,18 +52,24 @@ function App() {
   useEffect(() => {
     if (!canvas.current) return;
     try {
-      viewport.current = createViewport(canvas.current, value => setFps(Math.round(value)), panels);
+      viewport.current = createViewport(canvas.current, value => setFps(Math.round(value)), panels, setTestState);
       viewport.current.restart(modules, initial.ids);
+      window.moduleTests = viewport.current.tests;
       setReady(true);
     } catch (error) {
       setStatus(`Ошибка 3D: ${error instanceof Error ? error.message : String(error)}`);
       setReady(viewport.current !== null);
     }
-    const dispose = () => { viewport.current?.dispose(); viewport.current = null; };
+    const dispose = () => { delete window.moduleTests; viewport.current?.dispose(); viewport.current = null; };
     const onPageHide = (event: PageTransitionEvent) => { if (!event.persisted) dispose(); };
     window.addEventListener('pagehide', onPageHide);
     return () => { window.removeEventListener('pagehide', onPageHide); dispose(); };
   }, [initial, panels]);
+
+  async function runTests(ids?: readonly string[]) {
+    try { await viewport.current?.tests.run(ids); }
+    catch (error) { setStatus(`Не удалось запустить тест: ${error instanceof Error ? error.message : String(error)}`); }
+  }
 
   function showModules(open: boolean) {
     setModulesOpen(open);
@@ -74,6 +87,7 @@ function App() {
 
   return <Theme appearance="dark">
     <main id="game-stage" ref={host}>
+      <div className="game-controls" inert={testState.running}>
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
       <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>
       <Box className="module-panel">
@@ -105,7 +119,7 @@ function App() {
                 const dependencyNote = `Зависит от:\n${formatModuleGroups(dependencies)}`;
                 const note = module.required ? 'Обязательный модуль' : consumers.length ? `Нужен:\n${formatModuleGroups(consumers)}` : dependencies.length ? dependencyNote : '';
                 const panel = entries.find(entry => entry.id === module.id);
-                return <Flex key={module.id} align="center" justify="between" gap="3">
+                return <Flex key={module.id} data-module-id={module.id} align="center" justify="between" gap="3">
                   <Flex align="center" gap="2">
                   <Tooltip content={<Flex direction="column">{(note || module.title).split('\n').map((line, index) => <Text key={index}>{line}</Text>)}</Flex>}>
                   <Text as="label" size="2" tabIndex={0}>
@@ -119,13 +133,17 @@ function App() {
                   </Text>
                   </Tooltip>
                   </Flex>
+                  <Flex align="center" gap="2">
+                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !applied.includes(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   {panel && <Tooltip content={`Детали: ${formatModuleGroups([module])}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${formatModuleGroups([module])}`}
                     aria-expanded={panel.open} onClick={() => panels.toggle(module.id)}><Info size={16} aria-hidden="true" /></IconButton></Tooltip>}
+                  </Flex>
                 </Flex>;
               })}
                 </Flex>
               </Flex>)}
             </Flex>
+            <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && applied.includes(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
             <Flex gap="2" align="center" justify="between">
               <Button id="apply" size="1" disabled={!ready || (!dirty && !status)} onClick={apply}><Check size={16} aria-hidden="true" />Применить</Button>
               <Tooltip content="Вернуть стартовый набор"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить набор" onClick={() => setSelected([...defaultModules])}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
@@ -135,6 +153,8 @@ function App() {
         </Card>
       </Box>
       {entries.map(panel => <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
+      </div>
+      <TestPanel state={testState} stop={() => viewport.current?.tests.stop()} />
     </main>
   </Theme>;
 }

@@ -8,6 +8,8 @@
     "build": "npm run check && vite build",
     "check": "tsc --noEmit && node scripts/check-boundaries.mjs",
     "test": "node --test --test-isolation=none tests/*.test.ts",
+    "test:fps": "node scripts/run-module-tests.mjs --fps",
+    "test:modules": "node scripts/run-module-tests.mjs --headless",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
