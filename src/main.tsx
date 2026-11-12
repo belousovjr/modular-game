@@ -1,9 +1,9 @@
 import '@radix-ui/themes/styles.css';
 import './style.css';
-import { Check, ChevronDown, ChevronRight, Info, Layers, Play, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Info, Layers, MoreHorizontal, Play, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip } from '@radix-ui/themes';
+import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip, Tabs, DropdownMenu } from '@radix-ui/themes';
 import { createPanels, usePanels } from './core/panels.ts';
 import { PanelWindow } from './core/panel-window.tsx';
 import { readWindow, writeWindow } from './core/window-settings.ts';
@@ -19,6 +19,8 @@ declare global {
   interface Window { moduleTests?: ReturnType<typeof createViewport>['tests'] }
 }
 
+import { isModuleStatus, readModulePreferences, selectModules, PREFERENCES_STORAGE_KEY, type ModuleStatus } from './core/module-preferences.ts';
+
 const categories = groupModules(modules);
 
 function App() {
@@ -27,16 +29,19 @@ function App() {
     try { return new Set(readCollapsedCategories(localStorage.getItem(CATEGORIES_STORAGE_KEY), categories.map(category => category.title))); }
     catch { return new Set(); }
   });
+  const [preferences, setPreferences] = useState(() => {
+    try { return readModulePreferences(localStorage.getItem(PREFERENCES_STORAGE_KEY), modules); }
+    catch { return readModulePreferences(null, modules); }
+  });
   const [initial] = useState(() => {
     let raw: string | null = null;
     let status = '';
     try { raw = localStorage.getItem(STORAGE_KEY); }
     catch { status = 'Хранилище недоступно: настройки действуют до закрытия страницы.'; }
-    return { ids: readSelection(raw, modules, defaultModules), status };
+    return { ids: selectModules(modules, readSelection(raw, modules, defaultModules), preferences.statuses), status };
   });
   const [selected, setSelected] = useState(initial.ids);
   const [status, setStatus] = useState(initial.status);
-  const [applied, setApplied] = useState(initial.ids);
   const [modulesOpen, setModulesOpen] = useState(() => readWindow('modules').open);
   const [fps, setFps] = useState(0);
   const [ready, setReady] = useState(false);
@@ -45,9 +50,8 @@ function App() {
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<ReturnType<typeof createViewport> | null>(null);
-  const enabled = new Set(resolveModules(modules, selected).map(module => module.id));
+  const enabled = new Set(selectModules(modules, selected, preferences.statuses));
 
-  const dirty = enabled.size !== applied.length || applied.some(id => !enabled.has(id));
 
   useEffect(() => {
     if (!canvas.current) return;
@@ -76,13 +80,35 @@ function App() {
     writeWindow('modules', { open });
   }
 
-  function apply() {
-    if (!viewport.current) return;
-    try { viewport.current.restart(modules, [...enabled]); }
-    catch (error) { setStatus(`Не удалось запустить сцену: ${error instanceof Error ? error.message : String(error)}`); return; }
-    setApplied([...enabled]);
-    try { localStorage.setItem(STORAGE_KEY, encodeSelection([...enabled])); setStatus(''); }
-    catch { setStatus('Набор применён, но браузер не разрешил сохранить настройки.'); }
+  function savePreferences(next: typeof preferences) {
+    setPreferences(next);
+    try { localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify({ version: 1, ...next })); }
+    catch { setStatus('Браузер не разрешил сохранить статусы модулей.'); }
+  }
+
+  function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
+    if (!viewport.current || testState.running) return;
+    try {
+      const next = selectModules(modules, ids, nextPreferences.statuses);
+      if (resetCamera || next.length !== enabled.size || next.some(id => !enabled.has(id))) {
+        try { viewport.current.restart(modules, next, resetCamera); }
+        catch (error) {
+          try { viewport.current.restart(modules, [...enabled]); }
+          catch { setReady(false); }
+          throw error;
+        }
+      }
+      setSelected(next);
+      setStatus('');
+      if (nextPreferences !== preferences) savePreferences(nextPreferences);
+      try { localStorage.setItem(STORAGE_KEY, encodeSelection(next)); }
+      catch { setStatus('Набор изменён, но браузер не разрешил сохранить настройки.'); }
+    } catch (error) { setStatus(`Не удалось изменить набор: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  function changeModuleStatus(id: string, nextStatus: ModuleStatus) {
+    syncModules([...enabled].filter(enabledId => enabledId !== id || nextStatus !== 'archived'),
+      { ...preferences, statuses: { ...preferences.statuses, [id]: nextStatus } });
   }
 
   return <Theme appearance="dark">
@@ -91,15 +117,27 @@ function App() {
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
       <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>
       <Box className="module-panel">
-        <Flex justify="end"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label={dirty ? 'Модули: есть неприменённые изменения' : 'Модули'} size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули{dirty && ' •'}</Button></Flex>
+        <Flex justify="end"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button></Flex>
         <Box id="status" role="status" aria-live="polite">
           {status && <Callout.Root size="1" mt="2"><Callout.Text>{status}</Callout.Text></Callout.Root>}
         </Box>
         <Card asChild mt="2">
           <section id="modules-window" className="module-list" hidden={!modulesOpen} aria-label="Модули">
           <Flex direction="column" gap="3">
+            <Flex align="center" justify="between" gap="2">
+            <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
+              <Tooltip content="Вернуть стартовый набор, статусы и камеру"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить модули к дефолтам" disabled={!ready} onClick={() => syncModules(defaultModules, { tab: 'working', statuses: {} }, true)}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
+            </Flex>
+            <Tabs.Root value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
+              <Tabs.List aria-label="Статус модулей">
+                <Tabs.Trigger value="working">Рабочие</Tabs.Trigger>
+                <Tabs.Trigger value="hidden">Скрытые</Tabs.Trigger>
+                <Tabs.Trigger value="archived">Архив</Tabs.Trigger>
+              </Tabs.List>
+            <Tabs.Content value={preferences.tab}>
+            <Text size="1" color="gray">{preferences.tab === 'hidden' ? 'Кандидаты в core · всегда включены' : preferences.tab === 'archived' ? 'Кандидаты на удаление · всегда отключены' : 'Рабочий набор модулей'}</Text>
             <Flex id="modules" direction="column" gap="3">
-              {categories.map((category, index) => <Flex key={category.title} direction="column" gap="3">
+              {groupModules(modules.filter(module => (preferences.statuses[module.id] ?? 'working') === preferences.tab)).map((category, index) => <Flex key={category.title} direction="column" gap="3">
                 <Button variant="soft" size="1" aria-expanded={!collapsed.has(category.title)} aria-controls={`category-${index}`} onClick={() => {
                   const next = new Set(collapsed);
                   if (next.has(category.title)) next.delete(category.title); else next.add(category.title);
@@ -115,18 +153,21 @@ function App() {
                 <Flex id={`category-${index}`} className="category-modules" direction="column" gap="3" hidden={collapsed.has(category.title)}>
               {category.modules.map(module => {
                 const consumers = modules.filter(other => enabled.has(other.id) && Object.values(other.requires).some(dep => dep.id === module.id));
-                const dependencies = Object.values(module.requires);
+                const working = (id: string) => !preferences.statuses[id] || preferences.statuses[id] === 'working';
+                const visibleConsumers = consumers.filter(other => working(other.id));
+                const dependencies = Object.values(module.requires).filter(other => working(other.id));
+                const unavailable = resolveModules(modules, [module.id]).some(other => preferences.statuses[other.id] === 'archived');
                 const dependencyNote = `Зависит от:\n${formatModuleGroups(dependencies)}`;
-                const note = module.required ? 'Обязательный модуль' : consumers.length ? `Нужен:\n${formatModuleGroups(consumers)}` : dependencies.length ? dependencyNote : '';
+                const note = module.required ? 'Обязательный модуль' : visibleConsumers.length ? `Нужен:\n${formatModuleGroups(visibleConsumers)}` : dependencies.length ? dependencyNote : '';
                 const panel = entries.find(entry => entry.id === module.id);
                 return <Flex key={module.id} data-module-id={module.id} align="center" justify="between" gap="3">
                   <Flex align="center" gap="2">
                   <Tooltip content={<Flex direction="column">{(note || module.title).split('\n').map((line, index) => <Text key={index}>{line}</Text>)}</Flex>}>
                   <Text as="label" size="2" tabIndex={0}>
                     <Flex align="center" gap="2">
-                      <Checkbox checked={enabled.has(module.id)} disabled={!!module.required || consumers.length > 0}
+                      <Checkbox checked={enabled.has(module.id)} disabled={!ready || preferences.tab !== 'working' || !!module.required || consumers.length > 0 || unavailable}
                         onCheckedChange={checked => {
-                          setSelected(checked === true ? [...enabled, module.id] : [...enabled].filter(id => id !== module.id));
+                          syncModules(checked === true ? [...enabled, module.id] : [...enabled].filter(id => id !== module.id));
                         }} />
                       {module.title}
                     </Flex>
@@ -134,20 +175,26 @@ function App() {
                   </Tooltip>
                   </Flex>
                   <Flex align="center" gap="2">
-                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !applied.includes(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
-                  {panel && <Tooltip content={`Детали: ${formatModuleGroups([module])}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${formatModuleGroups([module])}`}
+                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
+                  {panel && <Tooltip content={`Детали: ${module.title}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${module.title}`}
                     aria-expanded={panel.open} onClick={() => panels.toggle(module.id)}><Info size={16} aria-hidden="true" /></IconButton></Tooltip>}
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger><IconButton size="1" variant="ghost" aria-label={`Статус: ${module.title}`}><MoreHorizontal size={16} aria-hidden="true" /></IconButton></DropdownMenu.Trigger>
+                    <DropdownMenu.Content>
+                      {preferences.tab === 'working' ? <>
+                        <DropdownMenu.Item disabled={!ready || unavailable} onSelect={() => changeModuleStatus(module.id, 'hidden')}>Скрыть</DropdownMenu.Item>
+                        <DropdownMenu.Item disabled={!ready || !!module.required || consumers.length > 0} onSelect={() => changeModuleStatus(module.id, 'archived')}>Архивировать</DropdownMenu.Item>
+                      </> : <DropdownMenu.Item disabled={!ready} onSelect={() => changeModuleStatus(module.id, 'working')}>{preferences.tab === 'archived' ? 'Разархивировать' : 'Вернуть в рабочие'}</DropdownMenu.Item>}
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Root>
                   </Flex>
                 </Flex>;
               })}
                 </Flex>
               </Flex>)}
             </Flex>
-            <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && applied.includes(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
-            <Flex gap="2" align="center" justify="between">
-              <Button id="apply" size="1" disabled={!ready || (!dirty && !status)} onClick={apply}><Check size={16} aria-hidden="true" />Применить</Button>
-              <Tooltip content="Вернуть стартовый набор"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить набор" onClick={() => setSelected([...defaultModules])}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
-            </Flex>
+            </Tabs.Content>
+            </Tabs.Root>
           </Flex>
           </section>
         </Card>

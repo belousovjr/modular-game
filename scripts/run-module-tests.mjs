@@ -97,18 +97,33 @@ try {
       const trigger = document.getElementById('modules-trigger');
       if (trigger.getAttribute('aria-expanded') === 'false') { trigger.click(); await nextPaint(); }
       if (${fpsMode}) {
-        // Select the entire registry through the same UI users apply, including non-default modules.
+        // Enable the entire registry through the UI, including non-default modules.
         for (const checkbox of document.querySelectorAll('#modules [role="checkbox"]')) {
           if (checkbox.getAttribute('aria-checked') !== 'true' && !checkbox.disabled) { checkbox.click(); await nextPaint(); }
         }
-        if (document.getElementById('apply').disabled === false) { document.getElementById('apply').click(); await nextPaint(); }
         const checkboxes = [...document.querySelectorAll('#modules [role="checkbox"]')];
         if (!checkboxes.length || checkboxes.some(checkbox => checkbox.getAttribute('aria-checked') !== 'true')) throw new Error('Could not enable the entire module registry');
+      }
+      if (!${fpsMode}) {
+        document.getElementById('reset').click(); await nextPaint();
+        const camera = JSON.parse(localStorage.getItem('modular-game.camera'));
+        if (camera.alpha !== -Math.PI / 2 || camera.beta !== 1.05 || camera.radius !== 12 || camera.target.x !== 0 || camera.target.y !== 1 || camera.target.z !== 0) throw new Error('Reset did not restore the default camera');
       }
       const tests = window.moduleTests.list();
       const enabledModules = [...document.querySelectorAll('#modules [data-module-id]')].filter(row => row.querySelector('[role="checkbox"]').getAttribute('aria-checked') === 'true')
         .map(row => ({ id: row.dataset.moduleId, hasTest: tests.some(test => test.id === row.dataset.moduleId) }));
       if (!tests.length) throw new Error('No enabled module tests');
+      const toggleTest = tests.find(test => !document.querySelector('#modules [data-module-id="' + test.id + '"] [role="checkbox"]').disabled);
+      if (toggleTest) {
+        const checkbox = () => document.querySelector('#modules [data-module-id="' + toggleTest.id + '"] [role="checkbox"]');
+        checkbox().click(); await nextPaint();
+        if (window.moduleTests.list().some(test => test.id === toggleTest.id) || !document.getElementById('test-' + toggleTest.id).disabled) throw new Error('Disabling a module did not immediately stop its test');
+        const cameraBeforeEnable = localStorage.getItem('modular-game.camera');
+        checkbox().click(); await nextPaint();
+        if (localStorage.getItem('modular-game.camera') !== cameraBeforeEnable) throw new Error('Module restart changed the camera');
+        if (!window.moduleTests.list().some(test => test.id === toggleTest.id) || document.getElementById('test-' + toggleTest.id).disabled) throw new Error('Enabling a module did not immediately start its test');
+      }
+      const cameraBeforeTests = localStorage.getItem('modular-game.camera');
       const smokeTest = tests.at(-1);
       document.getElementById('test-' + smokeTest.id).click();
       await nextPaint();
@@ -135,6 +150,7 @@ try {
       await nextPaint();
       if (document.querySelector('.test-panel')) throw new Error('Results did not close');
       if (window.moduleTests.getState().results.length !== results.length) throw new Error('Closing the panel erased results');
+      if (cameraBeforeTests && localStorage.getItem('modular-game.camera') !== cameraBeforeTests) throw new Error('Test scenarios overwrote the saved camera');
       return { uiChecks: { play: true, playAll: true, overallProgress: tests.length > 1, summary: results.length > 1, closeResults: true, controlsLocked: true, progress: true, stop: true, controlsRestored: true }, environment, enabledModules, results };
     })()`,
     awaitPromise: true, returnByValue: true,
