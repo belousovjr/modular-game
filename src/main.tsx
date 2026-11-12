@@ -13,6 +13,8 @@ import { resolveModules } from './core/modules.ts';
 import { readSelection, encodeSelection, STORAGE_KEY, readCollapsedCategories, CATEGORIES_STORAGE_KEY } from './core/settings.ts';
 import { TestPanel } from './core/test-panel.tsx';
 import type { TestState } from './core/test-runner.ts';
+import { settingsHistory } from './core/settings-history.ts';
+import { SettingsMenu } from './core/settings-menu.tsx';
 import { createViewport } from './core/scene.ts';
 
 declare global {
@@ -82,18 +84,19 @@ function App() {
 
   function savePreferences(next: typeof preferences) {
     setPreferences(next);
-    try { localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify({ version: 1, ...next })); }
+    try { settingsHistory.write(PREFERENCES_STORAGE_KEY, JSON.stringify({ version: 1, ...next })); }
     catch { setStatus('Браузер не разрешил сохранить статусы модулей.'); }
   }
 
   function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
-    if (!viewport.current || testState.running) return;
-    try {
+    const currentViewport = viewport.current;
+    if (!currentViewport || testState.running) return;
+    try { settingsHistory.transaction(() => {
       const next = selectModules(modules, ids, nextPreferences.statuses);
       if (resetCamera || next.length !== enabled.size || next.some(id => !enabled.has(id))) {
-        try { viewport.current.restart(modules, next, resetCamera); }
+        try { currentViewport.restart(modules, next, resetCamera); }
         catch (error) {
-          try { viewport.current.restart(modules, [...enabled]); }
+          try { currentViewport.restart(modules, [...enabled]); }
           catch { setReady(false); }
           throw error;
         }
@@ -101,9 +104,18 @@ function App() {
       setSelected(next);
       setStatus('');
       if (nextPreferences !== preferences) savePreferences(nextPreferences);
-      try { localStorage.setItem(STORAGE_KEY, encodeSelection(next)); }
+      try { settingsHistory.write(STORAGE_KEY, encodeSelection(next)); }
       catch { setStatus('Набор изменён, но браузер не разрешил сохранить настройки.'); }
-    } catch (error) { setStatus(`Не удалось изменить набор: ${error instanceof Error ? error.message : String(error)}`); }
+    }); } catch (error) { setStatus(`Не удалось изменить набор: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  function restoreSettings() {
+    if (!viewport.current) return;
+    const nextPreferences = readModulePreferences(localStorage.getItem(PREFERENCES_STORAGE_KEY), modules);
+    const ids = selectModules(modules, readSelection(localStorage.getItem(STORAGE_KEY), modules, defaultModules), nextPreferences.statuses);
+    if (ids.length !== enabled.size || ids.some(id => !enabled.has(id))) viewport.current.restart(modules, ids);
+    setPreferences(nextPreferences);
+    setSelected(ids);
   }
 
   function changeModuleStatus(id: string, nextStatus: ModuleStatus) {
@@ -117,7 +129,7 @@ function App() {
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
       <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>
       <Box className="module-panel">
-        <Flex justify="end"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button></Flex>
+        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testState.running} restore={restoreSettings} /></Flex>
         <Box id="status" role="status" aria-live="polite">
           {status && <Callout.Root size="1" mt="2"><Callout.Text>{status}</Callout.Text></Callout.Root>}
         </Box>
@@ -128,7 +140,7 @@ function App() {
             <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
               <Tooltip content="Вернуть стартовый набор, статусы и камеру"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить модули к дефолтам" disabled={!ready} onClick={() => syncModules(defaultModules, { tab: 'working', statuses: {} }, true)}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
             </Flex>
-            <Tabs.Root value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
+            <Tabs.Root activationMode="manual" value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
               <Tabs.List aria-label="Статус модулей">
                 <Tabs.Trigger value="working">Рабочие</Tabs.Trigger>
                 <Tabs.Trigger value="hidden">Скрытые</Tabs.Trigger>

@@ -10,14 +10,14 @@ export function PanelWindow({ panel, panels, host }: { panel: Panel; panels: Pan
   const handle = useRef<HTMLButtonElement>(null);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const [position, setPosition] = useState(() => readWindow(storageId).position);
-  function move(left: number, top: number) {
+  function move(left: number, top: number, persist = true) {
     if (!host.current || !element.current) return;
     const next = {
       left: Math.max(0, Math.min(left, host.current.clientWidth - element.current.offsetWidth)),
       top: Math.max(0, Math.min(top, host.current.clientHeight - element.current.offsetHeight)),
     };
     setPosition(next);
-    writeWindow(storageId, { position: next });
+    if (persist) writeWindow(storageId, { position: next });
   }
   useEffect(() => {
     if (!panel.open || !host.current) return;
@@ -45,8 +45,11 @@ export function PanelWindow({ panel, panels, host }: { panel: Panel; panels: Pan
               event.currentTarget.setPointerCapture(event.pointerId);
               drag.current = { x: event.clientX, y: event.clientY, left: element.current.offsetLeft, top: element.current.offsetTop };
             }}
-            onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }}
-            onLostPointerCapture={() => { drag.current = null; }}
+            onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y, false); }}
+            onLostPointerCapture={() => {
+              if (drag.current && element.current) writeWindow(storageId, { position: { left: element.current.offsetLeft, top: element.current.offsetTop } });
+              drag.current = null;
+            }}
             onKeyDown={event => {
               const directions: Record<string, readonly [number, number]> = { ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10] };
               const direction = directions[event.key];

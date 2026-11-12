@@ -123,6 +123,115 @@ try {
         if (localStorage.getItem('modular-game.camera') !== cameraBeforeEnable) throw new Error('Module restart changed the camera');
         if (!window.moduleTests.list().some(test => test.id === toggleTest.id) || document.getElementById('test-' + toggleTest.id).disabled) throw new Error('Enabling a module did not immediately start its test');
       }
+      const shortcut = (code, shiftKey = false) => window.dispatchEvent(new KeyboardEvent('keydown', { code, ctrlKey: true, shiftKey, bubbles: true, cancelable: true }));
+      const waitFor = async condition => {
+        const deadline = performance.now() + 10000;
+        while (!condition()) {
+          if (performance.now() > deadline) throw new Error('Settings operation timed out: ' + document.getElementById('settings-trigger').getAttribute('data-save-state'));
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        await nextPaint();
+      };
+      if (toggleTest) {
+        const checkbox = () => document.querySelector('#modules [data-module-id="' + toggleTest.id + '"] [role="checkbox"]');
+        checkbox().click(); await nextPaint();
+        shortcut('KeyZ'); await nextPaint();
+        if (!window.moduleTests.list().some(test => test.id === toggleTest.id)) throw new Error('Undo did not restart the module');
+        shortcut('KeyZ', true); await nextPaint();
+        if (window.moduleTests.list().some(test => test.id === toggleTest.id)) throw new Error('Redo did not stop the module');
+        shortcut('KeyZ'); await nextPaint();
+      }
+      const tab = name => { const tabs = [...document.querySelectorAll('[role="tab"]')]; const found = tabs.find(element => element.textContent.includes(name)); if (!found) throw new Error('Missing tab ' + name + ': ' + tabs.map(tab => JSON.stringify(tab.textContent)).join(', ')); return found; };
+      const activateTab = name => {
+        const element = tab(name);
+        element.focus();
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      };
+      await waitFor(() => document.getElementById('settings-trigger').getAttribute('data-save-state') !== 'loading');
+      shortcut('KeyS');
+      await waitFor(() => document.getElementById('settings-trigger').getAttribute('data-save-state') === 'saved');
+      if (document.title.startsWith('*')) throw new Error('Saved title still has an asterisk');
+      const historyBeforeUI = localStorage.getItem('modular-game.history');
+      activateTab('Архив'); await nextPaint();
+      if (document.title.startsWith('*')) throw new Error('Tab changes marked settings as dirty');
+      activateTab('Рабочие'); await nextPaint();
+      const category = document.querySelector('#modules button[aria-controls^="category-"]');
+      category.click(); await nextPaint(); category.click(); await nextPaint();
+      trigger.click(); await nextPaint(); trigger.click(); await nextPaint();
+      const details = document.querySelector('[id^="details-"]');
+      if (details) {
+        details.click(); await nextPaint();
+        const panel = document.querySelector('.info-panel:not([hidden])');
+        panel.querySelector('.panel-handle').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+        await nextPaint();
+        panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await nextPaint();
+      }
+      if (localStorage.getItem('modular-game.history') !== historyBeforeUI || document.title.startsWith('*')) throw new Error('Interface actions changed history or the dirty indicator');
+      if (toggleTest) {
+        shortcut('KeyZ'); await nextPaint();
+        if (window.moduleTests.list().some(test => test.id === toggleTest.id)) throw new Error('UI actions intercepted module undo');
+        shortcut('KeyZ', true); await nextPaint();
+        if (!window.moduleTests.list().some(test => test.id === toggleTest.id) || document.title.startsWith('*')) throw new Error('Redo did not restore saved modules');
+      }
+      let exported;
+      const createObjectURL = URL.createObjectURL;
+      URL.createObjectURL = blob => { exported = blob; return createObjectURL(blob); };
+      const preventDownload = event => { if (event.target instanceof HTMLAnchorElement) event.preventDefault(); };
+      document.addEventListener('click', preventDownload, true);
+      try {
+        document.getElementById('settings-trigger').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); await nextPaint();
+        [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.includes('Экспортировать')).click(); await nextPaint();
+      } finally { URL.createObjectURL = createObjectURL; document.removeEventListener('click', preventDownload, true); }
+      if (!exported) throw new Error('Export did not produce a file');
+      const exportedFile = JSON.parse(await exported.text());
+      const exportedSettings = exportedFile.settings;
+      if ('modular-game.camera' in exportedSettings) throw new Error('Export included the camera');
+      if (Object.keys(exportedSettings).some(key => key === 'modular-game.categories' || key.startsWith('modular-game.window.')) || 'tab' in JSON.parse(exportedSettings['modular-game.module-preferences'] ?? '{}')) throw new Error('Export included interface settings');
+      const statusId = enabledModules.find(module => !module.hasTest)?.id || enabledModules[0].id;
+      exportedSettings['modular-game.module-preferences'] = JSON.stringify({ version: 1, statuses: { [statusId]: 'hidden' } });
+      const independentCamera = JSON.stringify({ version: 1, alpha: -0.75, beta: 1.2, radius: 10, target: { x: 1, y: 2, z: -2 } });
+      localStorage.setItem('modular-game.camera', independentCamera);
+      if (document.title.startsWith('*')) throw new Error('Camera changes marked settings as dirty');
+      // Older files may contain a camera; importing one must ignore it.
+      exportedSettings['modular-game.camera'] = JSON.stringify({ version: 1, alpha: 0, beta: 1, radius: 20, target: { x: 0, y: 0, z: 0 } });
+      if ('modular-game.history' in exportedSettings) throw new Error('Export included recursive history metadata');
+      activateTab('Архив'); await nextPaint();
+      const interfaceBeforeImport = { window: localStorage.getItem('modular-game.window.modules'), categories: localStorage.getItem('modular-game.categories') };
+      exportedSettings['modular-game.categories'] = JSON.stringify({ version: 1, collapsed: ['legacy category'] });
+      exportedSettings['modular-game.window.modules'] = JSON.stringify({ version: 1, open: false, position: { left: 300, top: 300 } });
+      const input = document.querySelector('input[type="file"]');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([JSON.stringify(exportedFile)], 'settings.mgeng', { type: 'application/json' }));
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await waitFor(() => document.getElementById('settings-trigger').getAttribute('data-save-state') === 'saved');
+      if (tab('Архив').getAttribute('aria-selected') !== 'true' || localStorage.getItem('modular-game.window.modules') !== interfaceBeforeImport.window || localStorage.getItem('modular-game.categories') !== interfaceBeforeImport.categories) throw new Error('Import changed the interface');
+      const savedSettings = await new Promise((resolve, reject) => {
+        const request = indexedDB.open('modular-game', 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const transaction = db.transaction('settings', 'readonly');
+          const get = transaction.objectStore('settings').get('current');
+          transaction.oncomplete = () => { db.close(); resolve(get.result.settings); };
+          transaction.onabort = () => { db.close(); reject(transaction.error); };
+        };
+      });
+      if ('modular-game.camera' in savedSettings || localStorage.getItem('modular-game.camera') !== independentCamera) throw new Error('Import included or changed the camera');
+      for (const [key, value] of Object.entries(exportedSettings)) {
+        if (key === 'modular-game.camera' || key === 'modular-game.categories' || key.startsWith('modular-game.window.')) continue;
+        if (key === 'modular-game.module-preferences') {
+          if (JSON.parse(savedSettings[key]).statuses[statusId] !== 'hidden' || JSON.parse(localStorage.getItem(key)).statuses[statusId] !== 'hidden') throw new Error('Import did not apply module statuses');
+          continue;
+        }
+        if (savedSettings[key] !== value || localStorage.getItem(key) !== value) throw new Error('Import did not update localStorage and IndexedDB equally');
+      }
+      shortcut('KeyZ'); await nextPaint();
+      if (JSON.parse(localStorage.getItem('modular-game.module-preferences')).statuses[statusId] === 'hidden') throw new Error('Import was not undoable');
+      shortcut('KeyZ', true); await nextPaint();
+      activateTab('Рабочие'); await nextPaint();
+      shortcut('KeyS'); await nextPaint();
+      await waitFor(() => document.getElementById('settings-trigger').getAttribute('data-save-state') === 'saved');
       const cameraBeforeTests = localStorage.getItem('modular-game.camera');
       const smokeTest = tests.at(-1);
       document.getElementById('test-' + smokeTest.id).click();
@@ -146,16 +255,90 @@ try {
       await nextPaint();
       if (window.moduleTests.getState().running || document.querySelector('.game-controls').inert) throw new Error('Completion did not restore controls');
       if (results.length > 1 && !document.getElementById('test-summary')) throw new Error('Results summary is missing');
+      const body = document.querySelector('.test-results tbody');
+      const header = document.querySelector('.test-results thead');
+      const summary = document.getElementById('test-summary');
+      const clones = Array.from({ length: 40 }, () => body.firstElementChild.cloneNode(true));
+      try {
+        body.append(...clones);
+        await nextPaint();
+        const headerTop = header.getBoundingClientRect().top;
+        const summaryTop = summary?.getBoundingClientRect().top;
+        if (body.scrollHeight <= body.clientHeight || body.clientHeight > Math.min(240, innerHeight * 0.25) + 1) throw new Error('Result rows are not height-limited');
+        body.focus();
+        body.scrollTop = body.scrollHeight;
+        await nextPaint();
+        if (body.scrollTop <= 0 || header.getBoundingClientRect().top !== headerTop || summary?.getBoundingClientRect().top !== summaryTop) throw new Error('Scrolling result rows moved the header or summary');
+        const headings = [...header.querySelectorAll('th')];
+        const cells = [...body.firstElementChild.children];
+        if (headings.some((heading, index) => Math.abs(heading.getBoundingClientRect().left - cells[index].getBoundingClientRect().left) > 1)) throw new Error('Result columns are misaligned');
+      } finally { clones.forEach(row => row.remove()); body.scrollTop = 0; }
       document.getElementById('close-test-results').click();
       await nextPaint();
       if (document.querySelector('.test-panel')) throw new Error('Results did not close');
       if (window.moduleTests.getState().results.length !== results.length) throw new Error('Closing the panel erased results');
       if (cameraBeforeTests && localStorage.getItem('modular-game.camera') !== cameraBeforeTests) throw new Error('Test scenarios overwrote the saved camera');
-      return { uiChecks: { play: true, playAll: true, overallProgress: tests.length > 1, summary: results.length > 1, closeResults: true, controlsLocked: true, progress: true, stop: true, controlsRestored: true }, environment, enabledModules, results };
+      if (!${fpsMode}) await new Promise((resolve, reject) => {
+        const request = indexedDB.open('modular-game', 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const transaction = db.transaction('settings', 'readwrite');
+          const store = transaction.objectStore('settings');
+          const get = store.get('current');
+          get.onsuccess = () => store.put({ ...get.result, settings: { ...get.result.settings, 'modular-game.camera': 'legacy camera' } }, 'current');
+          transaction.oncomplete = () => { db.close(); resolve(); };
+          transaction.onabort = () => { db.close(); reject(transaction.error); };
+        };
+      });
+      return { uiChecks: { settingsSave: true, settingsUndoRedo: true, settingsExportImport: true, play: true, playAll: true, overallProgress: tests.length > 1, summary: results.length > 1, closeResults: true, controlsLocked: true, progress: true, stop: true, controlsRestored: true }, environment, enabledModules, results };
     })()`,
     awaitPromise: true, returnByValue: true,
   }, sessionId);
   if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text);
+  if (!fpsMode) {
+    await send('Runtime.evaluate', { expression: 'window.__settingsReloadProbe = true' }, sessionId);
+    await send('Page.reload', {}, sessionId);
+    const deadline = Date.now() + 20000;
+    let reloaded;
+    while (Date.now() < deadline) {
+      try {
+        reloaded = await send('Runtime.evaluate', { expression: `Boolean(!window.__settingsReloadProbe && document.readyState === 'complete' && window.moduleTests && document.getElementById('settings-trigger')?.getAttribute('data-save-state') === 'saved')`, returnByValue: true }, sessionId);
+        if (reloaded.result?.value === true) break;
+      } catch { /* Navigation may temporarily destroy the execution context. */ }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (reloaded?.result?.value !== true) throw new Error('Saved state did not survive reload');
+    const historyCheck = await send('Runtime.evaluate', {
+      expression: `(async () => {
+        const nextPaint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const shortcut = shiftKey => window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', ctrlKey: true, shiftKey, bubbles: true, cancelable: true }));
+        const snapshot = localStorage.getItem('modular-game.camera');
+        shortcut(false); await nextPaint();
+        if (Object.values(JSON.parse(localStorage.getItem('modular-game.module-preferences')).statuses).includes('hidden')) throw new Error('Module undo history did not survive reload');
+        if (JSON.parse(localStorage.getItem('modular-game.module-preferences')).tab !== 'working') throw new Error('Undo changed the interface tab');
+        shortcut(true); await nextPaint();
+        if (localStorage.getItem('modular-game.camera') !== snapshot) throw new Error('Undo or redo changed the independent camera');
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open('modular-game', 1);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result;
+            const transaction = db.transaction('settings', 'readonly');
+            const get = transaction.objectStore('settings').get('current');
+            transaction.oncomplete = () => {
+              db.close();
+              if ('modular-game.camera' in get.result.settings) reject(new Error('Legacy camera remained in IndexedDB')); else resolve();
+            };
+            transaction.onabort = () => { db.close(); reject(transaction.error); };
+          };
+        });
+        return true;
+      })()`, awaitPromise: true, returnByValue: true,
+    }, sessionId);
+    if (historyCheck.exceptionDetails) throw new Error(historyCheck.exceptionDetails.exception?.description || historyCheck.exceptionDetails.text);
+    response.result.value.uiChecks.settingsReload = true;
+  }
   if (fpsMode) {
     const report = createFpsReport(response.result.value, config);
     await mkdir(dirname(reportPath), { recursive: true });

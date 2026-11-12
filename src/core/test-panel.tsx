@@ -39,11 +39,11 @@ export function TestPanel({ state, stop }: { state: TestState; stop(): void }) {
           <Progress value={overallProgress} aria-label="Общий прогресс тестов" />
         </>}
       </>}
-      {state.results.length > 0 && <Table.Root size="1">
+      {state.results.length > 0 && <Table.Root className="test-results" size="1">
         <Table.Header><Table.Row>
           {['Модуль', 'Статус', 'Сред. FPS', 'Мин.', 'Макс.', 'Медиана', 'P95 кадра, мс', 'Кадры / с'].map(label => <Table.ColumnHeaderCell key={label}>{label}</Table.ColumnHeaderCell>)}
         </Table.Row></Table.Header>
-        <Table.Body>{state.results.map(result => <Table.Row key={result.id}>
+        <Table.Body tabIndex={0} aria-label="Результаты тестов">{state.results.map(result => <Table.Row key={result.id}>
           <Table.RowHeaderCell>{result.title}</Table.RowHeaderCell>
           <Table.Cell>{result.status === 'completed' ? 'Завершён' : result.status === 'cancelled' ? 'Остановлен' : 'Ошибка'}{result.error && <Text as="p" color="red">{result.error}</Text>}</Table.Cell>
           {[result.metrics?.average, result.metrics?.min, result.metrics?.max, result.metrics?.median].map((value, index) => <Table.Cell key={index}><FpsValue value={value} /></Table.Cell>)}
