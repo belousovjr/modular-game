@@ -118,6 +118,26 @@ test('instances select LOD independently and disposing one preserves shared geom
   assert.equal(scene.meshes.length, 2);
 });
 
+test('new model notifications run once per visited LOD and callback failure cleans the instance', t => {
+  const { api, scene, camera, owner, frame } = fixture(t);
+  const object = api.createObject(template.id, 'styled', {}, owner);
+  let notifications = 0;
+  object.onModelCreated.add(model => { notifications++; assert.ok(model.surfaces.has('body')); });
+  frame();
+  camera.position.x = 11;
+  frame();
+  camera.position.x = 0;
+  frame();
+  assert.equal(notifications, 2);
+  object.root.dispose();
+  assert.equal(object.onModelCreated.hasObservers(), false);
+  const broken = api.createObject(template.id, 'broken', {}, owner);
+  broken.onModelCreated.add(() => { throw new Error('styling failed'); });
+  assert.throws(frame, /styling failed/);
+  assert.equal(broken.root.isDisposed(), true);
+  assert.equal(scene.meshes.length, 1);
+});
+
 test('explicit hero source overrides world camera position and missing hero never falls back', t => {
   const { api, scene, camera, owner, frame } = fixture(t);
   const object = api.createObject(template.id, 'object', {}, owner);
@@ -178,4 +198,135 @@ test('cleanup releases objects and observers; invalid creation allocates no obje
   assert.throws(() => api.getDistanceOrigin(), /остановлен/);
   assert.throws(() => api.createObject(template.id, 'late', {}, owner), /остановлен/);
   assert.throws(() => api.setDistanceSource(() => null, owner), /остановлен/);
+});
+
+test('static objects skip distant LOD work and retain cached transforms until explicitly refreshed', t => {
+  const { api, scene, camera, owner, frame } = fixture(t);
+  const object = api.createObject(template.id, 'static', {}, owner, 'static');
+  frame();
+  assert.equal(object.level(), 0);
+  assert.equal(api.getStats().boundsUpdates, 1);
+  const compute = t.mock.method(object.root, 'computeWorldMatrix');
+  for (const x of [1024, -1024, 0]) {
+    camera.position.x = x;
+    frame();
+    assert.equal(object.level(), x === 0 ? 0 : null);
+    assert.equal(api.getStats().candidates, x === 0 ? 1 : 0);
+    assert.equal(api.getStats().boundsUpdates, 0);
+  }
+  assert.equal(compute.mock.calls.length, 0);
+  object.root.position.x = 2048;
+  object.refreshTransform();
+  camera.position.x = 2048;
+  frame();
+  assert.equal(object.level(), 0);
+  assert.equal(api.getStats().boundsUpdates, 1);
+  object.root.dispose();
+  assert.throws(() => object.refreshTransform(), /удалён/);
+  assert.equal(api.getStats().objects, 0);
+  assert.equal(api.getStats().cells, 0);
+  frame();
+  assert.equal(scene.meshes.length, 1);
+});
+
+test('dynamic objects cross cells and reparent without stale bounds or unnecessary recomputation', t => {
+  const { api, scene, camera, owner, frame } = fixture(t);
+  const object = api.createObject(template.id, 'moving', {}, owner);
+  object.root.position.x = 2048;
+  frame();
+  assert.equal(object.level(), null);
+  object.root.position.x = 0;
+  frame();
+  assert.equal(object.level(), 0);
+  assert.equal(api.getStats().boundsUpdates, 1);
+  frame();
+  assert.equal(api.getStats().boundsUpdates, 0);
+  const parent = new TransformNode('moving-parent', scene);
+  owner.onDispose(() => parent.dispose());
+  parent.position.x = -2048;
+  object.root.parent = parent;
+  camera.position.x = -2048;
+  frame();
+  assert.equal(object.level(), 0);
+  parent.position.x = 0;
+  frame();
+  assert.equal(object.level(), null);
+  object.root.parent = null;
+  object.root.position.x = 4096;
+  object.root.computeWorldMatrix(true);
+  camera.position.x = 4096;
+  frame();
+  assert.equal(object.level(), 0);
+  const reused = new Vector3(0, 0, 0);
+  const other = new TransformNode('other', scene);
+  owner.onDispose(() => other.dispose());
+  other.position = reused;
+  other.computeWorldMatrix(true);
+  object.root.position = reused;
+  camera.position.x = 0;
+  frame();
+  assert.equal(object.level(), 0);
+});
+
+test('cell selection respects individual distances and oversized object edges', t => {
+  const { api, templates, camera, owner, frame } = fixture(t);
+  templates.register({ ...template, id: 'long-range', build: () => ({ ...template.build({}), hideDistance: 400 }) }, owner);
+  const near = api.createObject(template.id, 'short', {}, owner, 'static');
+  const far = api.createObject('long-range', 'long', {}, owner, 'static');
+  near.root.position.x = 300;
+  far.root.position.x = 300;
+  frame();
+  assert.equal(near.level(), null);
+  assert.equal(far.level(), 2);
+  assert.equal(api.getStats().candidates, 1);
+  camera.position.x = 300;
+  frame();
+  assert.equal(near.level(), 0);
+  assert.equal(far.level(), 0);
+  templates.register({ ...template, id: 'huge', build: () => ({ hideDistance: 30, levels: [
+    { distance: 0, parts: [{ surface: 'body', size: [100000, 2, 2] }] },
+  ] }) }, owner);
+  const huge = api.createObject('huge', 'huge', {}, owner, 'static');
+  camera.position.set(50001, 0, 0);
+  frame();
+  assert.equal(huge.level(), 0);
+  assert.equal(near.level(), null);
+  camera.position.z = 100;
+  frame();
+  assert.equal(huge.level(), null);
+  huge.root.dispose();
+  frame();
+  assert.equal(api.getStats().candidates, 0);
+});
+
+test('disposing during model notification removes the object from active cells', t => {
+  const { api, scene, owner, frame } = fixture(t);
+  const object = api.createObject(template.id, 'ephemeral', {}, owner, 'static');
+  object.onModelCreated.add(() => object.root.dispose());
+  frame(); frame();
+  assert.equal(api.getStats().objects, 0);
+  assert.equal(api.getStats().cells, 0);
+  assert.equal(api.getStats().candidates, 0);
+  assert.equal(scene.meshes.length, 1);
+});
+
+test('spatial selection matches direct box distances across positive and negative cell boundaries', t => {
+  const { api, camera, owner, frame } = fixture(t);
+  const positions = [-256, -129, -1, 128, 300];
+  const objects = positions.map(x => {
+    const object = api.createObject(template.id, `at-${x}`, {}, owner, 'static');
+    object.root.position.x = x;
+    return object;
+  });
+  for (const x of [-384, -257, -256, -130, -129, -128, -1, 0, 127, 128, 129, 299, 300, 331, 4096]) {
+    for (const z of [-31, 0, 31]) {
+      camera.position.set(x, 0, z);
+      frame();
+      for (let index = 0; index < objects.length; index++) {
+        const distance = Math.hypot(Math.max(Math.abs(x - positions[index]) - 1, 0), Math.max(Math.abs(z) - 1, 0));
+        const expected = distance >= 30 ? null : distance >= 20 ? 2 : distance >= 10 ? 1 : 0;
+        assert.equal(objects[index].level(), expected, `${positions[index]} viewed from ${x}/${z}`);
+      }
+    }
+  }
 });

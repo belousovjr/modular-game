@@ -1,4 +1,5 @@
 import { readCamera, writeCamera } from './camera-settings.ts';
+import { createFlyCamera, FLIGHT_SPEED, SceneCamera } from './fly-camera.ts';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
@@ -19,16 +20,26 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
   const runner = createTestRunner(reportTest, () => {
     const camera = session?.scene.activeCamera;
     if (!camera) throw new Error('Камера недоступна');
-    camera.storeState();
     camera.detachControl();
-    camera.restoreState();
-    return () => { camera.restoreState(); camera.attachControl(canvas, true); };
+    if (camera instanceof SceneCamera) {
+      camera.speed = FLIGHT_SPEED;
+      camera.cameraDirection.setAll(0);
+      camera.cameraRotation.setAll(0);
+      camera.movement.resetPanVelocity();
+      camera.movement.resetRotationVelocity();
+    }
+    const testCamera = new ArcRotateCamera('test-camera', -Math.PI / 2, 1.05, 12, new Vector3(0, 1, 0), camera.getScene());
+    testCamera.maxZ = 30000;
+    camera.getScene().activeCamera = testCamera;
+    return () => { testCamera.dispose(); camera.getScene().activeCamera = camera; camera.attachControl(canvas, true); };
   });
   function saveCamera() {
     const camera = session?.scene.activeCamera;
-    if (!(camera instanceof ArcRotateCamera) || runner.getState().running) return;
-    const target = camera.getTarget();
-    cameraSettings = { alpha: camera.alpha, beta: camera.beta, radius: camera.radius, target: { x: target.x, y: target.y, z: target.z } };
+    if (!(camera instanceof SceneCamera) || runner.getState().running) return;
+    cameraSettings = {
+      position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      rotation: { x: camera.rotation.x, y: camera.rotation.y, z: camera.rotation.z },
+    };
     const encoded = JSON.stringify(cameraSettings);
     if (encoded !== savedCamera) { writeCamera(cameraSettings); savedCamera = encoded; }
   }
@@ -74,14 +85,11 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
       const scene = new Scene(engine);
       try {
         scene.clearColor = new Color4(0.035, 0.055, 0.08, 1);
-        const camera = new ArcRotateCamera('camera', -Math.PI / 2, 1.05, 12, new Vector3(0, 1, 0), scene);
-        camera.lowerRadiusLimit = 3;
-        camera.upperRadiusLimit = 35;
+        const camera = createFlyCamera(scene, { onDispose: cleanup => { scene.onDisposeObservable.addOnce(cleanup); } });
         if (cameraSettings && !resetCamera) {
-          camera.setTarget(new Vector3(cameraSettings.target.x, cameraSettings.target.y, cameraSettings.target.z));
-          camera.alpha = cameraSettings.alpha;
-          camera.beta = cameraSettings.beta;
-          camera.radius = cameraSettings.radius;
+          const { position, rotation } = cameraSettings;
+          camera.position.set(position.x, position.y, position.z);
+          camera.rotation.set(rotation.x, rotation.y, rotation.z);
         }
         camera.attachControl(canvas, true);
         const onFrame = new Observable<number>();

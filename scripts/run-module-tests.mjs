@@ -121,7 +121,7 @@ try {
       if (!${fpsMode}) {
         document.getElementById('reset').click(); await nextPaint();
         const camera = JSON.parse(localStorage.getItem('modular-game.camera'));
-        if (camera.alpha !== -Math.PI / 2 || camera.beta !== 1.05 || camera.radius !== 12 || camera.target.x !== 0 || camera.target.y !== 1 || camera.target.z !== 0) throw new Error('Reset did not restore the default camera');
+        if (camera.version !== 2 || camera.position.x !== 0 || Math.abs(camera.position.y - (1 + 12 * Math.cos(1.05))) > 1e-9 || Math.abs(camera.position.z + 12 * Math.sin(1.05)) > 1e-9 || Math.abs(camera.rotation.x - (Math.PI / 2 - 1.05)) > 1e-9 || camera.rotation.y !== 0 || camera.rotation.z !== 0) throw new Error('Reset did not restore the default camera');
       }
       const tests = window.moduleTests.list();
       const enabledModules = [...document.querySelectorAll('#modules [data-module-id]')].filter(row => row.querySelector('[role="checkbox"]').getAttribute('aria-checked') === 'true')
@@ -203,7 +203,7 @@ try {
       if (Object.keys(exportedSettings).some(key => key === 'modular-game.categories' || key.startsWith('modular-game.window.')) || 'tab' in JSON.parse(exportedSettings['modular-game.module-preferences'] ?? '{}')) throw new Error('Export included interface settings');
       const statusId = enabledModules.find(module => !module.hasTest)?.id || enabledModules[0].id;
       exportedSettings['modular-game.module-preferences'] = JSON.stringify({ version: 1, statuses: { [statusId]: 'hidden' } });
-      const independentCamera = JSON.stringify({ version: 1, alpha: -0.75, beta: 1.2, radius: 10, target: { x: 1, y: 2, z: -2 } });
+      const independentCamera = JSON.stringify({ version: 2, position: { x: 1, y: 2, z: -2 }, rotation: { x: 0.3, y: -0.75, z: 0 } });
       localStorage.setItem('modular-game.camera', independentCamera);
       if (document.title.startsWith('*')) throw new Error('Camera changes marked settings as dirty');
       // Older files may contain a camera; importing one must ignore it.

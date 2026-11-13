@@ -3,6 +3,9 @@ import { readdir, readFile } from 'node:fs/promises';
 import { resolve, relative, sep } from 'node:path';
 const root = resolve('src');
 let failures = 0;
+// shortcut: headless.ts is self-contained, expand checked paths when private headless helpers are needed.
+const moduleHeadless = path => path[0] === 'modules' && path.length === 3 && path[2] === 'headless.ts';
+const headless = path => path[0] === 'simulation' || moduleHeadless(path);
 async function walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = resolve(dir, entry.name);
@@ -13,7 +16,7 @@ async function walk(dir) {
     const owner = relative(root, path).split(sep);
     function fail(message) { console.error(`${relative(root, path)}: ${message}`); failures++; }
     function visit(node) {
-      if (owner[0] === 'simulation' && ['JSXElement', 'JSXFragment'].includes(node.type)) fail('Headless simulation cannot use JSX');
+      if (headless(owner) && ['JSXElement', 'JSXFragment'].includes(node.type)) fail('Headless code cannot use JSX');
       let spec;
       if (['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(node.type) && node.source) spec = node.source.value;
       if (node.type === 'ImportExpression' || (node.type === 'CallExpression' && node.callee?.name === 'require')) {
@@ -21,9 +24,9 @@ async function walk(dir) {
       }
       if (spec) {
         const target = spec.startsWith('.') ? relative(root, resolve(dir, spec)).split(sep) : spec.split('/');
-        if (owner[0] === 'simulation' && (!spec.startsWith('.') || target[0] !== 'simulation')) fail(`Headless simulation cannot import ${spec}`);
+        if (headless(owner) && (!spec.startsWith('.') || !headless(target))) fail(`Headless code cannot import ${spec}`);
         if (owner[0] === 'core' && target[0] === 'modules') fail('Core cannot import feature modules');
-        if (owner[0] === 'modules' && target[0] === 'modules' && owner[1] !== target[1] && !(target.length === 3 && /^index\.tsx?$/.test(target[2]))) fail(`Use the public module entry point: ${spec}`);
+        if (owner[0] === 'modules' && target[0] === 'modules' && owner[1] !== target[1] && !(target.length === 3 && /^index\.tsx?$/.test(target[2])) && !(headless(owner) && moduleHeadless(target))) fail(`Use the public module entry point: ${spec}`);
       }
       for (const value of Object.values(node)) {
         if (Array.isArray(value)) { for (const child of value) if (child?.type) visit(child); }

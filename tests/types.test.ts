@@ -5,6 +5,8 @@ import { objectRenderingModule } from '../src/modules/object-rendering/index.ts'
 const define = moduleFactory<{}>();
 defineModule({ id: 'rendering-types', title: '', category: 'Тесты', requires: { rendering: objectRenderingModule }, setup({ deps, scope }) {
   deps.rendering.setDistanceSource(() => null, scope);
+  // @ts-expect-error mobility must explicitly be static or dynamic
+  deps.rendering.createObject('building', 'example', {}, scope, 'stationary');
   // @ts-expect-error distance coordinates must be numbers
   deps.rendering.setDistanceSource(() => ({ x: '0', y: 0, z: 0 }), scope);
   // @ts-expect-error transitive template dependency does not grant direct API access

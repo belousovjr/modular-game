@@ -1,4 +1,4 @@
-import type { RunnableTest } from './modules.ts';
+import type { RunnableTest, TestDiagnostics } from './modules.ts';
 
 function errorMessage(error: unknown): string {
   return error instanceof AggregateError ? `${error.message}: ${error.errors.map(errorMessage).join('; ')}` : String(error);
@@ -20,6 +20,7 @@ export function frameMetrics(samples: readonly number[]) {
 export interface TestResult {
   id: string; title: string; status: 'completed' | 'cancelled' | 'failed';
   metrics: ReturnType<typeof frameMetrics>; error?: string;
+  diagnostics?: TestDiagnostics;
 }
 export interface TestState {
   running: boolean; title: string; progress: number; index: number; total: number;
@@ -30,6 +31,7 @@ export function createTestRunner(changed: (state: TestState) => void, lock: () =
   let queue: readonly RunnableTest[] = [];
   let elapsed = 0;
   let samples: number[] = [];
+  let diagnostics: TestDiagnostics = {};
   let update: ((progress: number) => void) | undefined;
   let cleanups: (() => void)[] = [];
   let unlock: (() => void) | undefined;
@@ -48,7 +50,7 @@ export function createTestRunner(changed: (state: TestState) => void, lock: () =
     try { cleanup(); } catch (cleanupError) { error = error ? new AggregateError([error, cleanupError], 'Ошибка теста и очистки') : cleanupError; }
     const test = queue[state.index - 1];
     if (test) state.results = [...state.results, { id: test.id, title: test.title, status: error ? 'failed' : status,
-      metrics: frameMetrics(samples), ...(error ? { error: errorMessage(error) } : {}) }];
+      metrics: frameMetrics(samples), ...(Object.keys(diagnostics).length ? { diagnostics } : {}), ...(error ? { error: errorMessage(error) } : {}) }];
     update = undefined;
     if (status === 'completed' && !error && state.index < queue.length) { begin(); return; }
     try { unlock?.(); } catch (unlockError) {
@@ -61,11 +63,14 @@ export function createTestRunner(changed: (state: TestState) => void, lock: () =
   }
   function begin() {
     const test = queue[state.index];
-    elapsed = 0; samples = []; skipFrame = true; lastReport = 0;
+    elapsed = 0; samples = []; diagnostics = {}; skipFrame = true; lastReport = 0;
     duration = override ?? test.durationSeconds;
     state = { ...state, index: state.index + 1, title: test.title, progress: 0 };
     try {
-      update = test.setup({ onDispose: cleanup => cleanups.push(cleanup) });
+      update = test.setup({ onDispose: cleanup => cleanups.push(cleanup) }, values => {
+        if (!Object.values(values).every(Number.isFinite)) throw new Error('Диагностика теста должна содержать конечные числа');
+        diagnostics = { ...values };
+      });
       update(0);
       publish();
     } catch (error) { finish('failed', error); }

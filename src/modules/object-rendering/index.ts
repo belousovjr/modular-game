@@ -1,12 +1,20 @@
 import { BoundingBox } from '@babylonjs/core/Culling/boundingBox.js';
 import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
+import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { defineModule } from '../../core/context.ts';
 import type { Scope } from '../../core/modules.ts';
 import { geometryModule, type GeometryModel } from '../geometry/index.ts';
 import { objectTemplatesModule, type ResolvedTemplate } from '../object-templates/index.ts';
+import { SpatialGrid } from './spatial-grid.ts';
 
 export interface DistancePoint { readonly x: number; readonly y: number; readonly z: number }
+interface RenderObject {
+  root: TransformNode;
+  seen: number;
+  sync(force?: boolean): void;
+  update(point: DistancePoint | null): void;
+}
 
 function templateBounds(template: ResolvedTemplate) {
   const minimum = new Vector3(Infinity, Infinity, Infinity);
@@ -27,7 +35,14 @@ export const objectRenderingModule = defineModule({
   id: 'object-rendering', title: 'Отрисовка объектов', category: 'Рендеринг',
   requires: { geometry: geometryModule, templates: objectTemplatesModule },
   setup({ core, deps, scope }) {
-    const objects = new Set<{ root: TransformNode; update(point: DistancePoint | null): void }>();
+    const objects = new Set<RenderObject>();
+    const dynamic = new Set<RenderObject>();
+    const pending = new Set<RenderObject>();
+    const active = new Set<RenderObject>();
+    const grid = new SpatialGrid<RenderObject>();
+    let frame = 0;
+    let candidates = 0;
+    let boundsUpdates = 0;
     let source: { read(): DistancePoint | null } | undefined;
     let stopped = false;
     scope.onDispose(() => {
@@ -35,6 +50,7 @@ export const objectRenderingModule = defineModule({
       source = undefined;
       for (const object of objects) object.root.dispose();
       objects.clear();
+      dynamic.clear(); pending.clear(); active.clear(); grid.clear();
     });
     function ensureRunning() {
       if (stopped) throw new Error('Модуль отрисовки остановлен');
@@ -59,7 +75,7 @@ export const objectRenderingModule = defineModule({
       source = connection;
       owner.onDispose(() => { if (source === connection) source = undefined; });
     }
-    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope) {
+    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, mobility: 'static' | 'dynamic' = 'dynamic') {
       ensureRunning();
       if (!name.trim()) throw new Error('Нужно имя объекта');
       const template = deps.templates.resolve(templateId, parameters);
@@ -68,45 +84,89 @@ export const objectRenderingModule = defineModule({
       const maximum = bounds.maximum.clone();
       const root = new TransformNode(name, core.scene);
       owner.onDispose(() => root.dispose());
+      const onModelCreated = new Observable<GeometryModel>();
+      root.onDisposeObservable.addOnce(() => onModelCreated.clear());
       const levelScope: Scope = { onDispose: cleanup => { root.onDisposeObservable.addOnce(cleanup); } };
       const models = new Map<number, GeometryModel>();
       let current: number | null = null;
-      const object = { root, update(point: DistancePoint | null) {
-        let next: number | null = null;
-        if (point) {
-          const world = root.computeWorldMatrix(true);
+      let matrixFlag = -1;
+      let parent = root.parent;
+      const object: RenderObject = { root, seen: -1,
+        sync(force = false) {
+          const changed = force || parent !== root.parent || !root.isSynchronized();
+          const world = root.computeWorldMatrix(changed);
+          if (!changed && matrixFlag === world.updateFlag) return;
           if (!world.m.every(Number.isFinite)) throw new Error('Преобразование объекта должно быть конечным');
           bounds.reConstruct(minimum, maximum, world);
           const min = bounds.minimumWorld;
           const max = bounds.maximumWorld;
-          const distance = Math.hypot(Math.max(min.x - point.x, 0, point.x - max.x), Math.max(min.y - point.y, 0, point.y - max.y), Math.max(min.z - point.z, 0, point.z - max.z));
-          if (distance < template.hideDistance) {
-            next = 0;
-            while (next + 1 < template.levels.length && distance >= template.levels[next + 1].distance) next++;
+          if (![min.x, min.y, min.z, max.x, max.y, max.z].every(Number.isFinite)) throw new Error('Границы объекта должны быть конечными');
+          grid.insert(object, { minX: min.x, maxX: max.x, minZ: min.z, maxZ: max.z }, template.hideDistance);
+          matrixFlag = world.updateFlag;
+          parent = root.parent;
+          boundsUpdates++;
+        },
+        update(point: DistancePoint | null) {
+          let next: number | null = null;
+          if (point) {
+            const min = bounds.minimumWorld;
+            const max = bounds.maximumWorld;
+            const distance = Math.hypot(Math.max(min.x - point.x, 0, point.x - max.x), Math.max(min.y - point.y, 0, point.y - max.y), Math.max(min.z - point.z, 0, point.z - max.z));
+            if (distance < template.hideDistance) {
+              next = 0;
+              while (next + 1 < template.levels.length && distance >= template.levels[next + 1].distance) next++;
+            }
           }
-        }
-        if (next === current) return;
-        if (next !== null && !models.has(next)) {
-          // shortcut: visited LODs stay cached until disposal, revisit if memory profiling requires eviction.
-          const model = deps.geometry.createModel(`${name}/lod-${next}`, template.levels[next].parts, levelScope);
-          model.root.parent = root;
-          model.root.setEnabled(false);
-          models.set(next, model);
-        }
-        if (current !== null) models.get(current)?.root.setEnabled(false);
-        if (next !== null) models.get(next)?.root.setEnabled(true);
-        current = next;
-      } };
+          if (next === current) return;
+          if (next !== null && !models.has(next)) {
+            // shortcut: visited LODs stay cached until disposal, revisit if memory profiling requires eviction.
+            const model = deps.geometry.createModel(`${name}/lod-${next}`, template.levels[next].parts, levelScope);
+            model.root.parent = root;
+            model.root.setEnabled(false);
+            models.set(next, model);
+            try { onModelCreated.notifyObservers(model); } catch (error) { root.dispose(); throw error; }
+            if (root.isDisposed()) return;
+          }
+          if (current !== null) models.get(current)?.root.setEnabled(false);
+          if (next !== null) models.get(next)?.root.setEnabled(true);
+          current = next;
+          if (next === null) active.delete(object); else active.add(object);
+        },
+      };
       objects.add(object);
-      root.onDisposeObservable.addOnce(() => { objects.delete(object); current = null; models.clear(); });
-      return { root, level: () => current };
+      pending.add(object);
+      if (mobility === 'dynamic') dynamic.add(object);
+      root.onDisposeObservable.addOnce(() => {
+        grid.remove(object); dynamic.delete(object); pending.delete(object); active.delete(object);
+        objects.delete(object); current = null; models.clear();
+      });
+      return { root, level: () => current, onModelCreated,
+        refreshTransform() {
+          ensureRunning();
+          if (root.isDisposed()) throw new Error('Объект удалён');
+          pending.add(object);
+        },
+      };
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {
+      candidates = 0; boundsUpdates = 0; frame++;
       if (!objects.size) return;
       const point = getDistanceOrigin();
-      for (const object of objects) object.update(point);
+      if (point) {
+        for (const object of pending) object.sync(true);
+        pending.clear();
+        for (const object of dynamic) object.sync();
+        for (const object of grid.query(point.x, point.z)) {
+          object.seen = frame;
+          candidates++;
+          object.update(point);
+        }
+      }
+      for (const object of active) if (object.seen !== frame) object.update(null);
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
-    return { createObject, setDistanceSource, getDistanceOrigin };
+    return { createObject, setDistanceSource, getDistanceOrigin,
+      getStats() { ensureRunning(); return { objects: objects.size, cells: grid.size, candidates, boundsUpdates, dynamic: dynamic.size }; },
+    };
   },
 });

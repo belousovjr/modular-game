@@ -1,14 +1,15 @@
 export interface Scope { onDispose(cleanup: () => void): void }
 export interface ModuleContext<C, D> { core: C; deps: D; scope: Scope }
+export type TestDiagnostics = Readonly<Record<string, number>>;
 export interface ModuleTest<C, D, A> {
   readonly durationSeconds: number;
-  setup(context: ModuleContext<C, D> & { api: A }): (progress: number) => void;
+  setup(context: ModuleContext<C, D> & { api: A; report(values: TestDiagnostics): void }): (progress: number) => void;
 }
 export interface RunnableTest {
   id: string;
   title: string;
   durationSeconds: number;
-  setup(scope: Scope): (progress: number) => void;
+  setup(scope: Scope, report?: (values: TestDiagnostics) => void): (progress: number) => void;
 }
 export interface ModuleDefinition<C, A = unknown> {
   readonly id: string;
@@ -75,7 +76,7 @@ export function startModules<C>(registry: readonly ModuleDefinition<C>[], select
       const api = module.setup(context);
       const test = module.test;
       if (test) tests.push({ id: module.id, title: module.title, durationSeconds: test.durationSeconds,
-        setup: scope => test.setup({ ...context, scope, api }),
+        setup: (scope, report = () => {}) => test.setup({ ...context, scope, api, report }),
       });
       apis.set(module.id, api);
     }
