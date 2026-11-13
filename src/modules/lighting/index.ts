@@ -1,12 +1,14 @@
-import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
-import { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { createElement } from 'react';
 import { defineModule } from '../../core/context.ts';
+import { createLighting } from './light.ts';
+import { LightingPanel } from './panel.tsx';
 
+export type { LightingSettings } from './light.ts';
 export const lightingModule = defineModule({
-  id: 'lighting', category: 'Окружение', title: 'Демонстрационное освещение', requires: {},
+  id: 'lighting', category: 'Окружение', title: 'Базовое освещение', requires: {},
   setup({ core, scope }) {
-    const light = new HemisphericLight('light', new Vector3(0, 1, 0), core.scene);
-    scope.onDispose(() => light.dispose());
-    return {};
+    const api = createLighting(core.scene, scope);
+    scope.onDispose(core.panels.register('lighting', 'Освещение', createElement(LightingPanel, api)));
+    return api;
   },
 });
