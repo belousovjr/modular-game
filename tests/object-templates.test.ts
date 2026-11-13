@@ -140,3 +140,14 @@ test('catalog snapshots and registration lifetimes are isolated; shutdown clears
   assert.throws(() => api.register(pole, owner), /остановлен/);
   assert.throws(() => api.list(), /остановлен/);
 });
+
+
+test('templates copy face UV arrays into serializable snapshots', t => {
+  const { api, owner } = fixture(t);
+  const faceUV = Array.from({ length: 6 }, (): [number, number, number, number] => [0, 0, 0.5, 0.5]);
+  api.register({ id: 'uv-template', version: 1, parameters: {}, build: () => ({ hideDistance: 10, levels: [{ distance: 0, parts: [{ surface: 'body', size: [1, 1, 1], faceUV }] }] }) }, owner);
+  const resolved = api.resolve('uv-template');
+  faceUV[0][0] = 0.1;
+  assert.equal(resolved.levels[0].parts[0].faceUV?.[0][0], 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(resolved)), resolved);
+});

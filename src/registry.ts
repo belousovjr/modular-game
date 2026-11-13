@@ -7,5 +7,6 @@ import { objectTemplatesModule } from './modules/object-templates/index.ts';
 import { objectRenderingModule } from './modules/object-rendering/index.ts';
 import { worldGenerationModule } from './modules/world-generation/index.ts';
 import { worldModule } from './modules/world/index.ts';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldModule];
+import { materialsModule } from './modules/materials/index.ts';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldModule, materialsModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

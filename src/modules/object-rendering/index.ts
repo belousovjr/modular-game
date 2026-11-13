@@ -78,12 +78,13 @@ export const objectRenderingModule = defineModule({
       source = connection;
       owner.onDispose(() => { if (source === connection) source = undefined; });
     }
-    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, mobility: 'static' | 'dynamic' = 'dynamic', batchMaterial?: Material) {
+    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, mobility: 'static' | 'dynamic' = 'dynamic', batchMaterial?: Material | string) {
       ensureRunning();
       if (!name.trim()) throw new Error('Нужно имя объекта');
+      if (typeof batchMaterial === 'string' && !batchMaterial.trim()) throw new Error('Нужно имя пакетной поверхности');
       const template = deps.templates.resolve(templateId, parameters);
-      if (batchMaterial && (mobility !== 'static' || template.levels.some(level => level.parts.length !== 1))) throw new Error('Пакетная отрисовка требует static и одну деталь на LOD');
-      if (batchMaterial && (batchMaterial.getScene() !== core.scene || batchMaterial.needAlphaBlending())) throw new Error('Нужен материал текущей сцены без alpha blending');
+      if (batchMaterial && (mobility !== 'static' || template.levels.some(level => level.parts.length !== 1 || level.parts[0].faceUV !== undefined))) throw new Error('Пакетная отрисовка требует static и одну деталь без faceUV на LOD');
+      if (batchMaterial && typeof batchMaterial !== 'string' && (batchMaterial.getScene() !== core.scene || batchMaterial.needAlphaBlending())) throw new Error('Нужен материал текущей сцены без alpha blending');
       const bounds = templateBounds(template);
       const minimum = bounds.minimum.clone();
       const maximum = bounds.maximum.clone();
@@ -96,6 +97,7 @@ export const objectRenderingModule = defineModule({
       let current: number | null = null;
       let batchKey: string | null = null;
       let batchDirty = true;
+      let currentBatchMaterial: Material | undefined;
       let matrixFlag = -1;
       let parent = root.parent;
       const object: RenderObject = { root, seen: -1,
@@ -127,16 +129,19 @@ export const objectRenderingModule = defineModule({
             }
           }
           if (batchMaterial) {
-            if (next === current && !batchDirty) return;
+            const material = typeof batchMaterial === 'string' ? deps.geometry.getSurfaceMaterial(batchMaterial, next ?? 0) : batchMaterial;
+            if (material.needAlphaBlending()) throw new Error('Пакетная поверхность должна быть непрозрачной');
+            if (next === current && !batchDirty && material === currentBatchMaterial) return;
+            currentBatchMaterial = material;
             if (batchKey !== null) batches.remove(batchKey, object);
             batchKey = null;
             if (next !== null) {
               const part = template.levels[next].parts[0];
               const world = root.getWorldMatrix();
               const position = world.getTranslation();
-              batchKey = `${Math.floor(position.x / 128)}/${Math.floor(position.z / 128)}/${batchMaterial.uniqueId}/${next}`;
+              batchKey = `${Math.floor(position.x / 128)}/${Math.floor(position.z / 128)}/${material.uniqueId}/${next}`;
               const local = Matrix.Compose(Vector3.FromArray(part.size), Quaternion.FromEulerAngles(...(part.rotation ?? [0, 0, 0])), Vector3.FromArray(part.position ?? [0, 0, 0]));
-              batches.set(batchKey, object, local.multiply(world), batchMaterial);
+              batches.set(batchKey, object, local.multiply(world), material);
             }
             batchDirty = false;
             current = next;
@@ -146,7 +151,7 @@ export const objectRenderingModule = defineModule({
           if (next === current) return;
           if (next !== null && !models.has(next)) {
             // shortcut: visited LODs stay cached until disposal, revisit if memory profiling requires eviction.
-            const model = deps.geometry.createModel(`${name}/lod-${next}`, template.levels[next].parts, levelScope);
+            const model = deps.geometry.createModel(`${name}/lod-${next}`, template.levels[next].parts, levelScope, next);
             model.root.parent = root;
             model.root.setEnabled(false);
             models.set(next, model);

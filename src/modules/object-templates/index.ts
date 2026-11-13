@@ -33,6 +33,7 @@ function copyPart(part: GeometryPart): GeometryPart {
     surface: part.surface, size: [...part.size],
     ...(part.position ? { position: [...part.position] } : {}),
     ...(part.rotation ? { rotation: [...part.rotation] } : {}),
+    ...(part.faceUV ? { faceUV: part.faceUV.map(uv => [...uv]) } : {}),
   };
 }
 
@@ -93,7 +94,7 @@ export const objectTemplatesModule = defineModule({
     function createModel(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, level = 0) {
       const template = resolve(templateId, parameters);
       if (!Number.isInteger(level) || level < 0 || level >= template.levels.length) throw new Error('Неизвестный уровень детализации');
-      return { template, model: deps.geometry.createModel(name, template.levels[level].parts, owner) };
+      return { template, model: deps.geometry.createModel(name, template.levels[level].parts, owner, level) };
     }
     return {
       register, resolve, createModel,

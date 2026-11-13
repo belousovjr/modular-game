@@ -11,10 +11,18 @@ export const worldTemplates: readonly ObjectTemplate[] = [
     ] }] }),
   })),
   {
-    id: 'world/building', version: 4,
+    id: 'world/building', version: 7,
     parameters: { width: span, depth: span, height: { default: 8, min: 3, max: 30 }, foundation: { default: 0.5, min: 0.1, max: 5 } },
     build({ width, depth, height, foundation }) {
-      const body: GeometryPart = { surface: 'walls', size: [width, height, depth], position: [0, height / 2, 0] };
+      const body: GeometryPart = {
+        surface: 'building-shell', size: [width, height, depth], position: [0, height / 2, 0],
+        // +Z/-Z facade, +X/-X plain wall, +Y roof, -Y foundation; 1/32 tile gutters.
+        faceUV: [
+          [1 / 64, 1 / 64, 31 / 64, 31 / 64], [1 / 64, 1 / 64, 31 / 64, 31 / 64],
+          [33 / 64, 33 / 64, 63 / 64, 63 / 64], [33 / 64, 33 / 64, 63 / 64, 63 / 64],
+          [1 / 64, 33 / 64, 31 / 64, 63 / 64], [33 / 64, 1 / 64, 63 / 64, 31 / 64],
+        ],
+      };
       const parts: GeometryPart[] = [
         body,
         { surface: 'roof', size: [width + 0.6, 0.25, depth + 0.6], position: [0, height + 0.125, 0] },

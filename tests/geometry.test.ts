@@ -2,6 +2,7 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { defineModule } from '../src/core/context.ts';
 import { startModules, type Scope } from '../src/core/modules.ts';
@@ -94,4 +95,79 @@ test('geometry validates before allocation and cleans models on stop or partial 
   assert.equal(scene.geometries.length, 0);
   assert.equal(scene.materials.length, 0);
   assert.throws(() => api.createModel('late', [{ surface: 'body', size: [1, 1, 1] }], owner), /остановлен/);
+});
+
+
+test('surface styling validates registrations and restores only its own assignments', t => {
+  const { api, scene, owner } = fixture(t);
+  const fallback = api.getSurfaceMaterial('walls');
+  const custom = new StandardMaterial('custom', scene);
+  const near = new StandardMaterial('near', scene);
+  const far = new StandardMaterial('far', scene);
+  owner.onDispose(() => { custom.dispose(); near.dispose(); far.dispose(); });
+  const model = api.createModel('styled', [{ surface: 'walls', size: [1, 1, 1] }], owner, 1);
+  const manual = api.createModel('manual', [{ surface: 'walls', size: [1, 1, 1] }], owner);
+  const mesh = model.surfaces.get('walls')?.[0];
+  const ownMesh = manual.surfaces.get('walls')?.[0];
+  assert.ok(mesh && ownMesh);
+  ownMesh.material = custom;
+  assert.throws(() => api.registerSurfaceMaterials(new Map([['walls', []]]), owner), /Некорректное/);
+  assert.throws(() => api.createModel('bad-detail', [{ surface: 'walls', size: [1, 1, 1] }], owner, -1), /уровень/);
+  const cleanups: (() => void)[] = [];
+  api.registerSurfaceMaterials(new Map([['walls', [near, far]]]), { onDispose: cleanup => cleanups.push(cleanup) });
+  assert.equal(mesh.material, far);
+  assert.equal(ownMesh.material, custom);
+  assert.equal(api.getSurfaceMaterial('walls', 99), far);
+  assert.equal(api.getSurfaceMaterial('unknown'), fallback);
+  cleanups.forEach(cleanup => cleanup());
+  assert.equal(mesh.material, fallback);
+  assert.equal(ownMesh.material, custom);
+});
+
+
+test('face UV variants share their own geometry and preserve the ordinary box', t => {
+  const { api, owner } = fixture(t);
+  const faceUV = Array.from({ length: 6 }, (_, index): readonly [number, number, number, number] => index === 4 ? [0, 0.5, 0.5, 1] : [0.5, 0, 1, 0.5]);
+  const ordinary = api.createModel('ordinary', [{ surface: 'body', size: [1, 1, 1] }], owner);
+  const a = api.createModel('atlas-a', [{ surface: 'body', size: [1, 1, 1], faceUV }], owner);
+  const b = api.createModel('atlas-b', [{ surface: 'body', size: [2, 2, 2], faceUV }], owner);
+  const plain = ordinary.surfaces.get('body')?.[0];
+  const first = a.surfaces.get('body')?.[0];
+  const second = b.surfaces.get('body')?.[0];
+  assert.ok(plain && first && second);
+  assert.equal(first.geometry, second.geometry);
+  assert.notEqual(first.geometry, plain.geometry);
+  const uv = first.getVerticesData('uv');
+  assert.ok(uv);
+  assert.ok(uv.slice(4 * 8, 5 * 8).every((value, index) => index % 2 === 0 ? value <= 0.5 : value >= 0.5));
+  assert.throws(() => api.createModel('bad', [{ surface: 'body', size: [1, 1, 1], faceUV: faceUV.slice(1) }], owner), /Некорректная/);
+  assert.throws(() => api.createModel('bad', [{ surface: 'body', size: [1, 1, 1], faceUV: faceUV.map(() => [0, 0, Infinity, 1]) }], owner), /Некорректная/);
+  const shared = second.geometry;
+  a.root.dispose();
+  assert.equal(second.geometry, shared);
+  assert.equal(second.isDisposed(), false);
+});
+
+test('atlas markers keep the same local height on every vertical box face', t => {
+  const { api, owner } = fixture(t);
+  const rect = [1 / 64, 1 / 64, 31 / 64, 31 / 64] satisfies readonly [number, number, number, number];
+  const model = api.createModel('upright-atlas', [{ surface: 'body', size: [10, 27, 10], faceUV: Array.from({ length: 6 }, () => rect) }], owner);
+  const mesh = model.surfaces.get('body')?.[0];
+  assert.ok(mesh);
+  const positions = mesh.getVerticesData('position');
+  const uv = mesh.getVerticesData('uv');
+  assert.ok(positions && uv);
+  for (let face = 0; face < 4; face++) {
+    const vertices = Array.from({ length: 4 }, (_, vertex) => face * 4 + vertex);
+    const bottom = vertices.find(vertex => positions[vertex * 3 + 1] < 0);
+    const top = vertices.find(vertex => positions[vertex * 3 + 1] > 0);
+    assert.notEqual(bottom, undefined);
+    assert.notEqual(top, undefined);
+    if (bottom === undefined || top === undefined) throw new Error('Missing box vertices');
+    for (const height of [0.46, 0.55, 0.64]) {
+      const markerV = rect[3] - height * (rect[3] - rect[1]);
+      const actualHeight = (markerV - uv[bottom * 2 + 1]) / (uv[top * 2 + 1] - uv[bottom * 2 + 1]);
+      assert.ok(Math.abs(actualHeight - height) < 1e-9, `face ${face}: expected ${height}, got ${actualHeight}`);
+    }
+  }
 });

@@ -1,3 +1,5 @@
+import { FACADE_PATCH } from '../src/modules/materials/surface-scale.ts';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
@@ -14,7 +16,7 @@ import { objectRenderingModule } from '../src/modules/object-rendering/index.ts'
 import { worldGenerationModule } from '../src/modules/world-generation/index.ts';
 import { worldModule } from '../src/modules/world/index.ts';
 
-test('world places persistent generated content, styles every new LOD and releases all resources on restart', t => {
+test('world places persistent generated content, keeps fallback styling without materials and releases all resources on restart', t => {
   const engine = new NullEngine();
   const scene = new Scene(engine);
   t.after(() => { scene.dispose(); engine.dispose(); });
@@ -32,6 +34,27 @@ test('world places persistent generated content, styles every new LOD and releas
       assert.deepEqual(building.levels.map(level => level.parts.length), [5, 3, 1]);
       assert.deepEqual(building.levels.map(level => level.distance), [0, 8, 22]);
       assert.equal(building.hideDistance, 120);
+      assert.ok(building.levels.every(level => level.parts[0].surface === 'building-shell' && level.parts[0].faceUV?.length === 6));
+      const nearUV = building.levels[0].parts[0].faceUV;
+      const middleUV = building.levels[1].parts[0].faceUV;
+      const farUV = building.levels[2].parts[0].faceUV;
+      assert.deepEqual(nearUV, middleUV);
+      assert.deepEqual(middleUV, farUV);
+      assert.equal(building.levels[1].parts.some(part => part.surface === 'facade'), false);
+      assert.notDeepEqual(building.levels[2].parts[0].faceUV?.[4], building.levels[2].parts[0].faceUV?.[0]);
+      const facade = building.levels[0].parts.find(part => part.surface === 'facade');
+      assert.ok(facade?.position);
+      assert.ok(Math.abs(FACADE_PATCH.width - facade.size[0] / building.levels[0].parts[0].size[0]) < 1e-9);
+      assert.ok(Math.abs(FACADE_PATCH.height - facade.size[1] / height) < 1e-9);
+      assert.ok(Math.abs(FACADE_PATCH.center - facade.position[1] / height) < 1e-9);
+      for (const size of [128, 32]) {
+        const atlas = readFileSync(new URL(`../public/textures/city/building-shell-${size}.svg`, import.meta.url), 'utf8');
+        for (const [key, ratio] of Object.entries({ width: facade.size[0] / building.levels[0].parts[0].size[0], height: facade.size[1] / height, center: facade.position[1] / height })) {
+          const encoded = atlas.match(new RegExp(`data-facade-${key}=\"([0-9.]+)\"`));
+          assert.ok(encoded);
+          assert.ok(Math.abs(Number(encoded[1]) - ratio) < 1e-9);
+        }
+      }
       assert.equal(building.levels[0].parts.filter(part => part.surface === 'facade').length, 2);
       assert.equal(building.levels.some(level => level.parts.some(part => part.surface === 'windows')), false);
     }
@@ -63,7 +86,7 @@ test('world places persistent generated content, styles every new LOD and releas
     assert.ok(scene.meshes.length >= before);
     const surfaces = scene.meshes.filter(mesh => mesh.name.includes('/lod-'));
     assert.ok(surfaces.length > 100);
-    assert.ok(surfaces.every(mesh => mesh.material?.name.startsWith('world-')));
+    assert.ok(surfaces.every(mesh => mesh.material?.name === 'geometry-fallback'));
     for (const cleanup of cleanups.reverse()) cleanup();
     assert.equal(diagnostics.length, 1);
     assert.ok(diagnostics[0].hiddenFractionMin >= 0.93);

@@ -1,7 +1,5 @@
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
-import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
-import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { defineModule } from '../../core/context.ts';
 import { objectTemplatesModule } from '../object-templates/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
@@ -12,38 +10,20 @@ import { scheme, insertions } from './scheme.ts';
 export const worldModule = defineModule({
   id: 'world', title: 'Первый квартал', category: 'Окружение',
   requires: { generator: worldGenerationModule, templates: objectTemplatesModule, rendering: objectRenderingModule },
-  setup({ core, deps, scope }) {
+  setup({ deps, scope }) {
     const generated = deps.generator.generate(scheme);
     for (const template of worldTemplates) deps.templates.register(template, scope);
-    // shortcut: local debug colors, replace with the materials module when surface styling is implemented.
-    const materials = new Map<string, StandardMaterial>();
-    for (const [surface, hex] of Object.entries({
-      terrain: '#364d3b', road: '#343b44', sidewalk: '#a8aba4', curb: '#d6d4c6',
-      walls: '#ad8d72', roof: '#575d63', foundation: '#777b81', facade: '#677b86', metal: '#394452', 'lamp-head': '#f8e4a5',
-    })) {
-      const material = new StandardMaterial(`world-${surface}`, core.scene);
-      scope.onDispose(() => material.dispose());
-      material.diffuseColor = Color3.FromHexString(hex);
-      material.emissiveColor = material.diffuseColor.scale(surface === 'lamp-head' ? 1 : 0.3);
-      materials.set(surface, material);
-    }
     const buildings: ReturnType<typeof deps.rendering.createObject>[] = [];
     const lamps: typeof buildings = [];
     for (const placement of [...generated.objects, ...insertions]) {
       const surface = placement.templateId.slice('world/'.length);
-      const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? materials.get(surface) : undefined;
+      const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
       const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, scope, 'static', batchMaterial);
       object.root.position.copyFromFloats(...placement.position);
       object.root.rotation.copyFromFloats(...placement.rotation);
       if (placement.templateId === 'world/building') buildings.push(object);
       if (placement.templateId === 'world/lamp') lamps.push(object);
-      const observer = object.onModelCreated.add(model => {
-        for (const [surface, meshes] of model.surfaces) {
-          const material = materials.get(surface);
-          if (material) for (const mesh of meshes) mesh.material = material;
-        }
-      });
-      scope.onDispose(() => object.onModelCreated.remove(observer));
+
     }
     return { bounds: generated.bounds, objectCount: generated.objects.length + insertions.length,
       visibility() {
