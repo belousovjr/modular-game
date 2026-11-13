@@ -4,5 +4,6 @@ import { simulationModule } from './modules/simulation/index.tsx';
 import { lightingModule } from './modules/lighting/index.ts';
 import { geometryModule } from './modules/geometry/index.ts';
 import { objectTemplatesModule } from './modules/object-templates/index.ts';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule];
+import { objectRenderingModule } from './modules/object-rendering/index.ts';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

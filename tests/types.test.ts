@@ -1,7 +1,16 @@
 import { moduleFactory } from '../src/core/modules.ts';
 import { defineModule } from '../src/core/context.ts';
 import { objectTemplatesModule } from '../src/modules/object-templates/index.ts';
+import { objectRenderingModule } from '../src/modules/object-rendering/index.ts';
 const define = moduleFactory<{}>();
+defineModule({ id: 'rendering-types', title: '', category: 'Тесты', requires: { rendering: objectRenderingModule }, setup({ deps, scope }) {
+  deps.rendering.setDistanceSource(() => null, scope);
+  // @ts-expect-error distance coordinates must be numbers
+  deps.rendering.setDistanceSource(() => ({ x: '0', y: 0, z: 0 }), scope);
+  // @ts-expect-error transitive template dependency does not grant direct API access
+  deps.templates.list();
+  return {};
+} });
 defineModule({ id: 'template-types', title: '', category: 'Тесты', requires: { templates: objectTemplatesModule }, setup({ deps, scope }) {
   // @ts-expect-error template parameters currently accept only numbers
   deps.templates.resolve('building', { height: 'tall' });
