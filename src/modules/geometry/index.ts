@@ -125,6 +125,11 @@ export const geometryModule = defineModule({
       models.set(root, { surfaces, detail });
       return { root, surfaces };
     }
-    return { createModel, validateParts, getSurfaceMaterial, registerSurfaceMaterials };
+    return { createModel, validateParts, getSurfaceMaterial, registerSurfaceMaterials,
+      *getMeshes() {
+        if (stopped) throw new Error('Модуль геометрии остановлен');
+        for (const { surfaces } of models.values()) for (const meshes of surfaces.values()) yield* meshes;
+      },
+    };
   },
 });

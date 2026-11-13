@@ -15,7 +15,7 @@ interface MaterialsSnapshot {
 
 export function createMaterials(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, scope: Scope) {
   const changed = new Observable<void>();
-  const textures = new Map<string, { texture: Texture; state: 'loading' | 'ready' | 'failed'; size: number; users: StandardMaterial[] }>();
+  const textures = new Map<string, { texture: Texture; state: 'loading' | 'ready' | 'failed'; size: number; users: { material: StandardMaterial; normal: boolean }[] }>();
   const materials = new Map<string, readonly StandardMaterial[]>();
   let stopped = false;
   let snapshot: MaterialsSnapshot = { materials: 0, textures: 0, loading: 0, failed: 0, estimatedBytes: 0, errors: [] };
@@ -27,15 +27,15 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
       loading: entries.filter(([, entry]) => entry.state === 'loading').length,
       failed: entries.filter(([, entry]) => entry.state === 'failed').length,
       estimatedBytes: entries.reduce((count, [, entry]) => count + Math.ceil(entry.size ** 2 * 4 * 4 / 3), 0),
-      errors: Object.freeze(entries.filter(([, entry]) => entry.state === 'failed').map(([url]) => `Не удалось загрузить ${url}. Используется цвет поверхности.`)),
+      errors: Object.freeze(entries.filter(([, entry]) => entry.state === 'failed').map(([url]) => `Не удалось загрузить ${url}. ${url.endsWith('-normal.webp') ? 'Используется гладкое освещение без рельефа.' : 'Используется цвет поверхности.'}`)),
     });
     changed.notifyObservers();
   }
   // Registered first, so late texture callbacks cannot touch disposed materials.
   scope.onDispose(() => { stopped = true; changed.clear(); textures.clear(); materials.clear(); });
-  function useTexture(family: string, tileSize: number, material: StandardMaterial) {
+  function useTexture(family: string, tileSize: number, material: StandardMaterial, normal = false) {
     const size = tileSize;
-    const url = `${import.meta.env?.BASE_URL ?? '/'}textures/city/${family}-${tileSize}.webp`;
+    const url = `${import.meta.env?.BASE_URL ?? '/'}textures/city/${family}${normal ? '-normal' : `-${tileSize}`}.webp`;
     let entry = textures.get(url);
     if (!entry) {
       const texture = new Texture(url, scene, false, true, Texture.TRILINEAR_SAMPLINGMODE, () => {
@@ -43,7 +43,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
         const loaded = textures.get(url);
         if (!loaded) return;
         loaded.state = 'ready';
-        for (const user of loaded.users) { user.diffuseTexture = texture; user.diffuseColor = Color3.White(); }
+        for (const user of loaded.users) attach(user.material, texture, user.normal);
         publish();
       }, () => {
         if (stopped) return;
@@ -52,16 +52,21 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
         publish();
       });
       scope.onDispose(() => texture.dispose());
-      texture.gammaSpace = true;
+      texture.gammaSpace = !normal;
+      if (normal) texture.level = 0.35;
       texture.anisotropicFilteringLevel = 2;
       texture.wrapU = texture.wrapV = Texture.WRAP_ADDRESSMODE;
       entry = { texture, state: 'loading', size, users: [] };
       textures.set(url, entry);
     }
-    entry.users.push(material);
-    if (entry.state === 'ready') { material.diffuseTexture = entry.texture; material.diffuseColor = Color3.White(); }
+    entry.users.push({ material, normal });
+    if (entry.state === 'ready') attach(material, entry.texture, normal);
   }
-  const readTexture = (family: string) => textures.get(`${import.meta.env?.BASE_URL ?? '/'}textures/city/${family}-128.webp`)?.texture;
+  function attach(material: StandardMaterial, texture: Texture, normal: boolean) {
+    if (normal) material.bumpTexture = texture;
+    else { material.diffuseTexture = texture; material.diffuseColor = Color3.White(); }
+  }
+  const readTexture = (family: string) => textures.get(`${import.meta.env?.BASE_URL ?? '/'}textures/city/${family.endsWith('-normal') ? family : `${family}-512`}.webp`)?.texture;
   for (const [surface, style] of Object.entries(surfaces)) {
     const material = new StandardMaterial(`materials/${surface}`, scene);
     scope.onDispose(() => material.dispose());
@@ -70,7 +75,9 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
     if (style.texture) {
       new SurfaceScale(material, style.texture === 'building-shell', readTexture);
-      useTexture(style.texture === 'building-shell' ? 'brick' : style.texture, 128, material);
+      const family = style.texture === 'building-shell' ? 'brick' : style.texture;
+      useTexture(family, 512, material);
+      useTexture(family, 512, material, true);
     }
     materials.set(surface, [material]);
   }

@@ -57,6 +57,7 @@ export function createTestRunner(changed: (state: TestState) => void, lock: () =
       state.results = [...state.results, { id: 'controls', title: 'Восстановление управления', status: 'failed', metrics: null, error: errorMessage(unlockError) }];
     }
     unlock = undefined;
+    queue = []; samples = []; diagnostics = {};
     state = { ...state, running: false, progress: status === 'completed' && !error ? 1 : state.progress };
     resolve?.(state.results); resolve = undefined;
     publish();

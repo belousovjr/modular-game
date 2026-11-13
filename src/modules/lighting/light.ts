@@ -43,6 +43,10 @@ export function createLighting(scene: Scene, scope: Scope) {
   setSettings(DEFAULT_LIGHTING);
   return {
     getSettings: () => settings,
+    getSunLight() {
+      if (stopped) throw new Error('Освещение остановлено');
+      return sun;
+    },
     setSettings,
     subscribe(listener: () => void) {
       if (stopped) throw new Error('Освещение остановлено');

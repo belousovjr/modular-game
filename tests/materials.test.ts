@@ -9,6 +9,7 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { defaultPixelShader } from '@babylonjs/core/Shaders/default.fragment.js';
 import { defaultVertexShader } from '@babylonjs/core/Shaders/default.vertex.js';
 import { SurfaceScale } from '../src/modules/materials/surface-scale.ts';
+import { bumpFragment } from '@babylonjs/core/Shaders/ShadersInclude/bumpFragment.js';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js';
 import { defineModule } from '../src/core/context.ts';
 import { createPanels } from '../src/core/panels.ts';
@@ -50,8 +51,8 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
     assert.equal(api.getSnapshot().materials, 11);
-    assert.equal(api.getSnapshot().textures, 6);
-    assert.ok(api.getSnapshot().estimatedBytes < 520 * 1024);
+    assert.equal(api.getSnapshot().textures, 12);
+    assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
     assert.throws(() => geometry.registerSurfaceMaterials(new Map(), owner), /подключено/);
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -60,16 +61,22 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const shell = geometry.getSurfaceMaterial('building-shell');
     assert.ok(shell instanceof StandardMaterial);
     assert.ok(shell.pluginManager?.getPlugin('SurfaceScale'));
-    assert.equal(shell.getActiveTextures().length, 4);
+    assert.equal(shell.getActiveTextures().length, 8);
     assert.ok(shell.getActiveTextures().every(texture => shell.hasTexture(texture)));
     const sidewalk = geometry.getSurfaceMaterial('sidewalk');
     const foundation = geometry.getSurfaceMaterial('foundation');
     assert.ok(sidewalk instanceof StandardMaterial && foundation instanceof StandardMaterial);
     assert.equal(sidewalk.diffuseTexture, foundation.diffuseTexture);
+    assert.equal(sidewalk.bumpTexture, foundation.bumpTexture);
+    assert.ok(sidewalk.bumpTexture instanceof Texture);
+    assert.equal(sidewalk.bumpTexture.gammaSpace, false);
+    assert.equal(sidewalk.diffuseTexture?.gammaSpace, true);
+    assert.equal(sidewalk.bumpTexture.noMipmap, false);
+    assert.ok(sidewalk.bumpTexture.name.endsWith('concrete-normal.webp'));
     assert.ok(sidewalk.diffuseTexture instanceof Texture);
     assert.equal(sidewalk.diffuseTexture.noMipmap, false);
     assert.equal(sidewalk.diffuseTexture.samplingMode, Texture.TRILINEAR_SAMPLINGMODE);
-    for (const [x, level, size] of [[0, 0, 128], [20, 1, 128], [40, 2, 128]] as const) {
+    for (const [x, level, size] of [[0, 0, 512], [20, 1, 512], [40, 2, 512]] as const) {
       camera.position.x = x; frame();
       assert.equal(plain.level(), level);
       assert.equal(batched.level(), level);
@@ -90,7 +97,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const lamp = geometry.getSurfaceMaterial('lamp-head', 2);
     assert.ok(lamp instanceof StandardMaterial);
     assert.equal(lamp.diffuseTexture, null);
-    assert.equal(api.getSnapshot().textures, 6);
+    assert.equal(api.getSnapshot().textures, 12);
     materialOwner.dispose(); frame();
     assert.equal(geometry.getSurfaceMaterial('walls'), fallback);
     assert.ok(plain.root.getChildMeshes().every(mesh => mesh.material === fallback));
@@ -120,6 +127,11 @@ test('surface scale hooks match installed Babylon shaders without adding an extr
   const replacement = Object.keys(fragment).find(key => key.startsWith('!'));
   assert.ok(replacement);
   assert.equal([...defaultPixelShader.shader.matchAll(new RegExp(replacement.slice(1), 'g'))].length, 1);
+  for (const key of Object.keys(fragment).filter(key => key.startsWith('!') && key !== replacement)) {
+    assert.equal([...bumpFragment.shader.matchAll(new RegExp(key.slice(1), 'g'))].length, key.includes('TEXRD') ? 2 : 1, key);
+  }
+  assert.ok(fragment.CUSTOM_FRAGMENT_DEFINITIONS.includes('surfaceNormalsReady.z < 0.5'));
+  assert.ok(fragment.CUSTOM_FRAGMENT_DEFINITIONS.includes('return vec4(0.5, 0.5, 1.0, 1.0)'));
   for (const point of Object.keys(vertex)) assert.ok(defaultVertexShader.shader.includes(`#define ${point}`));
   assert.equal(plugin.getCustomCode('compute'), null);
 });

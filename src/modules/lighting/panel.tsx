@@ -16,6 +16,6 @@ export function LightingPanel(api: ReturnType<typeof createLighting>) {
       <Button variant="soft" onClick={() => api.setSettings({ hour: 18 })}>Вечер</Button>
       <Button variant="soft" onClick={() => api.setSettings({ hour: 0 })}>Ночь</Button>
     </Flex>
-    <Text size="1" color="gray">Время выбирается вручную. Настройка действует до пересоздания сцены. Теней пока нет.</Text>
+    <Text size="1" color="gray">Время выбирается вручную. Настройка действует до пересоздания сцены. Тенями управляет отдельный модуль.</Text>
   </Flex>;
 }

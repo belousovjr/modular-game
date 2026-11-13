@@ -17,6 +17,7 @@ test('lighting applies validated settings atomically and releases both lights on
     const sun = scene.lights.find(light => light instanceof DirectionalLight);
     const ambient = scene.lights.find(light => light instanceof HemisphericLight);
     assert.ok(sun && ambient);
+    assert.equal(api.getSunLight(), sun);
     assert.equal(sun.getShadowGenerator(), null);
     const defaults = api.getSettings();
     assert.ok(Object.isFrozen(defaults));
@@ -54,6 +55,7 @@ test('lighting applies validated settings atomically and releases both lights on
     for (const cleanup of cleanups.reverse()) cleanup();
     assert.equal(scene.lights.length, 0);
     assert.throws(() => api.setSettings(defaults), /остановлено/);
+    assert.throws(() => api.getSunLight(), /остановлено/);
     assert.throws(() => api.subscribe(() => {}), /остановлено/);
   }
 });

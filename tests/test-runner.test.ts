@@ -131,3 +131,30 @@ test('lock failure and rendering failure settle the promise with a failed result
   assert.match((await done)[0].error!, /render/);
   assert.deepEqual(events, ['lock', 'setup', 'cleanup', 'unlock']);
 });
+
+test('completed, cancelled and failed runs release scenario closures for garbage collection', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, ['--expose-gc', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createTestRunner } from './src/core/test-runner.ts';
+    for (const mode of ['completed', 'cancelled', 'failed', 'lock-failed']) {
+      const runner = createTestRunner(() => {}, () => {
+        if (mode === 'lock-failed') throw Error('lock');
+        return () => {};
+      });
+      let scenario = { id: 'memory', title: '', durationSeconds: 1, setup: () => () => {} };
+      const reference = new WeakRef(scenario);
+      const done = runner.run([scenario]);
+      scenario = undefined;
+      if (mode === 'completed') { runner.advance(1); runner.advance(1000); runner.advance(1000); }
+      if (mode === 'cancelled') runner.stop();
+      if (mode === 'failed') runner.fail(Error('render'));
+      await done;
+      await new Promise(resolve => setImmediate(resolve));
+      global.gc();
+      assert.equal(reference.deref(), undefined, mode + ' retained scenario');
+      assert.equal(runner.getState().running, false);
+    }
+  `], { cwd: process.cwd(), timeout: 10000, maxBuffer: 65536, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=128' } });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
