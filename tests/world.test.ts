@@ -72,6 +72,8 @@ test('world places persistent generated content, styles every new LOD and releas
     assert.ok(diagnostics[0].hiddenLampsMin / diagnostics[0].lamps > 0.95);
     assert.ok(diagnostics[0].lodCandidatesMax < diagnostics[0].objects);
     assert.equal(diagnostics[0].boundsUpdatesMax, 0);
+    assert.ok(diagnostics[0].batchesMax > 0);
+    assert.ok(diagnostics[0].batchedInstancesMax > diagnostics[0].batchesMax);
     assert.equal(camera.upperRadiusLimit, 35);
     assert.ok(scene.transformNodes.length > 100);
     session.dispose();

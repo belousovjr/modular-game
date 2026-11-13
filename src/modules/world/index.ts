@@ -30,7 +30,9 @@ export const worldModule = defineModule({
     const buildings: ReturnType<typeof deps.rendering.createObject>[] = [];
     const lamps: typeof buildings = [];
     for (const placement of [...generated.objects, ...insertions]) {
-      const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, scope, 'static');
+      const surface = placement.templateId.slice('world/'.length);
+      const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? materials.get(surface) : undefined;
+      const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, scope, 'static', batchMaterial);
       object.root.position.copyFromFloats(...placement.position);
       object.root.rotation.copyFromFloats(...placement.rotation);
       if (placement.templateId === 'world/building') buildings.push(object);
@@ -80,6 +82,8 @@ export const worldModule = defineModule({
       let lodCandidatesMin = Infinity;
       let lodCandidatesMax = 0;
       let boundsUpdatesMax = 0;
+      let batchesMax = 0;
+      let batchedInstancesMax = 0;
       const observer = core.scene.onAfterRenderObservable.add(() => {
         const visibility = api.visibility();
         hiddenMin = Math.min(hiddenMin, visibility.hidden);
@@ -92,6 +96,8 @@ export const worldModule = defineModule({
         lodCandidatesMin = Math.min(lodCandidatesMin, stats.candidates);
         lodCandidatesMax = Math.max(lodCandidatesMax, stats.candidates);
         boundsUpdatesMax = Math.max(boundsUpdatesMax, stats.boundsUpdates);
+        batchesMax = Math.max(batchesMax, stats.batches);
+        batchedInstancesMax = Math.max(batchedInstancesMax, stats.batchedInstances);
         frames++;
       });
       scope.onDispose(() => core.scene.onAfterRenderObservable.remove(observer));
@@ -101,7 +107,7 @@ export const worldModule = defineModule({
           report({ objects: api.objectCount, buildings, sampledFrames: frames, hiddenMin, hiddenMax,
             hiddenFractionMin: hiddenMin / buildings, hiddenFractionMax: hiddenMax / buildings,
             lamps, hiddenLampsMin, hiddenLampsMax, detailedLampsMax, reducedLampsMax,
-            lodCandidatesMin, lodCandidatesMax, boundsUpdatesMax });
+            lodCandidatesMin, lodCandidatesMax, boundsUpdatesMax, batchesMax, batchedInstancesMax });
         }
       });
       return progress => {

@@ -4,6 +4,8 @@ import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
 import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { defineModule } from '../src/core/context.ts';
@@ -329,4 +331,93 @@ test('spatial selection matches direct box distances across positive and negativ
       }
     }
   }
+});
+
+
+test('static surface batches share a draw mesh, keep world transforms and remove hidden instances', t => {
+  const { api, scene, camera, owner, frame } = fixture(t);
+  const material = new StandardMaterial('batch-test', scene);
+  owner.onDispose(() => material.dispose());
+  const a = api.createObject(template.id, 'batched-a', {}, owner, 'static', material);
+  const b = api.createObject(template.id, 'batched-b', {}, owner, 'static', material);
+  b.root.position.x = 4;
+  frame();
+  const meshes = () => scene.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.name.startsWith('surface-batch/'));
+  assert.equal(meshes().length, 1);
+  assert.equal(api.getStats().batchedInstances, 2);
+  const mesh = meshes()[0];
+  assert.equal(mesh.thinInstanceCount, 2);
+  const gpuBuffer = mesh.getVertexBuffer('world0')?.getBuffer();
+  assert.deepEqual(mesh.thinInstanceGetWorldMatrices().map(matrix => matrix.getTranslation().x), [0, 4]);
+  assert.equal(mesh.getBoundingInfo().boundingBox.maximumWorld.x, 5);
+  b.root.position.x = 140;
+  b.refreshTransform();
+  frame();
+  assert.equal(api.getStats().batchedInstances, 1);
+  assert.equal(mesh.thinInstanceCount, 1);
+  assert.equal(mesh.getVertexBuffer('world0')?.getBuffer(), gpuBuffer);
+  assert.equal(mesh.getBoundingInfo().boundingBox.maximumWorld.x, 1);
+  const upload = mesh.thinInstanceBufferUpdated.bind(mesh);
+  let uploadedCount = 0;
+  mesh.thinInstanceBufferUpdated = kind => { uploadedCount = mesh.thinInstanceCount; upload(kind); };
+  b.root.position.x = 6;
+  b.refreshTransform();
+  frame();
+  assert.equal(uploadedCount, 2);
+  assert.equal(mesh.getBoundingInfo().boundingBox.maximumWorld.x, 7);
+  b.root.position.x = 140;
+  b.refreshTransform();
+  camera.position.x = 140;
+  frame();
+  assert.equal(a.level(), null);
+  assert.equal(b.level(), 0);
+  assert.equal(meshes().length, 1);
+  assert.equal(meshes()[0].thinInstanceGetWorldMatrices()[0].getTranslation().x, 140);
+  camera.position.x = 151;
+  frame();
+  assert.equal(b.level(), 1);
+  assert.equal(meshes()[0].thinInstanceGetWorldMatrices()[0].m[0], 1);
+  b.root.dispose();
+  assert.equal(api.getStats().batches, 0);
+  assert.equal(meshes().length, 0);
+  assert.throws(() => api.createObject(template.id, 'dynamic-batch', {}, owner, 'dynamic', material));
+});
+
+
+test('surface batches separate materials and honor disabled roots and transformed parents', t => {
+  const { api, scene, owner, frame } = fixture(t);
+  const first = new StandardMaterial('first', scene);
+  const second = new StandardMaterial('second', scene);
+  owner.onDispose(() => { first.dispose(); second.dispose(); });
+  const parent = new TransformNode('batch-parent', scene);
+  owner.onDispose(() => parent.dispose());
+  parent.rotation.y = Math.PI / 2;
+  parent.scaling.setAll(2);
+  const a = api.createObject(template.id, 'a', {}, owner, 'static', first);
+  const b = api.createObject(template.id, 'b', {}, owner, 'static', second);
+  a.root.parent = parent;
+  a.root.position.x = 2;
+  frame();
+  assert.equal(api.getStats().batches, 2);
+  const batchMeshes = scene.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.name.startsWith('surface-batch/'));
+  assert.notEqual(batchMeshes[0].geometry, batchMeshes[1].geometry);
+  assert.notEqual(batchMeshes[0].geometry, scene.meshes[0].geometry);
+  const secondMatrices = batchMeshes[1].getVertexBuffer('world0');
+  assert.notEqual(batchMeshes[0].getVertexBuffer('world0'), secondMatrices);
+  const mesh = scene.meshes.find((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.material === first);
+  assert.ok(mesh);
+  assert.ok(Math.abs(mesh.thinInstanceGetWorldMatrices()[0].getTranslation().z + 4) < 1e-6);
+  a.root.setEnabled(false);
+  frame();
+  assert.equal(a.level(), null);
+  assert.equal(api.getStats().batches, 1);
+  assert.equal(batchMeshes[1].getVertexBuffer('world0'), secondMatrices);
+  a.root.setEnabled(true);
+  frame();
+  assert.equal(api.getStats().batches, 2);
+  b.root.dispose();
+  assert.equal(api.getStats().batchedInstances, 1);
+  a.root.scaling.x = -1;
+  a.refreshTransform();
+  assert.throws(frame, /масштаб/);
 });
