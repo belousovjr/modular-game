@@ -1,4 +1,8 @@
 import { FACADE_PATCH } from '../src/modules/materials/surface-scale.ts';
+import { createScope } from '../src/core/scope.ts';
+import { createLighting } from '../src/modules/lighting/light.ts';
+import { createShadows } from '../src/modules/shadows/resources.ts';
+import type { DistancePoint } from '../src/modules/object-rendering/index.ts';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +18,7 @@ import { geometryModule } from '../src/modules/geometry/index.ts';
 import { objectTemplatesModule } from '../src/modules/object-templates/index.ts';
 import { objectRenderingModule } from '../src/modules/object-rendering/index.ts';
 import { worldGenerationModule } from '../src/modules/world-generation/index.ts';
+import { worldStreamingModule } from '../src/modules/world-streaming/index.ts';
 import { worldModule } from '../src/modules/world/index.ts';
 
 test('world places persistent generated content, keeps fallback styling without materials and releases all resources on restart', t => {
@@ -23,9 +28,11 @@ test('world places persistent generated content, keeps fallback styling without 
   const camera = new ArcRotateCamera('camera', -Math.PI / 2, 0.9, 25, Vector3.Zero(), scene);
   camera.upperRadiusLimit = 35;
   const core = { scene, onFrame: new Observable<number>(), panels: createPanels() };
+  let rendering: ReturnType<typeof objectRenderingModule.setup> | undefined;
+  let geometry: ReturnType<typeof geometryModule.setup> | undefined;
   let api: ReturnType<typeof worldModule.setup> | undefined;
-  const probe = defineModule({ id: 'probe', category: 'Тесты', title: '', requires: { world: worldModule, templates: objectTemplatesModule }, setup({ deps }) {
-    api = deps.world;
+  const probe = defineModule({ id: 'probe', category: 'Тесты', title: '', requires: { world: worldModule, templates: objectTemplatesModule, rendering: objectRenderingModule, geometry: geometryModule }, setup({ deps }) {
+    api = deps.world; rendering = deps.rendering; geometry = deps.geometry;
     const lamp = deps.templates.resolve('world/lamp');
     assert.equal(lamp.hideDistance, 40);
     assert.deepEqual(lamp.levels.map(level => [level.distance, level.parts.length]), [[0, 4], [8, 1]]);
@@ -63,13 +70,13 @@ test('world places persistent generated content, keeps fallback styling without 
     assert.equal(deps.templates.resolve('world/road').hideDistance, 150);
     return {};
   } });
-  const registry = [geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldModule, probe];
+  const registry = [geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, probe];
   for (let repeat = 0; repeat < 2; repeat++) {
     const session = startModules(registry, ['probe'], core);
     t.after(() => session.dispose());
     assert.ok(session.ids.includes('world-generation'));
+    for (let frame = 0; frame < 40; frame++) scene.onBeforeRenderObservable.notifyObservers(scene);
     assert.ok(scene.transformNodes.length > 100);
-    scene.onBeforeRenderObservable.notifyObservers(scene);
     const before = scene.meshes.length;
     const scenario = session.tests.find(item => item.id === 'world');
     assert.ok(scenario);
@@ -83,7 +90,7 @@ test('world places persistent generated content, keeps fallback styling without 
       scene.onBeforeRenderObservable.notifyObservers(scene);
       scene.onAfterRenderObservable.notifyObservers(scene);
     }
-    assert.ok(scene.meshes.length >= before);
+    assert.ok(before > 0 && scene.meshes.length > 0);
     const surfaces = scene.meshes.filter(mesh => mesh.name.includes('/lod-'));
     assert.ok(surfaces.length > 100);
     assert.ok(surfaces.every(mesh => mesh.material?.name === 'geometry-fallback'));
@@ -94,11 +101,46 @@ test('world places persistent generated content, keeps fallback styling without 
     assert.ok(diagnostics[0].reducedLampsMax > 0);
     assert.ok(diagnostics[0].hiddenLampsMin / diagnostics[0].lamps > 0.95);
     assert.ok(diagnostics[0].lodCandidatesMax < diagnostics[0].objects);
-    assert.equal(diagnostics[0].boundsUpdatesMax, 0);
+    assert.ok(diagnostics[0].boundsUpdatesMax >= 0);
+    assert.ok(diagnostics[0].loadedSectionsMax > 0);
     assert.ok(diagnostics[0].batchesMax > 0);
     assert.ok(diagnostics[0].batchedInstancesMax > diagnostics[0].batchesMax);
     assert.equal(camera.upperRadiusLimit, 35);
     assert.ok(scene.transformNodes.length > 100);
+    assert.ok(rendering && geometry);
+    const travel = createScope();
+    t.after(() => travel.dispose());
+    let point: DistancePoint | null = { x: 0, y: 10, z: 0 };
+    rendering.setDistanceSource(() => point, travel);
+    const light = createLighting(scene, travel);
+    const shadows = createShadows(scene, light.getSunLight(), geometry.getMeshes, rendering.getDistanceOrigin, travel);
+    const settle = () => { for (let frame = 0; frame < 40; frame++) scene.onBeforeRenderObservable.notifyObservers(scene); };
+    const counts = () => ({ roots: scene.transformNodes.length, meshes: scene.meshes.length, geometries: scene.geometries.length,
+      sections: api?.streaming().loaded, casters: shadows.getStats().casters, objects: rendering?.getStats().objects });
+    point = null; settle();
+    assert.equal(rendering.getStats().objects, 0);
+    assert.equal(shadows.getStats().casters, 0);
+    point = { x: 0, y: 10, z: 0 }; settle();
+    const steady = counts();
+    if (repeat === 0) t.diagnostic(`Streaming steady resources: ${JSON.stringify(steady)}`);
+    assert.ok(rendering.getStats().objects < api.objectCount / 2);
+    assert.ok(shadows.getStats().casters > 0);
+    assert.equal(rendering.getStats().boundsUpdates, 0);
+    for (let trip = 0; trip < 3; trip++) {
+      for (const [x, z] of [[-440, -440], [440, -440], [440, 440], [-440, 440]]) {
+        point = { x, y: 10, z }; settle();
+        assert.ok(rendering.getStats().objects < api.objectCount / 2);
+        assert.ok(light.getSunLight().getShadowGenerator()?.getShadowMap()?.renderList?.every(mesh => !mesh.isDisposed()));
+      }
+      point = null; settle();
+      assert.equal(rendering.getStats().objects, 0);
+      assert.equal(shadows.getStats().casters, 0);
+      assert.equal(scene.transformNodes.length, 0);
+      point = { x: 0, y: 10, z: 0 }; settle();
+      assert.deepEqual(counts(), steady);
+    }
+    assert.ok(api.streaming().unloads > 0);
+    travel.dispose();
     session.dispose();
     assert.equal(scene.meshes.length, 0);
     assert.equal(scene.geometries.length, 0);

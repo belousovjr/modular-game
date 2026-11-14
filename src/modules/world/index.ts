@@ -3,43 +3,66 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { defineModule } from '../../core/context.ts';
 import { objectTemplatesModule } from '../object-templates/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
+import { worldStreamingModule, type SectionBounds } from '../world-streaming/index.ts';
 import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import { scheme, insertions } from './scheme.ts';
 
 export const worldModule = defineModule({
   id: 'world', title: 'Первый квартал', category: 'Окружение',
-  requires: { generator: worldGenerationModule, templates: objectTemplatesModule, rendering: objectRenderingModule },
+  requires: { generator: worldGenerationModule, templates: objectTemplatesModule, rendering: objectRenderingModule, streaming: worldStreamingModule },
   setup({ deps, scope }) {
     const generated = deps.generator.generate(scheme);
     for (const template of worldTemplates) deps.templates.register(template, scope);
-    const buildings: ReturnType<typeof deps.rendering.createObject>[] = [];
-    const lamps: typeof buildings = [];
-    for (const placement of [...generated.objects, ...insertions]) {
-      const surface = placement.templateId.slice('world/'.length);
-      const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
-      const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, scope, 'static', batchMaterial);
-      object.root.position.copyFromFloats(...placement.position);
-      object.root.rotation.copyFromFloats(...placement.rotation);
-      if (placement.templateId === 'world/building') buildings.push(object);
-      if (placement.templateId === 'world/lamp') lamps.push(object);
-
+    const buildings = new Set<ReturnType<typeof deps.rendering.createObject>>();
+    const lamps: typeof buildings = new Set();
+    const placements = [...generated.objects, ...insertions];
+    const buildingCount = placements.filter(p => p.templateId === 'world/building').length;
+    const lampCount = placements.filter(p => p.templateId === 'world/lamp').length;
+    const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
+    for (const placement of placements) {
+      const [x, , z] = placement.position;
+      const key = placement.templateId === 'world/terrain' ? 'terrain' : `${Math.floor(x / 128)}/${Math.floor(z / 128)}`;
+      // Include full surfaces and facade overhangs, so long tiles survive near a section boundary.
+      const halfX = (placement.parameters.width ?? 2) / 2 + 4;
+      const halfZ = (placement.parameters.depth ?? 2) / 2 + 4;
+      const bounds = { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
+      const section = sections.get(key);
+      if (section) {
+        section.bounds = { minX: Math.min(section.bounds.minX, bounds.minX), maxX: Math.max(section.bounds.maxX, bounds.maxX),
+          minZ: Math.min(section.bounds.minZ, bounds.minZ), maxZ: Math.max(section.bounds.maxZ, bounds.maxZ) };
+        section.placements.push(placement);
+      } else sections.set(key, { bounds, placements: [placement] });
+    }
+    for (const [key, section] of sections) {
+      deps.streaming.registerSection(`${scheme.id}/${key}`, section.bounds, owner => {
+        for (const placement of section.placements) {
+          const surface = placement.templateId.slice('world/'.length);
+          const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
+          const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial);
+          object.root.position.copyFromFloats(...placement.position);
+          object.root.rotation.copyFromFloats(...placement.rotation);
+          const list = placement.templateId === 'world/building' ? buildings : placement.templateId === 'world/lamp' ? lamps : undefined;
+          if (list) { list.add(object); owner.onDispose(() => list.delete(object)); }
+        }
+      }, scope);
     }
     return { bounds: generated.bounds, objectCount: generated.objects.length + insertions.length,
+      streaming: deps.streaming.getStats,
       visibility() {
         const lods = [0, 0, 0];
-        let hidden = 0;
+        let hidden = buildingCount - buildings.size;
         for (const building of buildings) {
           const level = building.level();
           if (level === null) hidden++; else lods[level]++;
         }
         const lampLods = [0, 0];
-        let hiddenLamps = 0;
+        let hiddenLamps = lampCount - lamps.size;
         for (const lamp of lamps) {
           const level = lamp.level();
           if (level === null) hiddenLamps++; else lampLods[level]++;
         }
-        return { buildings: buildings.length, hidden, lods, lamps: lamps.length, hiddenLamps, lampLods };
+        return { buildings: buildingCount, hidden, lods, lamps: lampCount, hiddenLamps, lampLods };
       },
     };
   },
@@ -64,6 +87,7 @@ export const worldModule = defineModule({
       let boundsUpdatesMax = 0;
       let batchesMax = 0;
       let batchedInstancesMax = 0;
+      let loadedSectionsMax = 0;
       const observer = core.scene.onAfterRenderObservable.add(() => {
         const visibility = api.visibility();
         hiddenMin = Math.min(hiddenMin, visibility.hidden);
@@ -78,6 +102,7 @@ export const worldModule = defineModule({
         boundsUpdatesMax = Math.max(boundsUpdatesMax, stats.boundsUpdates);
         batchesMax = Math.max(batchesMax, stats.batches);
         batchedInstancesMax = Math.max(batchedInstancesMax, stats.batchedInstances);
+        loadedSectionsMax = Math.max(loadedSectionsMax, api.streaming().loaded);
         frames++;
       });
       scope.onDispose(() => core.scene.onAfterRenderObservable.remove(observer));
@@ -87,7 +112,7 @@ export const worldModule = defineModule({
           report({ objects: api.objectCount, buildings, sampledFrames: frames, hiddenMin, hiddenMax,
             hiddenFractionMin: hiddenMin / buildings, hiddenFractionMax: hiddenMax / buildings,
             lamps, hiddenLampsMin, hiddenLampsMax, detailedLampsMax, reducedLampsMax,
-            lodCandidatesMin, lodCandidatesMax, boundsUpdatesMax, batchesMax, batchedInstancesMax });
+            lodCandidatesMin, lodCandidatesMax, boundsUpdatesMax, batchesMax, batchedInstancesMax, loadedSectionsMax, sectionLoads: api.streaming().loads, sectionUnloads: api.streaming().unloads });
         }
       });
       return progress => {

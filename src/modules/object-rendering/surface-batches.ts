@@ -2,16 +2,21 @@ import '@babylonjs/core/Meshes/thinInstanceMesh.js';
 import { Matrix } from '@babylonjs/core/Maths/math.vector.js';
 import type { Material } from '@babylonjs/core/Materials/material.js';
 import type { GeometryModel, GeometryPart } from '../geometry/index.ts';
+import { createScope } from '../../core/scope.ts';
 import type { Scope } from '../../core/modules.ts';
 
 export function createSurfaceBatches(createModel: (name: string, parts: readonly GeometryPart[], owner: Scope) => GeometryModel, scope: Scope) {
-  const batches = new Map<string, { model: GeometryModel; matrices: Map<object, Matrix>; buffer: Float32Array }>();
+  const batches = new Map<string, { model: GeometryModel; matrices: Map<object, Matrix>; buffer: Float32Array; owner: ReturnType<typeof createScope> }>();
   const dirty = new Set<string>();
+  scope.onDispose(() => {
+    for (const batch of batches.values()) batch.owner.dispose();
+    batches.clear(); dirty.clear();
+  });
   function remove(key: string, token: object) {
     const batch = batches.get(key);
     if (!batch?.matrices.delete(token)) return;
     if (!batch.matrices.size) {
-      batch.model.root.dispose();
+      batch.owner.dispose();
       batches.delete(key);
       dirty.delete(key);
     } else dirty.add(key);
@@ -21,14 +26,18 @@ export function createSurfaceBatches(createModel: (name: string, parts: readonly
     set(key: string, token: object, matrix: Matrix, material: Material) {
       let batch = batches.get(key);
       if (!batch) {
-        const model = createModel(`surface-batch/${key}`, [{ surface: 'batch', size: [1, 1, 1] }], scope);
-        model.root.setEnabled(false);
-        for (const meshes of model.surfaces.values()) for (const mesh of meshes) {
-          // Thin-instance attributes live on Geometry: each batch needs its own buffers.
-          mesh.makeGeometryUnique();
-          mesh.material = material;
-        }
-        batch = { model, matrices: new Map(), buffer: new Float32Array(0) };
+        const owner = createScope();
+        let model: GeometryModel;
+        try {
+          model = createModel(`surface-batch/${key}`, [{ surface: 'batch', size: [1, 1, 1] }], owner);
+          model.root.setEnabled(false);
+          for (const meshes of model.surfaces.values()) for (const mesh of meshes) {
+            // Thin-instance attributes live on Geometry: each batch needs its own buffers.
+            mesh.makeGeometryUnique();
+            mesh.material = material;
+          }
+        } catch (error) { owner.dispose(); throw error; }
+        batch = { model, owner, matrices: new Map(), buffer: new Float32Array(0) };
         batches.set(key, batch);
       }
       batch.matrices.set(token, matrix);
