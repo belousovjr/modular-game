@@ -61,3 +61,12 @@ test('streaming validates registrations and rolls back a partially failed load',
   assert.equal(active, 0);
   assert.equal(f.streaming.getStats().loaded, 0);
 });
+
+test('skyline sections can stream farther while street sections retain their normal budget',t=>{
+  const f=fixture(t),bounds={minX:990,maxX:1010,minZ:-10,maxZ:10};let streets=0,skyline=0;
+  f.streaming.registerSection('street',bounds,o=>{streets++;o.onDispose(()=>streets--);},f.owner);
+  f.streaming.registerSection('skyline',bounds,o=>{skyline++;o.onDispose(()=>skyline--);},f.owner,{load:1200,unload:1400});
+  f.frame();assert.equal(streets,0);assert.equal(skyline,1);
+  f.move({x:-500,y:0,z:0});f.frame();assert.equal(skyline,0);
+  assert.throws(()=>f.streaming.registerSection('bad',bounds,()=>{},f.owner,{load:1200,unload:1000}),/distances/);
+});

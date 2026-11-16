@@ -11,9 +11,9 @@ export class SurfaceScale extends MaterialPluginBase {
   private readonly atlas: boolean;
   private readonly material: StandardMaterial;
   private readonly readTexture: (family: string) => Texture | undefined;
-  constructor(material: StandardMaterial, atlas: boolean, readTexture: (family: string) => Texture | undefined) {
-    super(material, 'SurfaceScale', 190, { SURFACE_ATLAS: atlas }, true, true);
-    this.atlas = atlas;
+  constructor(material: StandardMaterial, atlas: boolean, readTexture: (family: string) => Texture | undefined, city=false) {
+    super(material, 'SurfaceScale', 190, { SURFACE_ATLAS: atlas||city,SURFACE_CITY:city }, true, true);
+    this.atlas = atlas||city;
     this.material = material;
     this.readTexture = readTexture;
     this.doNotSerialize = true;
@@ -47,7 +47,8 @@ export class SurfaceScale extends MaterialPluginBase {
   getCustomCode(shaderType: string): Record<string, string> | null {
     if (shaderType === 'vertex') return {
       CUSTOM_VERTEX_DEFINITIONS: `
-        #ifndef NORMAL
+        #if !defined(NORMAL) && !defined(CITY_NORMAL_DECLARED)
+        #define CITY_NORMAL_DECLARED
         attribute vec3 normal;
         #endif
         varying vec2 vSurfaceMeters;
@@ -61,6 +62,9 @@ export class SurfaceScale extends MaterialPluginBase {
         vec3 surfaceNormal = abs(normal);
         vSurfaceMeters = (surfaceNormal.y > 0.5 ? surfacePosition.xz : (surfaceNormal.x > 0.5 ? surfacePosition.zy : surfacePosition.xy)) / 2.0;
         vSurfaceAtlasUV = uv;
+        #if defined(SURFACE_CITY) && !defined(FITTED_SURFACE_UV)
+        vSurfaceAtlasUV=vec2(normal.y>.5?-2.:(normal.y<-.5?-1.:0.));
+        #endif
         #endif`,
     };
     if (shaderType !== 'fragment') return null;
@@ -85,10 +89,18 @@ export class SurfaceScale extends MaterialPluginBase {
         #endif
         vec4 surfaceTile(sampler2D wall, sampler2D roof, sampler2D base, sampler2D metal, vec3 ready, bool normalMap) {
         #ifdef SURFACE_ATLAS
+        #ifdef SURFACE_CITY
+        bool marker=vSurfaceAtlasUV.x<-2.5;
+        bool roofRole=vSurfaceAtlasUV.x<-1.5 && vSurfaceAtlasUV.x>-2.5;
+        bool baseRole=vSurfaceAtlasUV.x<-.5 && vSurfaceAtlasUV.x>-1.5;
+        #else
         vec2 cell = floor(vSurfaceAtlasUV * 2.0);
         vec2 face = (vSurfaceAtlasUV - cell * 0.5 - vec2(1.0 / 64.0)) / (30.0 / 64.0);
         bool markedWall = cell.x < 0.5 && cell.y < 0.5;
         bool marker = markedWall && face.x >= ${((1 - FACADE_PATCH.width) / 2).toFixed(6)} && face.x <= ${((1 + FACADE_PATCH.width) / 2).toFixed(6)} && face.y >= ${(1 - FACADE_PATCH.center - FACADE_PATCH.height / 2).toFixed(6)} && face.y <= ${(1 - FACADE_PATCH.center + FACADE_PATCH.height / 2).toFixed(6)};
+        bool roofRole=cell.x<.5 && cell.y>.5;
+        bool baseRole=cell.x>.5 && cell.y<.5;
+        #endif
         vec2 dx = vec2(0.0);
         vec2 dy = vec2(0.0);
         #if __VERSION__ >= 300
@@ -98,10 +110,10 @@ export class SurfaceScale extends MaterialPluginBase {
         if (marker && ready.z > 0.5) {
           if (normalMap && surfaceNormalsReady.z < 0.5) return vec4(0.5, 0.5, 1.0, 1.0);
           return surfaceSample(metal, vSurfaceMeters, dx, dy);
-        } else if (cell.x < 0.5 && cell.y > 0.5 && ready.x > 0.5) {
+        } else if (roofRole && ready.x > 0.5) {
           if (normalMap && surfaceNormalsReady.x < 0.5) return vec4(0.5, 0.5, 1.0, 1.0);
           return surfaceSample(roof, vSurfaceMeters, dx, dy);
-        } else if (cell.x > 0.5 && cell.y < 0.5 && ready.y > 0.5) {
+        } else if (baseRole && ready.y > 0.5) {
           if (normalMap && surfaceNormalsReady.y < 0.5) return vec4(0.5, 0.5, 1.0, 1.0);
           return surfaceSample(base, vSurfaceMeters, dx, dy);
         } else {

@@ -1,0 +1,85 @@
+import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import assert from 'node:assert/strict';
+import {citySource} from '../src/modules/world/city.ts';
+import {generateCity} from '../src/modules/world-generation/headless.ts';
+import {cityCollision} from '../src/modules/world/headless.ts';
+import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
+
+test('real downtown has deterministic source IDs, riverbed, complex roads and mapped landmarks',()=>{
+  const city=generateCity(citySource);
+  const manifest=JSON.parse(readFileSync(new URL('../src/modules/world/data/downtown/city.json',import.meta.url),'utf8'));
+  assert.equal(manifest.source.osmSha256,createHash('sha256').update(readFileSync(new URL('../src/modules/world/data/downtown/osm-snapshot.xml.gz',import.meta.url))).digest('hex'));
+  assert.equal(city.id,'chicago-loop');assert.ok(city.roads.length>800);assert.ok(city.colliders.length>600);
+  assert.equal(new Set(city.placements.map(p=>p.key)).size,city.placements.length);
+  assert.ok(city.roads.some(r=>r.bridge));assert.ok(city.roads.some(r=>r.oneway==='yes'));
+  assert.ok(city.roads.some(r=>r.points.some((p,i)=>i>0&&Math.abs(p[0]-r.points[i-1][0])>1&&Math.abs(p[1]-r.points[i-1][1])>1)));
+  for(const name of ['willis','marina','wrigley','tribune','trump'])assert.ok(city.placements.some(p=>p.templateId===`city/${name}`));
+  const surfaces=new Set(city.chunks.flatMap(c=>c.meshes.map(m=>m.surface)));
+  for(const s of ['water','riverbed','bank','road','sidewalk','curb','marking'])assert.ok(surfaces.has(s));
+  for(const chunk of city.chunks)for(const m of chunk.meshes)if(m.surface==='riverbed')for(let i=1;i<m.positions.length;i+=3)assert.ok(m.positions[i]<city.waterLevel);
+  assert.throws(()=>generateCity({...city,chunks:[{...city.chunks[0],meshes:[{surface:'road',positions:[0,0,0,1,0,0,0,0,1],indices:[0,1,99]}]}]}),/triangles/);
+});
+
+test('downtown height triangles stay in authority after visual streaming, with 16 safe spawns sharing one index',()=>{
+  const world=cityCollision(citySource),factory=createCharacterAuthorityFactory(world);
+  const samples=[];
+  for(let i=0;i<16;i++){
+    const a=factory(0,{x:world.spawn.x+(i%4-1.5)*1.2,z:world.spawn.z+(Math.floor(i/4)-1.5)*1.1});
+    const s=a.snapshot();assert.ok(s.y>-5&&s.y<20);samples.push(s.y);
+    a.step(1);assert.ok(a.snapshot().grounded);
+  }
+  assert.ok(world.triangles&&world.triangles.length>10000);assert.equal(world.slopeX,0);
+  assert.ok(Math.max(...samples)-Math.min(...samples)<.5);
+});
+
+test('street surfaces share raised boundaries and use terrain-sized triangles instead of warped spans',()=>{
+  const road=new Map<string,number>(),curb=new Map<string,number>(),walk=new Map<string,number>();
+  for(const chunk of citySource.chunks)for(const m of chunk.meshes){
+    const map=m.surface==='road'?road:m.surface==='curb'?curb:m.surface==='sidewalk'?walk:null;
+    if(!map)continue;
+    for(let i=0;i<m.positions.length;i+=3){const key=`${m.positions[i]}/${m.positions[i+2]}`;map.set(key,Math.max(map.get(key)??-Infinity,m.positions[i+1]));}
+    for(let i=0;i<m.indices.length;i+=3)for(let j=0;j<3;j++){
+      const a=m.indices[i+j]*3,b=m.indices[i+(j+1)%3]*3;
+      assert.ok(Math.hypot(m.positions[a]-m.positions[b],m.positions[a+2]-m.positions[b+2])<=Math.SQRT2*32+.001,'Long terrain bridge inside a street triangle');
+    }
+  }
+  let roadMatches=0,walkMatches=0;
+  for(const [key,y] of curb){
+    const roadY=road.get(key),walkY=walk.get(key);
+    if(roadY!==undefined){assert.ok(Math.abs(y-roadY-.25)<.001,'Broken curb height at road edge');roadMatches++;}
+    if(walkY!==undefined){assert.ok(Math.abs(y-walkY)<.001,'Sidewalk does not meet curb');walkMatches++;}
+  }
+  assert.ok(roadMatches>1000&&walkMatches>1000);
+});
+
+test('facades contain fitted whole window cells, a plinth and a distinct roof without per-window geometry',()=>{
+  let vertices=0;const styles=new Set<number>();
+  for(const chunk of citySource.chunks)for(const m of chunk.meshes)if(m.surface==='city-stone'||m.surface==='city-glass'){
+    assert.ok(m.uvs);assert.equal(m.uvs.length,m.positions.length/3*2);
+    for(let i=0;i<m.uvs.length;i+=2){const u=m.uvs[i],v=m.uvs[i+1];assert.ok(Math.abs(u-Math.round(u))<.00001&&Math.abs(v-Math.round(v))<.00001,'Window row clipped by facade boundary');if(u<0)styles.add(u);vertices++;}
+  }
+  assert.ok(vertices>10000);for(const style of [-1,-2,-3])assert.ok(styles.has(style));
+});
+
+
+test('coarse city grid keeps object anchors, sizes and headings quantised',()=>{
+  const onGrid=(v:number,step:number)=>Math.abs(v/step-Math.round(v/step))<1e-6;
+  for(const p of citySource.placements){
+    assert.ok(onGrid(p.position[0],1)&&onGrid(p.position[2],1),p.key);
+    assert.ok(onGrid(p.rotation[1],Math.PI/12),p.key);
+    for(const value of Object.values(p.parameters))assert.ok(onGrid(value,.25),p.key);
+  }
+  for(const r of citySource.roads){assert.ok(onGrid(r.width,.25));for(const p of r.points)assert.ok(onGrid(p[0],1)&&onGrid(p[1],1));}
+});
+
+test('reusable architectural parts use quarter-metre dimensions and 15 degree rotations',async()=>{
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const onGrid=(v:number,step:number)=>Math.abs(v/step-Math.round(v/step))<1e-6;
+  for(const template of cityTemplates)for(const level of toCityGrid(template).build({width:32,depth:28,height:60,foundation:2}).levels)for(const part of level.parts){
+    assert.ok(part.size.every(v=>v>=.25&&onGrid(v,.25)));
+    assert.ok(!part.rotation||part.rotation.every(v=>onGrid(v,Math.PI/12)));
+    assert.ok(!part.position||part.position.every(v=>onGrid(v,.125)));
+  }
+});

@@ -8,7 +8,7 @@ import { defineModule } from '../../core/context.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
-import { createCharacterAuthority, createLocalConnection } from './headless.ts';
+import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export type { MoveCommand, CharacterSnapshot, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
@@ -36,9 +36,10 @@ export const charactersModule = defineModule({
     setup({ core, deps, api, scope, report }) {
       const start = deps.simulation.snapshot().tick;
       const spawn=deps.world.collision.spawn;
+      const createAuthority=createCharacterAuthorityFactory(deps.world.collision);
       const actors=Array.from({length:16},(_,i)=>{
         const origin={x:spawn.x+(i%4-1.5)*1.2,z:spawn.z+(Math.floor(i/4)-1.5)*1.1};
-        const session=createLocalConnection(createCharacterAuthority({...deps.world.collision,spawn:origin},start));
+        const session=createLocalConnection(createAuthority(start,origin));
         scope.onDispose(session.close);
         return {session,render:api.createView(scope),origin};
       });

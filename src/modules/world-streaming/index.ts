@@ -9,7 +9,7 @@ export const worldStreamingModule = defineModule({
   id: 'world-streaming', title: 'Загрузка участков', category: 'Окружение',
   requires: { rendering: objectRenderingModule },
   setup({ core, deps, scope }) {
-    type Section = { bounds: SectionBounds; load(owner: Scope): void; owner?: ReturnType<typeof createScope> };
+    type Section = { bounds: SectionBounds; load(owner: Scope): void; loadDistance:number; unloadDistance:number; owner?: ReturnType<typeof createScope> };
     const sections = new Map<string, Section>();
     let stopped = false;
     let loaded = 0;
@@ -31,12 +31,12 @@ export const worldStreamingModule = defineModule({
       for (const section of sections.values()) {
         const b = section.bounds;
         const distance = point ? Math.hypot(Math.max(b.minX - point.x, 0, point.x - b.maxX), Math.max(b.minZ - point.z, 0, point.z - b.maxZ)) : Infinity;
-        if (section.owner && distance > 256) {
+        if (section.owner && distance > section.unloadDistance) {
           const owner = section.owner;
           section.owner = undefined; loaded--; unloads++;
           owner.dispose();
         }
-        if (!section.owner && distance <= 192) pending.push({ section, distance });
+        if (!section.owner && distance <= section.loadDistance) pending.push({ section, distance });
       }
       pending.sort((a, b) => a.distance - b.distance);
       // shortcut: two synchronous sections per frame; revisit with measured stalls or external assets.
@@ -52,10 +52,11 @@ export const worldStreamingModule = defineModule({
     }, -1, true);
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {
-      registerSection(id: string, bounds: SectionBounds, load: (owner: Scope) => void, owner: Scope) {
+      registerSection(id: string, bounds: SectionBounds, load: (owner: Scope) => void, owner: Scope, distances={load:192,unload:256}) {
         ensureRunning();
+        if(!Number.isFinite(distances.load)||!Number.isFinite(distances.unload)||distances.load<0||distances.unload<=distances.load||distances.unload>4000)throw new Error('Invalid streaming distances');
         if (!id.trim() || sections.has(id) || ![bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ].every(Number.isFinite) || bounds.minX >= bounds.maxX || bounds.minZ >= bounds.maxZ) throw new Error('Некорректный участок');
-        const section: Section = { bounds: { ...bounds }, load };
+        const section: Section = { bounds: { ...bounds }, load,loadDistance:distances.load,unloadDistance:distances.unload };
         sections.set(id, section);
         owner.onDispose(() => {
           if (!sections.delete(id)) return;

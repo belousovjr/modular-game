@@ -50,7 +50,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 11);
+    assert.equal(api.getSnapshot().materials, 22);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
@@ -58,6 +58,14 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(api.getSnapshot().loading, 0);
     assert.equal(api.getSnapshot().failed, 0);
+    for(const material of scene.materials)if(material instanceof StandardMaterial&&material.name.startsWith('materials/')&&material.emissiveColor.r===0&&material.emissiveColor.g===0&&material.emissiveColor.b===0){
+      assert.ok(material.diffuseTexture,`Missing texture: ${material.name}`);
+      assert.ok(material.bumpTexture,`Missing normal map: ${material.name}`);
+    }
+    const curb=geometry.getSurfaceMaterial('curb'),walk=geometry.getSurfaceMaterial('sidewalk');
+    assert.ok(curb instanceof StandardMaterial&&walk instanceof StandardMaterial);assert.ok(curb.diffuseColor.r>walk.diffuseColor.r+.15);
+    const city=geometry.getSurfaceMaterial('city-stone');
+    assert.ok(city instanceof StandardMaterial);assert.ok(city.getActiveTextures().some(t=>t.name.endsWith('roof-512.webp')));assert.ok(city.getActiveTextures().some(t=>t.name.endsWith('roof-normal.webp')));
     const shell = geometry.getSurfaceMaterial('building-shell');
     assert.ok(shell instanceof StandardMaterial);
     assert.ok(shell.pluginManager?.getPlugin('SurfaceScale'));

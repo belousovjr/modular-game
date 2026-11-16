@@ -3,7 +3,8 @@ import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js';
 import type { Material } from '@babylonjs/core/Materials/material.js';
-import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { defineModule } from '../../core/context.ts';
 import type { Scope } from '../../core/modules.ts';
@@ -127,6 +128,23 @@ export const geometryModule = defineModule({
       models.set(root, { surfaces, detail });
       return { root, surfaces };
     }
+    function createSurfaceMesh(name: string, surface: string, positions: readonly number[], indices: readonly number[], owner: Scope, customUVs?: readonly number[]) {
+      if (!name.trim() || !surface.trim() || positions.length<9 || positions.length%3 || positions.length>900000 || indices.length%3 || !indices.length || indices.length>1800000 || !positions.every(Number.isFinite) || !indices.every(i=>Number.isSafeInteger(i)&&i>=0&&i<positions.length/3)) throw new Error('Invalid surface geometry');
+      if(customUVs && (customUVs.length!==positions.length/3*2||!customUVs.every(Number.isFinite)))throw new Error('Invalid surface UVs');
+      const material=getSurfaceMaterial(surface);
+      const mesh=new Mesh(name,core.scene);owner.onDispose(()=>mesh.dispose());
+      try {
+        const data=new VertexData();data.positions=new Float32Array(positions);data.indices=Array.from(indices);
+        const normals=new Float32Array(positions.length);VertexData.ComputeNormals(data.positions,data.indices,normals);data.normals=normals;
+        const uvs=customUVs?new Float32Array(customUVs):new Float32Array(positions.length/3*2);
+        if(!customUVs)for(let i=0,j=0;i<positions.length;i+=3){uvs[j++]=positions[i]/2;uvs[j++]=positions[i+2]/2;}
+        data.uvs=uvs;
+        data.applyToMesh(mesh);mesh.material=material;mesh.isPickable=false;mesh.metadata={fittedUV:customUVs!==undefined};
+        const surfaces=new Map([[surface,[mesh]]]);models.set(mesh,{surfaces,detail:0});
+        mesh.onDisposeObservable.addOnce(()=>models.delete(mesh));
+        return mesh;
+      } catch(error) {mesh.dispose();throw error;}
+    }
     function registerMeshes(meshes: readonly Mesh[], owner: Scope) {
       if (stopped) throw new Error('Модуль геометрии остановлен');
       const list = [...meshes];
@@ -134,7 +152,7 @@ export const geometryModule = defineModule({
       for (const mesh of list) borrowed.add(mesh);
       owner.onDispose(() => { for (const mesh of list) borrowed.delete(mesh); });
     }
-    return { createModel, validateParts, getSurfaceMaterial, registerSurfaceMaterials, registerMeshes,
+    return { createModel, createSurfaceMesh, validateParts, getSurfaceMaterial, registerSurfaceMaterials, registerMeshes,
       *getMeshes() {
         if (stopped) throw new Error('Модуль геометрии остановлен');
         for (const { surfaces } of models.values()) for (const meshes of surfaces.values()) yield* meshes;

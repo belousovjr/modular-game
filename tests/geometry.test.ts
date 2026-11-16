@@ -183,3 +183,15 @@ test('imported skinned meshes join the geometry registry without transferring re
   assert.throws(()=>api.registerMeshes([mesh],owner));
   disposeOwner();assert.equal(mesh.isDisposed(),false);assert.equal([...api.getMeshes()].includes(mesh),false);
 });
+
+test('polygon surface meshes validate buffers, face upward, follow materials and release their unique geometry',t=>{
+  const {api,scene,owner,disposeOwner}=fixture(t);
+  const mesh=api.createSurfaceMesh('road','road',[0,0,0,0,0,1,1,0,0],[0,2,1],owner,[0,0,0,2,3,0]);
+  assert.deepEqual(Array.from(mesh.getVerticesData('uv')??[]),[0,0,0,2,3,0]);
+  assert.throws(()=>api.createSurfaceMesh('bad UV','road',[0,0,0,0,0,1,1,0,0],[0,2,1],owner,[0,NaN]));
+  assert.ok(mesh.getVerticesData('normal')?.every((n,i)=>i%3!==1||n>.99));
+  const material=new StandardMaterial('paved',scene);t.after(()=>material.dispose());
+  api.registerSurfaceMaterials(new Map([['road',[material]]]),owner);assert.equal(mesh.material,material);
+  assert.throws(()=>api.createSurfaceMesh('bad','road',[0,0,0,1,0,0,0,0,1],[0,1,9],owner));
+  assert.ok([...api.getMeshes()].includes(mesh));disposeOwner();assert.ok(mesh.isDisposed());
+});

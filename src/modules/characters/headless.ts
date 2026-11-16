@@ -13,8 +13,13 @@ const HEIGHT = 1.8;
 const CELL = 32;
 
 export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
-  if (!Number.isSafeInteger(startTick) || startTick < 0 || ![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 10000 || world.floors.length > 10000) throw new Error('Invalid character world');
+  return createCharacterAuthorityFactory(world)(startTick);
+}
+
+export function createCharacterAuthorityFactory(world: CollisionWorld) {
+  if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 10000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
+  const triangles=new Map<string,{minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[]}[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
   let entries = 0;
   function index<T extends { minX: number; maxX: number; minZ: number; maxZ: number }>(map: Map<string, T[]>, item: T) {
@@ -22,7 +27,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
     const minX = Math.floor((item.minX - RADIUS) / CELL), maxX = Math.floor((item.maxX + RADIUS) / CELL);
     const minZ = Math.floor((item.minZ - RADIUS) / CELL), maxZ = Math.floor((item.maxZ + RADIUS) / CELL);
     entries += (maxX - minX + 1) * (maxZ - minZ + 1);
-    if (entries > 200000 || (maxX - minX + 1) * (maxZ - minZ + 1) > 4096 || ![minX,maxX,minZ,maxZ].every(Number.isSafeInteger)) throw new Error('Collision grid budget exceeded');
+    if (entries > 1000000 || (maxX - minX + 1) * (maxZ - minZ + 1) > 4096 || ![minX,maxX,minZ,maxZ].every(Number.isSafeInteger)) throw new Error('Collision grid budget exceeded');
     for (let x = minX; x <= maxX; x++) for (let z = minZ; z <= maxZ; z++) {
       const key = `${x}/${z}`; const list = map.get(key);
       if (list) list.push(item); else map.set(key, [item]);
@@ -30,30 +35,62 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
   }
   for (const b of world.blockers) {
     if (![b.minY,b.maxY].every(Number.isFinite) || b.maxY <= b.minY) throw new Error('Invalid collision height');
-    index(cells, Object.freeze({ ...b }));
+    if(b.outline && (b.outline.length<3||b.outline.length>256||b.outline.some(p=>p.length!==2||!p.every(Number.isFinite))))throw new Error('Invalid collision outline');
+    index(cells, Object.freeze({ ...b,outline:b.outline?.map(p=>Object.freeze([...p])) }));
   }
   for (const f of world.floors) {
     if (!Number.isFinite(f.elevation) || f.elevation < 0 || f.elevation > 10) throw new Error('Invalid floor');
     index(floors, Object.freeze({ ...f }));
+  }
+  if((world.triangles?.length??0)>200000)throw new Error('Too many terrain triangles');
+  for(const vertices of world.triangles??[]) {
+    if(vertices.length!==9||!vertices.every(Number.isFinite))throw new Error('Invalid terrain triangle');
+    const minX=Math.min(vertices[0],vertices[3],vertices[6]),maxX=Math.max(vertices[0],vertices[3],vertices[6]);
+    const minZ=Math.min(vertices[2],vertices[5],vertices[8]),maxZ=Math.max(vertices[2],vertices[5],vertices[8]);
+    if(maxX-minX<1e-8||maxZ-minZ<1e-8)continue;
+    index(triangles,{minX,maxX,minZ,maxZ,vertices:Object.freeze([...vertices])});
   }
   const bounds = { ...world.bounds }, baseHeight = world.baseHeight, slopeX = world.slopeX;
   const query = <T>(map: Map<string, T[]>, x: number, z: number) => map.get(`${Math.floor(x / CELL)}/${Math.floor(z / CELL)}`) ?? [];
   function ground(x: number, z: number) {
     let elevation = 0;
     for (const f of query(floors,x,z)) if (x >= f.minX && x <= f.maxX && z >= f.minZ && z <= f.maxZ) elevation = Math.max(elevation, f.elevation);
-    return baseHeight + slopeX * x + elevation;
+    let height=baseHeight+slopeX*x+elevation;
+    for(const {vertices:p} of query(triangles,x,z)) {
+      const denominator=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);
+      if(Math.abs(denominator)<1e-10)continue;
+      const a=((p[5]-p[8])*(x-p[6])+(p[6]-p[3])*(z-p[8]))/denominator;
+      const b=((p[8]-p[2])*(x-p[6])+(p[0]-p[6])*(z-p[8]))/denominator;
+      if(a>=-1e-7&&b>=-1e-7&&a+b<=1+1e-7)height=Math.max(height,a*p[1]+b*p[4]+(1-a-b)*p[7]);
+    }
+    return height;
   }
-  let tick = startTick, x = world.spawn.x, z = world.spawn.z, y = ground(x,z), yaw = 0;
+  const defaultSpawn={...world.spawn};
+  return (startTick=0,spawn=defaultSpawn)=>{
+  if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
+  if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
+  let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
   let lastSequence = 0, acceptedTick = -1, expiry = startTick, dx = 0, dz = 0, run = false;
   function support(px: number,pz: number) {
     let height=ground(px,pz);
-    for(const b of query(cells,px,pz)) if(px>b.minX-RADIUS && px<b.maxX+RADIUS && pz>b.minZ-RADIUS && pz<b.maxZ+RADIUS && b.maxY<=y+.3) height=Math.max(height,b.maxY);
+    for(const b of query(cells,px,pz)) if(px>b.minX-RADIUS && px<b.maxX+RADIUS && pz>b.minZ-RADIUS && pz<b.maxZ+RADIUS && b.maxY<=y+.3 && touches(b,px,pz)) height=Math.max(height,b.maxY);
     return height;
   }
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
+  function touches(b:CollisionBox,px:number,pz:number) {
+    if(!b.outline)return true;
+    let inside=false;
+    for(let i=0,j=b.outline.length-1;i<b.outline.length;j=i++) {
+      const a=b.outline[j],c=b.outline[i];
+      if((a[1]>pz)!==(c[1]>pz)&&px<(c[0]-a[0])*(pz-a[1])/(c[1]-a[1])+a[0])inside=!inside;
+      const dx=c[0]-a[0],dz=c[1]-a[1],t=Math.max(0,Math.min(1,((px-a[0])*dx+(pz-a[1])*dz)/(dx*dx+dz*dz||1)));
+      if((px-a[0]-dx*t)**2+(pz-a[1]-dz*t)**2<RADIUS*RADIUS)return true;
+    }
+    return inside;
+  }
   function blocked(px: number, pz: number, py: number) {
     if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || py - y > 0.3) return true;
-    return query(cells,px,pz).some(b => py < b.maxY && py + HEIGHT > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS);
+    return query(cells,px,pz).some(b => py < b.maxY && py + HEIGHT > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS && touches(b,px,pz));
   }
   if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
   return {
@@ -95,7 +132,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
         let nextY = y + verticalSpeed / 60;
         let support = ground(x,z);
         for (const b of query(cells,x,z)) {
-          if (x <= b.minX-RADIUS || x >= b.maxX+RADIUS || z <= b.minZ-RADIUS || z >= b.maxZ+RADIUS) continue;
+          if (x <= b.minX-RADIUS || x >= b.maxX+RADIUS || z <= b.minZ-RADIUS || z >= b.maxZ+RADIUS || !touches(b,x,z)) continue;
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
           if (verticalSpeed > 0 && y+HEIGHT <= b.minY && nextY+HEIGHT >= b.minY) { nextY=b.minY-HEIGHT;verticalSpeed=0; }
         }
@@ -104,6 +141,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
       }
     },
     snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,moving,running: moving && run,lastSequence }); },
+  };
   };
 }
 

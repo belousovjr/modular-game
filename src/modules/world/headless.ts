@@ -1,12 +1,13 @@
-import type { Rectangle, WorldPlacement } from '../world-generation/headless.ts';
+import type { Rectangle, WorldPlacement, CitySource } from '../world-generation/headless.ts';
 
-export interface CollisionBox extends Rectangle { readonly id: string; readonly minY: number; readonly maxY: number }
+export interface CollisionBox extends Rectangle { readonly id: string; readonly minY: number; readonly maxY: number; readonly outline?: readonly (readonly number[])[] }
 export interface CollisionWorld {
   readonly bounds: Rectangle;
   readonly baseHeight: number;
   readonly slopeX: number;
   readonly blockers: readonly CollisionBox[];
   readonly floors: readonly (Rectangle & { readonly elevation: number })[];
+  readonly triangles?: readonly (readonly number[])[];
   readonly spawn: { readonly x: number; readonly z: number };
 }
 
@@ -34,4 +35,18 @@ export function createCollisionWorld(placements: readonly WorldPlacement[], boun
   }
   return Object.freeze({ bounds: Object.freeze({ ...bounds }), baseHeight, slopeX,
     blockers: Object.freeze(blockers), floors: Object.freeze(floors), spawn: Object.freeze(spawn) });
+}
+
+export function cityCollision(city:CitySource):CollisionWorld {
+  const triangles:number[][]=[];
+  for(const chunk of city.chunks)for(const mesh of chunk.meshes) {
+    if(['water','bank','marking'].includes(mesh.surface)||mesh.surface.startsWith('city-'))continue;
+    for(let i=0;i<mesh.indices.length;i+=3) {
+      const a=mesh.indices[i]*3,b=mesh.indices[i+1]*3,c=mesh.indices[i+2]*3;
+      if(Math.abs((mesh.positions[b]-mesh.positions[a])*(mesh.positions[c+2]-mesh.positions[a+2])-(mesh.positions[c]-mesh.positions[a])*(mesh.positions[b+2]-mesh.positions[a+2]))<1e-8)continue;
+      triangles.push([mesh.positions[a],mesh.positions[a+1],mesh.positions[a+2],mesh.positions[b],mesh.positions[b+1],mesh.positions[b+2],mesh.positions[c],mesh.positions[c+1],mesh.positions[c+2]]);
+    }
+  }
+  const blockers=[...city.colliders,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').map(p=>({id:p.key,minX:p.position[0]-.15,maxX:p.position[0]+.15,minZ:p.position[2]-.15,maxZ:p.position[2]+.15,minY:p.position[1],maxY:p.position[1]+5.5}))];
+  return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,floors:[],triangles});
 }

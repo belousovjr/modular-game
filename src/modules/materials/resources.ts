@@ -7,6 +7,7 @@ import type { Scope } from '../../core/modules.ts';
 import type { geometryModule } from '../geometry/index.ts';
 import { SurfaceScale } from './surface-scale.ts';
 import { surfaces } from './palette.ts';
+import { WaterSurface, CityFacade } from './city-surface.ts';
 
 interface MaterialsSnapshot {
   readonly materials: number; readonly textures: number; readonly loading: number;
@@ -16,6 +17,7 @@ interface MaterialsSnapshot {
 export function createMaterials(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, scope: Scope) {
   const changed = new Observable<void>();
   const textures = new Map<string, { texture: Texture; state: 'loading' | 'ready' | 'failed'; size: number; users: { material: StandardMaterial; normal: boolean }[] }>();
+  const tints=new Map<StandardMaterial,Color3>();scope.onDispose(()=>tints.clear());
   const materials = new Map<string, readonly StandardMaterial[]>();
   let stopped = false;
   let snapshot: MaterialsSnapshot = { materials: 0, textures: 0, loading: 0, failed: 0, estimatedBytes: 0, errors: [] };
@@ -64,17 +66,23 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   }
   function attach(material: StandardMaterial, texture: Texture, normal: boolean) {
     if (normal) material.bumpTexture = texture;
-    else { material.diffuseTexture = texture; material.diffuseColor = Color3.White(); }
+    else { material.diffuseTexture = texture; material.diffuseColor = tints.get(material)?.clone()??Color3.White(); }
   }
   const readTexture = (family: string) => textures.get(`${import.meta.env?.BASE_URL ?? '/'}textures/city/${family.endsWith('-normal') ? family : `${family}-512`}.webp`)?.texture;
   for (const [surface, style] of Object.entries(surfaces)) {
     const material = new StandardMaterial(`materials/${surface}`, scene);
     scope.onDispose(() => material.dispose());
     material.diffuseColor = Color3.FromHexString(style.color);
+    const tinted=surface.startsWith('city-')||['curb','sidewalk','water','marking','signal-body','signal-off','riverbed'].includes(surface);
+    tints.set(material,tinted?material.diffuseColor.clone():Color3.White());
     material.specularColor = Color3.Black();
+    if(surface==='bank')material.backFaceCulling=false;
+    if (surface==='water') { material.alpha=.88;material.specularColor=Color3.FromHexString('#a3c2c2');material.specularPower=80;material.backFaceCulling=false;new WaterSurface(material); }
+    if (surface.startsWith('city-')) new CityFacade(material);
+    if (surface==='signal-red') material.emissiveColor=Color3.FromHexString('#a3200b');
     if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
     if (style.texture) {
-      new SurfaceScale(material, style.texture === 'building-shell', readTexture);
+      new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'));
       const family = style.texture === 'building-shell' ? 'brick' : style.texture;
       useTexture(family, 512, material);
       useTexture(family, 512, material, true);
