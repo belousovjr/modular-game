@@ -377,7 +377,7 @@ for r in roads:
             if not inner_bounds.contains(point) or not sidewalk_near.contains(point) or junction_mask.distance(point)<4 or water_near.contains(point):continue
             if any(point.distance(other)<12 for ix in range(cell[0]-1,cell[0]+2) for iz in range(cell[1]-1,cell[1]+2) for other in lamp_cells[ix,iz]):continue
             lamp_cells[cell].append(point)
-            lamps.append({'key':f"osm/lamp/{r['id']}/{distance}/{side}",'templateId':'world/lamp','parameters':{},'position':[round(lx,3),math.ceil((terrain(lx,lz)+SIZE)/SIZE)*SIZE,round(lz,3)],'rotation':[0,snap(math.atan2(-side*dx,-side*dz),ANGLE),0]})
+            lamps.append({'key':f"osm/lamp/{r['id']}/{distance}/{side}",'templateId':'world/lamp','parameters':{},'position':[round(lx,3),math.ceil((terrain(lx,lz)+SIZE)/SIZE)*SIZE,round(lz,3)],'rotation':[0,snap(math.atan2(side*dx,side*dz),ANGLE),0]})
 placements.extend(lamps)
 placements.extend(signals)
 # A dry, wide, unobstructed road segment supports the existing 4x4 crowd test.

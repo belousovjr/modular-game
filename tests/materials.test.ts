@@ -64,6 +64,8 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     }
     const curb=geometry.getSurfaceMaterial('curb'),walk=geometry.getSurfaceMaterial('sidewalk');
     assert.ok(curb instanceof StandardMaterial&&walk instanceof StandardMaterial);assert.ok(curb.diffuseColor.r>walk.diffuseColor.r+.15);
+    const marking=geometry.getSurfaceMaterial('marking');assert.ok(marking instanceof StandardMaterial);
+    assert.equal(marking.zOffset,-1);assert.equal(marking.zOffsetUnits,-2);assert.equal(marking.disableDepthWrite,false);
     const city=geometry.getSurfaceMaterial('city-stone');
     assert.ok(city instanceof StandardMaterial);assert.ok(city.getActiveTextures().some(t=>t.name.endsWith('roof-512.webp')));assert.ok(city.getActiveTextures().some(t=>t.name.endsWith('roof-normal.webp')));
     const shell = geometry.getSurfaceMaterial('building-shell');

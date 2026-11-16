@@ -83,3 +83,38 @@ test('reusable architectural parts use quarter-metre dimensions and 15 degree ro
     assert.ok(!part.position||part.position.every(v=>onGrid(v,.125)));
   }
 });
+
+
+test('every lamp arm faces its own street after Babylon yaw and grid snapping',async()=>{
+  const {Matrix,Vector3}=await import('@babylonjs/core/Maths/math.vector.js');
+  const roads=new Map(citySource.roads.map(r=>[r.id,r]));let checked=0;
+  for(const lamp of citySource.placements.filter(p=>p.templateId==='world/lamp')){
+    const parts=lamp.key.split('/'),road=roads.get(parts.slice(2,-2).join('/'));assert.ok(road);
+    let distance=Number(parts.at(-2)),x=0,z=0;
+    for(let i=1;i<road.points.length;i++){
+      const a=road.points[i-1],b=road.points[i],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      if(distance<=length||i===road.points.length-1){const t=length?Math.min(1,distance/length):0;x=a[0]+(b[0]-a[0])*t;z=a[1]+(b[1]-a[1])*t;break;}
+      distance-=length;
+    }
+    const inward=new Vector3(x-lamp.position[0],0,z-lamp.position[2]).normalize();
+    const arm=Vector3.TransformNormal(new Vector3(1,0,0),Matrix.RotationY(lamp.rotation[1]));
+    assert.ok(Vector3.Dot(arm,inward)>.85,`Lamp points away from street: ${lamp.key}`);checked++;
+  }
+  assert.ok(checked>1000);
+});
+
+
+test('lamp light box does not overlap its metal arm before or after grid snapping',async()=>{
+  const {worldTemplates}=await import('../src/modules/world/templates.ts');
+  const {toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const template=worldTemplates.find(t=>t.id==='world/lamp');assert.ok(template);
+  for(const candidate of [template,toCityGrid(template)]){
+    const parts=candidate.build({}).levels[0].parts;
+    const head=parts.find(p=>p.surface==='lamp-head'),arm=parts.find(p=>p.surface==='metal'&&p.size[0]>1);
+    assert.ok(head?.position&&arm?.position);
+    const headPosition=head.position,armPosition=arm.position;
+    const overlaps=head.size.map((size,i)=>Math.min(headPosition[i]+size/2,armPosition[i]+arm.size[i]/2)-Math.max(headPosition[i]-size/2,armPosition[i]-arm.size[i]/2));
+    assert.ok(overlaps.some(v=>v<=1e-8),'Lamp box intersects its arm and shares visible coplanar faces');
+    assert.ok(head.position[0]-head.size[0]/2>=arm.position[0]+arm.size[0]/2-1e-8);
+  }
+});
