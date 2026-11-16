@@ -2,6 +2,7 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
+import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { defineModule } from '../src/core/context.ts';
@@ -170,4 +171,15 @@ test('atlas markers keep the same local height on every vertical box face', t =>
       assert.ok(Math.abs(actualHeight - height) < 1e-9, `face ${face}: expected ${height}, got ${actualHeight}`);
     }
   }
+});
+
+
+test('imported skinned meshes join the geometry registry without transferring resource ownership', t => {
+  const {api,scene,owner,disposeOwner}=fixture(t);
+  const mesh=MeshBuilder.CreateBox('imported',{},scene);t.after(()=>mesh.dispose());
+  assert.throws(()=>api.registerMeshes([],owner));
+  api.registerMeshes([mesh],owner);
+  assert.ok([...api.getMeshes()].includes(mesh));
+  assert.throws(()=>api.registerMeshes([mesh],owner));
+  disposeOwner();assert.equal(mesh.isDisposed(),false);assert.equal([...api.getMeshes()].includes(mesh),false);
 });

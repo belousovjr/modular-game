@@ -189,7 +189,7 @@ try {
       }
       let exported;
       const createObjectURL = URL.createObjectURL;
-      URL.createObjectURL = blob => { exported = blob; return createObjectURL(blob); };
+      URL.createObjectURL = blob => { if (blob.type === 'application/json') exported = blob; return createObjectURL(blob); };
       const preventDownload = event => { if (event.target instanceof HTMLAnchorElement) event.preventDefault(); };
       document.addEventListener('click', preventDownload, true);
       try {

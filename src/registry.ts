@@ -10,5 +10,7 @@ import { worldStreamingModule } from './modules/world-streaming/index.ts';
 import { worldModule } from './modules/world/index.ts';
 import { materialsModule } from './modules/materials/index.ts';
 import { shadowsModule } from './modules/shadows/index.ts';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule];
+import { charactersModule } from './modules/characters/index.ts';
+import { playerControlModule } from './modules/player-control/index.ts';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule, charactersModule, playerControlModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

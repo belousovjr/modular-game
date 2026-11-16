@@ -6,6 +6,8 @@ import { objectRenderingModule } from '../object-rendering/index.ts';
 import { worldStreamingModule, type SectionBounds } from '../world-streaming/index.ts';
 import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
+import { createCollisionWorld } from './headless.ts';
+export type { CollisionWorld, CollisionBox } from './headless.ts';
 import { scheme, regions, insertions } from './scheme.ts';
 
 export const worldModule = defineModule({
@@ -48,6 +50,7 @@ export const worldModule = defineModule({
       }, scope);
     }
     return { bounds: scheme.bounds, objectCount: placements.length,
+      collision: createCollisionWorld(placements, scheme.bounds, scheme.baseHeight, scheme.slopeX),
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount: region.objects.length })),
       streaming: deps.streaming.getStats,
       visibility() {

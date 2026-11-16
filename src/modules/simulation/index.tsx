@@ -1,6 +1,7 @@
 import { Badge, DataList } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import { defineModule, type CoreContext } from '../../core/context.ts';
+import type { Scope } from '../../core/modules.ts';
 import { createLocalAuthority, type Authority } from '../../simulation/authority.ts';
 
 function SimulationInfo({ authority, onFrame }: { authority: Authority; onFrame: CoreContext['onFrame'] }) {
@@ -24,6 +25,8 @@ export const simulationModule = defineModule({
     scope.onDispose(() => core.onFrame.remove(observer));
     scope.onDispose(core.panels.register('simulation', 'Симуляция',
       <SimulationInfo authority={authority} onFrame={core.onFrame} />));
-    return { snapshot: () => authority.snapshot() };
+    return { snapshot: () => authority.snapshot(),
+      registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
+    };
   },
 });

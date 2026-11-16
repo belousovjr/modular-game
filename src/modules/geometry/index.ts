@@ -55,6 +55,8 @@ export const geometryModule = defineModule({
       }
       return variant;
     }
+    const borrowed = new Set<Mesh>();
+    scope.onDispose(() => borrowed.clear());
     const models = new Map<TransformNode, { surfaces: ReadonlyMap<string, readonly Mesh[]>; detail: number }>();
     let surfaceMaterials: ReadonlyMap<string, readonly Material[]> | undefined;
     function getSurfaceMaterial(surface: string, detail = 0): Material {
@@ -125,10 +127,18 @@ export const geometryModule = defineModule({
       models.set(root, { surfaces, detail });
       return { root, surfaces };
     }
-    return { createModel, validateParts, getSurfaceMaterial, registerSurfaceMaterials,
+    function registerMeshes(meshes: readonly Mesh[], owner: Scope) {
+      if (stopped) throw new Error('Модуль геометрии остановлен');
+      const list = [...meshes];
+      if (!list.length || new Set(list).size !== list.length || list.some(mesh => mesh.isDisposed() || mesh.getScene() !== core.scene || borrowed.has(mesh))) throw new Error('Некорректные импортированные меши');
+      for (const mesh of list) borrowed.add(mesh);
+      owner.onDispose(() => { for (const mesh of list) borrowed.delete(mesh); });
+    }
+    return { createModel, validateParts, getSurfaceMaterial, registerSurfaceMaterials, registerMeshes,
       *getMeshes() {
         if (stopped) throw new Error('Модуль геометрии остановлен');
         for (const { surfaces } of models.values()) for (const meshes of surfaces.values()) yield* meshes;
+        for (const mesh of borrowed) if (!mesh.isDisposed()) yield mesh;
       },
     };
   },
