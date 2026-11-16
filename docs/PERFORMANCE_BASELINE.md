@@ -441,3 +441,11 @@ Offline layout now clusters connected junction nodes, rejects two-arm splits and
 ### Support seating / facade belt repair
 
 Pole roots now follow continuous sidewalk heights with slight burial; lamp feet require full sidewalk coverage. Facade belts follow recessed walls and stop short of corners; offline assertions require attachment and containment. Source lamps 1212 (previously 1257), signals 386; all surface triangle counts unchanged. 106 tests/check/build pass, including direct root-versus-rendered-sidewalk checks. Bounded RTX 3050 Chromium visual smoke reports no shader/console errors; supports-signal-foot.png checks seating. No new FPS benchmark or long memory soak was performed for this geometry-only correction.
+
+### False river pillars removed
+
+Small river polygon holes (≤64 m²) are filled before deriving land/banks/bed, preventing generic DEM extrusion into tall unsupported columns. Larger islands remain; no new pier models are invented. Generated terrain/water/bed/bank geometry loses 1884 triangles; buildings, roads, lamps and signals retain their counts. 107 tests/check/build pass; the regression checks actual water and bed triangles and absence of dry terrain at four pinned source exclusions. A separate FPS benchmark and long memory soak were not repeated for this geometry reduction.
+
+### Lamp decorative foot seating
+
+world/lamp v5 moves/resizes the existing foundation box to 0.5 m height centred at local Y=0.125, preserving the buried root while exposing approximately 0.25 m above sidewalk. No new parts, triangles, materials or callbacks. Existing pavement regression now checks visible foot height and burial for both native and grid-aligned templates. 107 tests/check/build pass; no separate FPS benchmark or memory soak for this box transform change.

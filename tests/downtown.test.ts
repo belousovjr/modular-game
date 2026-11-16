@@ -143,7 +143,11 @@ test('traffic layouts have complete separated crossings and curbside signals rea
   }
 });
 
-test('street supports are embedded in the rendered sidewalk, including sloped pavement',()=>{
+test('street supports are embedded in the rendered sidewalk, including sloped pavement',async()=>{
+  const {worldTemplates}=await import('../src/modules/world/templates.ts');
+  const {toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const lamp=worldTemplates.find(t=>t.id==='world/lamp');assert.ok(lamp);
+  const bases=[lamp,toCityGrid(lamp)].map(t=>t.build({}).levels[0].parts.find(p=>p.surface==='foundation'));
   let checked=0;
   for(const p of citySource.placements){
     if(p.templateId!=='world/lamp'&&p.templateId!=='city/signal')continue;
@@ -160,7 +164,35 @@ test('street supports are embedded in the rendered sidewalk, including sloped pa
       }
     }
     assert.ok(Number.isFinite(pavement),`No sidewalk below ${p.key}`);
-    assert.ok(y<pavement-.1&&y>pavement-.3,`Floating or buried support ${p.key}: ${y-pavement}`);checked++;
+    assert.ok(y<pavement-.1&&y>pavement-.3,`Floating or buried support ${p.key}: ${y-pavement}`);
+    if(p.templateId==='world/lamp')for(const base of bases){
+      assert.ok(base?.position);
+      const bottom=y+base.position[1]-base.size[1]/2,top=y+base.position[1]+base.size[1]/2;
+      assert.ok(bottom<pavement,'Floating decorative foot');
+      assert.ok(top-pavement>.17&&top-pavement<.26,'Decorative foot buried or too tall');
+    }
+    checked++;
   }
   assert.ok(checked>1000);
+});
+
+test('small river exclusions remain water and bed instead of extruded terrain pillars',()=>{
+  const contains=(m:{positions:readonly number[];indices:readonly number[]},x:number,z:number)=>{
+    const v=m.positions;
+    for(let i=0;i<m.indices.length;i+=3){
+      const a=m.indices[i]*3,b=m.indices[i+1]*3,c=m.indices[i+2]*3;
+      const det=(v[b+2]-v[c+2])*(v[a]-v[c])+(v[c]-v[b])*(v[a+2]-v[c+2]);
+      if(Math.abs(det)<1e-8)continue;
+      const u=((v[b+2]-v[c+2])*(x-v[c])+(v[c]-v[b])*(z-v[c+2]))/det;
+      const w=((v[c+2]-v[a+2])*(x-v[c])+(v[a]-v[c])*(z-v[c+2]))/det;
+      if(u>=0&&w>=0&&u+w<=1)return true;
+    }
+    return false;
+  };
+  // Centres of pinned OSM inner ways 938561896/938561895/1267036922/1176285158.
+  for(const [x,z] of [[-44.939,391.606],[-7.5,391.361],[-438.398,376.918],[-574.392,-1.098]]){
+    const meshes=citySource.chunks.flatMap(c=>c.meshes);
+    for(const surface of ['water','riverbed'])assert.ok(meshes.some(m=>m.surface===surface&&contains(m,x,z)),`Missing ${surface} at former pillar`);
+    assert.equal(meshes.some(m=>(m.surface==='urban-ground'||m.surface==='terrain')&&contains(m,x,z)),false,'River exclusion became dry terrain');
+  }
 });

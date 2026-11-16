@@ -62,7 +62,11 @@ for ident,(t,refs) in sorted(ways.items()):
     if t.get('building') and ident not in members_seen and t['building'] not in ['roof','construction','shed','service']:
         buildings.extend((f'osm/w{ident}/{i}',t,p) for i,p in enumerate(polys(polygon(refs).intersection(bounds))))
 print('Source parsed',len(nodes),len(ways),flush=True)
-water=unary_union(water).simplify(.25,preserve_topology=True).buffer(0)
+water=unary_union(water)
+# Small river exclusions are not surveyed terrain islands; extruding them invents tall concrete pillars.
+filled_river_holes=[Polygon(ring) for p in polys(water) for ring in p.interiors if Polygon(ring).area<=64]
+water=unary_union([Polygon(p.exterior,[ring.coords for ring in p.interiors if Polygon(ring).area>64]) for p in polys(water)]).simplify(.25,preserve_topology=True).buffer(0)
+assert all(water.covers(h.representative_point()) for h in filled_river_holes),'Unfilled river exclusion'
 assert water.area>10000,'Missing river'
 elevation=json.loads((DATA/'elevation.json').read_text());assert elevation['bounds']==BBOX,'Refresh elevation after changing district bounds';N=elevation['size'];heights=[snap(s['height']-elevation['datumOffset'],SIZE) for s in elevation['samples']]
 def terrain_raw(x,z):

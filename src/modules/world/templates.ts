@@ -37,13 +37,13 @@ export const worldTemplates: readonly ObjectTemplate[] = [
     },
   },
   {
-    id: 'world/lamp', version: 4, parameters: {},
+    id: 'world/lamp', version: 5, parameters: {},
     build: () => {
       const pole: GeometryPart = { surface: 'metal', size: [0.14, 4.5, 0.14], position: [0, 2.15, 0] };
       const head: GeometryPart = { surface: 'lamp-head', size: [0.5, 0.25, 0.5], position: [1.5, 4.125, 0] };
       return { hideDistance: 40, levels: [
         { distance: 0, parts: [pole, head,
-          { surface: 'foundation', size: [0.6, 0.3, 0.6], position: [0, 0.05, 0] },
+          { surface: 'foundation', size: [0.5, 0.5, 0.5], position: [0, 0.125, 0] },
           { surface: 'metal', size: [1.25, 0.25, 0.25], position: [0.625, 4.25, 0] },
         ] },
         { distance: 8, parts: [{ surface: 'metal', size: [0.18, 4.5, 0.18], position: [0, 2.15, 0] }] },
