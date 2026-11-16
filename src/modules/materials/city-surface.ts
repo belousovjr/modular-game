@@ -38,10 +38,8 @@ export class CityFacade extends MaterialPluginBase {
         #ifdef FITTED_SURFACE_UV
         vCityUV=uv;
         #else
-        vec3 citySize=vec3(length(finalWorld[0].xyz),length(finalWorld[1].xyz),length(finalWorld[2].xyz));
-        float cityU=abs(normal.x)>abs(normal.z)?positionUpdated.z:positionUpdated.x;
-        float cityWidth=abs(normal.x)>abs(normal.z)?citySize.z:citySize.x;
-        vCityUV=vec2((cityU+.5)*max(1.,floor(cityWidth/2.8+.5)),(positionUpdated.y+.5)*max(1.,floor(citySize.y/3.5+.5)));
+        // Shared world-metre projection keeps landmark windows in phase when boxes change LOD.
+        vCityUV=vec2(vSurfaceMeters.x*(2./2.8)+1024.,vSurfaceMeters.y*(2./3.5));
         #endif
       `,
     };
@@ -58,8 +56,8 @@ export class CityFacade extends MaterialPluginBase {
           vec2 edge=max(fwidth(cell),vec2(.002));
           float groundFloor=1.-step(1.,cell.y);
           vec2 opening=mix(vec2(.32,.34),vec2(.40,.39),groundFloor);
-          float window=(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
-          float detail=1.-smoothstep(.04,.16,max(edge.x,edge.y));
+          float window=step(0.,cell.y)*(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
+          float detail=(1.-smoothstep(.04,.16,max(edge.x,edge.y)))*(1.-smoothstep(12.,32.,length(vEyePosition.xyz-vPositionW)));
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
           vec3 glazing=baseColor.rgb*vec3(.20,.29,.34)+vec3(.035,.055,.065);
           baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));

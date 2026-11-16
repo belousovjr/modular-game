@@ -79,14 +79,23 @@ export class SurfaceScale extends MaterialPluginBase {
         uniform sampler2D surfaceRoofNormalSampler;
         uniform sampler2D surfaceBaseNormalSampler;
         uniform sampler2D surfaceMetalNormalSampler;
+        #endif
+        float surfaceMipBias() { return 3.0*smoothstep(12.,80.,length(vEyePosition.xyz-vPositionW)); }
         vec4 surfaceSample(sampler2D image, vec2 coords, vec2 dx, vec2 dy) {
           #if __VERSION__ >= 300
-          return textureGrad(image, coords, dx, dy);
+          float scale=exp2(surfaceMipBias());
+          return textureGrad(image, coords, dx*scale, dy*scale);
           #else
-          return texture2D(image, coords);
+          return texture2D(image, coords, surfaceMipBias());
           #endif
         }
-        #endif
+        vec4 surfacePlainSample(sampler2D image, vec2 coords) {
+          #if __VERSION__ >= 300
+          return surfaceSample(image,coords,dFdx(coords),dFdy(coords));
+          #else
+          return texture2D(image,coords,surfaceMipBias());
+          #endif
+        }
         vec4 surfaceTile(sampler2D wall, sampler2D roof, sampler2D base, sampler2D metal, vec3 ready, bool normalMap) {
         #ifdef SURFACE_ATLAS
         #ifdef SURFACE_CITY
@@ -120,21 +129,21 @@ export class SurfaceScale extends MaterialPluginBase {
           return surfaceSample(wall, vSurfaceMeters, dx, dy);
         }
         #else
-        return TEXRD(wall, vSurfaceMeters);
+        return surfacePlainSample(wall, vSurfaceMeters);
         #endif
         }`,
       '!baseColor=TEXRD\\(diffuseSampler,vDiffuseUV\\+uvOffset\\);': `
         #ifdef SURFACE_ATLAS
         baseColor = surfaceTile(diffuseSampler, surfaceRoofSampler, surfaceBaseSampler, surfaceMetalSampler, surfaceSourcesReady, false);
         #else
-        baseColor = TEXRD(diffuseSampler, vSurfaceMeters);
+        baseColor = surfacePlainSample(diffuseSampler, vSurfaceMeters);
         #endif`,
       '!vec2 TBNUV=gl_FrontFacing \\? vBumpUV : -vBumpUV;': 'vec2 TBNUV=gl_FrontFacing ? vSurfaceMeters : -vSurfaceMeters;',
       '!TEXRD\\(bumpSampler,vBumpUV\\+uvOffset\\)': `
         #ifdef SURFACE_ATLAS
         surfaceTile(bumpSampler, surfaceRoofNormalSampler, surfaceBaseNormalSampler, surfaceMetalNormalSampler, surfaceSourcesReady, true)
         #else
-        TEXRD(bumpSampler, vSurfaceMeters)
+        surfacePlainSample(bumpSampler, vSurfaceMeters)
         #endif
       `,
     };

@@ -1,3 +1,4 @@
+import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { defineModule } from '../../core/context.ts';
@@ -9,6 +10,7 @@ import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
+import district from './data/downtown/district.json' with {type:'json'};
 import {cityCollision} from './headless.ts';
 import {geometryModule} from '../geometry/index.ts';
 import {createElement} from 'react';
@@ -21,13 +23,12 @@ export const worldModule = defineModule({
   setup({ core, deps, scope }) {
     const city=deps.generator.generateCity(citySource);
     scope.onDispose(core.panels.register('world','Центр Чикаго',createElement(Link,{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noreferrer'},'© OpenStreetMap contributors · ODbL · Рельеф USGS 3DEP')));
-    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+city.placements.filter(p=>p.position[0]>=c.bounds.minX&&p.position[0]<c.bounds.maxX&&p.position[2]>=c.bounds.minZ&&p.position[2]<c.bounds.maxZ).length}));
+    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+city.placements.filter(p=>p.position[0]>=c.bounds.minX&&p.position[0]<c.bounds.maxX&&p.position[2]>=c.bounds.minZ&&p.position[2]<c.bounds.maxZ).length}));
     for(const template of cityTemplates)deps.templates.register(toCityGrid(template),scope);
     for (const template of worldTemplates) deps.templates.register(template.id==='world/lamp'?toCityGrid(template):template, scope);
     const buildings = new Set<ReturnType<typeof deps.rendering.createObject>>();
     const lamps: typeof buildings = new Set();
     const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass');
-    let loadedStaticBuildings=0;
     const buildingCount=city.colliders.length;
     const lampCount = placements.filter(p => p.templateId === 'city/signal' || p.templateId === 'world/lamp').length;
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
@@ -58,28 +59,69 @@ export const worldModule = defineModule({
         }
       }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp')?{load:1200,unload:1400}:{load:192,unload:256});
     }
-    for(const chunk of city.chunks)for(const distant of [false,true]) {
-      const surfaces=chunk.meshes.filter(m=>m.surface.startsWith('city-')===distant);
+    const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number}>();
+    const heights=new Map(city.placements.map(p=>[p.key,p.parameters.height]));
+    const bands=[{id:'surfaces',minHeight:0,maxHeight:0,load:192,unload:256},...district.buildingLod];
+    for(const chunk of city.chunks)for(const band of bands) {
+      const distant=band.id!=='surfaces';
+      const surfaces=chunk.meshes.filter(m=>distant?m.surface.startsWith('city-')&&m.surface.endsWith('-'+band.id):!m.surface.startsWith('city-'));
       if(!surfaces.length)continue;
-      const bounds={...chunk.bounds};
-      for(const surface of surfaces)for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
-      deps.streaming.registerSection(`${chunk.id}/${distant?'buildings':'surfaces'}`,bounds,owner=>{
-        if(distant){loadedStaticBuildings+=chunk.buildingIds.length;owner.onDispose(()=>{loadedStaticBuildings-=chunk.buildingIds.length;});}
+      const bounds=distant?{minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity}:{...chunk.bounds};
+      let minY=Infinity,maxY=-Infinity;
+      for(const surface of surfaces)for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);minY=Math.min(minY,surface.positions[i+1]);maxY=Math.max(maxY,surface.positions[i+1]);}
+      const count=distant?chunk.buildingIds.filter(id=>{const h=heights.get(id);return h!==undefined&&h>=band.minHeight&&h<band.maxHeight;}).length:0;
+      deps.streaming.registerSection(`${chunk.id}/${distant?'buildings-':''}${band.id}`,bounds,owner=>{
+        const meshes:Mesh[]=[];
+        const view={meshes,bounds,minY,maxY,count,load:band.load,unload:band.unload};
+        if(distant){bandViews.add(view);owner.onDispose(()=>bandViews.delete(view));}
         for(const surface of surfaces) {
-          const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,surface.surface,surface.positions,surface.indices,owner,surface.uvs);
-          mesh.metadata={...mesh.metadata,citySurface:surface.surface,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(surface.surface)};mesh.freezeWorldMatrix();
+          const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
+          const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
+          mesh.metadata={...mesh.metadata,citySurface:material,buildingBand:distant?band.id:undefined,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(material)};mesh.freezeWorldMatrix();view.meshes.push(mesh);
         }
-      },scope,distant?{load:1200,unload:1400}:{load:192,unload:256});
+      },scope,{load:band.load,unload:band.unload});
     }
+    const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number}>();
+    for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
+      deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
+        const meshes:Mesh[]=[];
+        const view={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
+        detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
+        for(const surface of detail.meshes){
+          const material=surface.surface.replace(/-detail$/,'');
+          const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
+          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowCaster:true};mesh.freezeWorldMatrix();
+          view.meshes.push(mesh);
+          for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
+        }
+      },scope,{load:24,unload:32});
+    }
+    const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
+      const point=deps.rendering.getDistanceOrigin();
+      for(const view of bandViews){
+        const b=view.bounds;
+        const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
+        const limit=view.meshes[0]?.isEnabled()?view.unload:view.load;
+        for(const mesh of view.meshes)mesh.setEnabled(distance<=limit);
+      }
+      for(const view of detailViews){
+        const b=view.bounds;
+        const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
+        for(const mesh of view.meshes)mesh.setEnabled(distance<=32);
+      }
+    });
+    scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
     const collision=cityCollision(city);
-    return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length,0),
+    return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
       collision,
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,
       visibility() {
         const lods = [0, 0, 0];
-        let hidden = buildingCount - buildings.size-loadedStaticBuildings;
-        lods[2]=loadedStaticBuildings;
+        let visibleStatic=0;for(const view of bandViews)if(view.meshes[0]?.isEnabled())visibleStatic+=view.count;
+        let hidden = buildingCount - buildings.size-visibleStatic;
+        for(const view of detailViews)if(view.meshes[0]?.isEnabled())lods[0]++;
+        lods[2]=Math.max(0,visibleStatic-lods[0]);
         for (const building of buildings) {
           const level = building.level();
           if (level === null) hidden++; else lods[level]++;

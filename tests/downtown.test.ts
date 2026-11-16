@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {citySource} from '../src/modules/world/city.ts';
+import district from '../src/modules/world/data/downtown/district.json' with {type:'json'};
 import {generateCity} from '../src/modules/world-generation/headless.ts';
 import {cityCollision} from '../src/modules/world/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
@@ -36,7 +37,7 @@ test('downtown height triangles stay in authority after visual streaming, with 1
 
 test('street surfaces share raised boundaries and use terrain-sized triangles instead of warped spans',()=>{
   const road=new Map<string,number>(),curb=new Map<string,number>(),walk=new Map<string,number>();
-  for(const chunk of citySource.chunks)for(const m of chunk.meshes){
+  for(const chunk of citySource.chunks)for(const m of [...chunk.meshes,...(chunk.details??[]).flatMap(d=>d.meshes)]){
     const map=m.surface==='road'?road:m.surface==='curb'?curb:m.surface==='sidewalk'?walk:null;
     if(!map)continue;
     for(let i=0;i<m.positions.length;i+=3){const key=`${m.positions[i]}/${m.positions[i+2]}`;map.set(key,Math.max(map.get(key)??-Infinity,m.positions[i+1]));}
@@ -56,9 +57,9 @@ test('street surfaces share raised boundaries and use terrain-sized triangles in
 
 test('facades contain fitted whole window cells, a plinth and a distinct roof without per-window geometry',()=>{
   let vertices=0;const styles=new Set<number>();
-  for(const chunk of citySource.chunks)for(const m of chunk.meshes)if(m.surface==='city-stone'||m.surface==='city-glass'){
+  for(const chunk of citySource.chunks)for(const m of [...chunk.meshes,...(chunk.details??[]).flatMap(d=>d.meshes)])if(m.surface.startsWith('city-')){
     assert.ok(m.uvs);assert.equal(m.uvs.length,m.positions.length/3*2);
-    for(let i=0;i<m.uvs.length;i+=2){const u=m.uvs[i],v=m.uvs[i+1];assert.ok(Math.abs(u-Math.round(u))<.00001&&Math.abs(v-Math.round(v))<.00001,'Window row clipped by facade boundary');if(u<0)styles.add(u);vertices++;}
+    for(let i=0;i<m.uvs.length;i+=2){const u=m.uvs[i],v=m.uvs[i+1];if(m.surface.endsWith('-detail'))assert.ok(Math.abs(u-Math.round(u))<.00001&&Math.abs(v-Math.round(v))<.00001,'Window row clipped by facade boundary');if(u<0)styles.add(u);vertices++;}
   }
   assert.ok(vertices>10000);for(const style of [-1,-2,-3])assert.ok(styles.has(style));
 });
@@ -199,7 +200,7 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
 
 test('doors are omitted while batched roof plant remains',()=>{
   let roofs=0;
-  for(const chunk of citySource.chunks)for(const m of chunk.meshes){
+  for(const chunk of citySource.chunks)for(const m of [...chunk.meshes,...(chunk.details??[]).flatMap(d=>d.meshes)]){
     assert.notEqual(m.surface,'facade','Door panels must not be generated');
     if(m.surface==='foundation')for(let i=0;i<m.positions.length;i+=12)assert.ok(Math.abs(m.positions[i+4]-m.positions[i+1]-1.25)<.001,'Only roof plant walls, not door frames, may remain');
     if(m.surface==='roof')roofs+=m.indices.length/6;
@@ -208,7 +209,7 @@ test('doors are omitted while batched roof plant remains',()=>{
   const world=cityCollision(citySource);
   assert.ok(world.triangles);
   // Roof plant tops are visual detail, never a new authority walking plane.
-  for(const c of citySource.chunks)for(const m of c.meshes)if(m.surface==='roof'){
+  for(const c of citySource.chunks)for(const m of (c.details??[]).flatMap(d=>d.meshes))if(m.surface==='roof'){
     const x=m.positions[0],y=m.positions[1],z=m.positions[2];
     assert.equal(world.triangles.some(t=>t[0]===x&&t[1]===y&&t[2]===z),false);
   }
@@ -236,7 +237,8 @@ test('Marina balcony slabs use textured concrete without facade windows',async()
     const slabs=model.levels[0].parts.filter(p=>p.size[1]<=.25);
     assert.ok(slabs.length>40);
     assert.ok(slabs.every(p=>p.surface==='foundation'));
-    assert.equal(model.levels[0].parts.length-model.levels[1].parts.length,slabs.length);
+    assert.ok(model.levels[1].parts.every(p=>p.size[1]>.25));
+    assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
     assert.ok(model.levels[1].parts.some(p=>p.surface==='city-stone'));
   }
 });
@@ -245,7 +247,7 @@ test('Marina balcony slabs use textured concrete without facade windows',async()
 test('roof plant caps face upward and walls face outward with textured concrete',async()=>{
   const {VertexData}=await import('@babylonjs/core/Meshes/mesh.vertexData.js');
   let count=0;
-  for(const chunk of citySource.chunks){
+  for(const chunk of citySource.chunks.flatMap(c=>[c,...c.details??[]])){
     const caps=chunk.meshes.find(m=>m.surface==='roof');
     if(!caps)continue;
     const normals:number[]=[];VertexData.ComputeNormals([...caps.positions],[...caps.indices],normals);
@@ -265,4 +267,81 @@ test('roof plant caps face upward and walls face outward with textured concrete'
     }
   }
   assert.ok(count>1000);
+});
+
+
+test('ordinary skyline omits all trim and near detail is separately bounded and validated',()=>{
+  const details=citySource.chunks.flatMap(c=>c.details??[]);
+  assert.ok(details.length>600);
+  const far=citySource.chunks.flatMap(c=>c.meshes).filter(m=>m.surface.startsWith('city-'));
+  const near=details.flatMap(d=>d.meshes).filter(m=>m.surface.endsWith('-detail'));
+  const triangles=(meshes:typeof far)=>meshes.reduce((n,m)=>n+m.indices.length/3,0);
+  assert.ok(triangles(far)<triangles(near)*.15,'Distant buildings must be much simpler');
+  for(const m of far)assert.ok(m.uvs?.filter((_,i)=>i%2===0).every(u=>u>=0||u===-2),'Distant skyline contains trim/plinth roles');
+  const base=citySource.chunks.find(c=>c.details?.length);assert.ok(base?.details);
+  const detail=base.details[0];
+  const excess=[1024,1024,1].map((count,i)=>({id:`excess/${i}`,bounds:citySource.bounds,buildingIds:[],meshes:[],details:Array.from({length:count},(_,j)=>({id:`excess/${i}/${j}`,bounds:citySource.bounds,meshes:[]}))}));
+  assert.throws(()=>generateCity({...citySource,chunks:excess}),/details/);
+  assert.throws(()=>generateCity({...citySource,chunks:[{...base,details:[{...detail,meshes:[{surface:'city-stone-detail',positions:[0,0,0],indices:[0,1,2]}]}]}]}),/triangles/);
+});
+
+test('every landmark sheds detail early and strongly reduces its distant silhouette',async()=>{
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  for(const name of ['marina','willis','trump','wrigley','tribune']){
+    const template=cityTemplates.find(t=>t.id==='city/'+name);assert.ok(template);
+    const model=toCityGrid(template).build({width:32,depth:32,height:179,foundation:2});
+    assert.equal(model.levels[1].distance,24);assert.equal(model.levels[2].distance,80);
+    assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
+    assert.ok(model.levels[2].parts.length<=6);
+  }
+});
+
+
+test('coarse building batches are split by height with much shorter small-building ranges',()=>{
+  const bands=district.buildingLod;
+  assert.ok(bands[0].unload<bands[1].load&&bands[1].unload<bands[2].load);
+  assert.equal(bands[2].load,1200);assert.equal(bands[2].unload,1400);
+  assert.ok(bands[0].unload<=220&&bands[1].unload<=480);
+  const surfaces=citySource.chunks.flatMap(c=>c.meshes).filter(m=>m.surface.startsWith('city-'));
+  for(const band of bands)assert.ok(surfaces.some(m=>m.surface.endsWith('-'+band.id)));
+  assert.ok(surfaces.every(m=>bands.some(b=>m.surface.endsWith('-'+b.id))));
+});
+
+
+test('coarse and detailed facades share window pitch and phase on matching walls',()=>{
+  let checked=0;
+  for(const chunk of citySource.chunks){
+    const refs=[];
+    for(const m of (chunk.details??[]).flatMap(d=>d.meshes).filter(m=>m.surface.endsWith('-detail'))){
+      assert.ok(m.uvs);
+      for(let i=0;i<m.indices.length;i+=3){
+        const [a,b,c]=m.indices.slice(i,i+3),p=m.positions,uv=m.uvs;
+        if(uv[a*2]<0||uv[b*2]<0||uv[c*2]<0||p[a*3+1]>=p[b*3+1]||Math.abs(p[b*3+1]-p[c*3+1])>.001)continue;
+        const ax=p[a*3],az=p[a*3+2],dx=p[c*3]-ax,dz=p[c*3+2]-az,length=Math.hypot(dx,dz);
+        refs.push({ax,az,tx:dx/length,tz:dz/length,length,u0:uv[a*2],du:uv[c*2]-uv[a*2],y0:p[a*3+1],v0:uv[a*2+1],vScale:(uv[b*2+1]-uv[a*2+1])/(p[b*3+1]-p[a*3+1])});
+      }
+    }
+    for(const m of chunk.meshes.filter(m=>m.surface.startsWith('city-'))){
+      assert.ok(m.uvs);
+      for(let i=0;i<m.indices.length;i+=3){
+        const [a,b,c]=m.indices.slice(i,i+3),p=m.positions,uv=m.uvs;
+        if(uv[a*2]<0||uv[b*2]<0||uv[c*2]<0||p[a*3+1]>=p[b*3+1]||Math.abs(p[b*3+1]-p[c*3+1])>.001)continue;
+        const x=(p[a*3]+p[c*3])/2,z=(p[a*3+2]+p[c*3+2])/2,dx=p[c*3]-p[a*3],dz=p[c*3+2]-p[a*3+2],length=Math.hypot(dx,dz);
+        const adjacent=refs.filter(r=>{
+          const along=(x-r.ax)*r.tx+(z-r.az)*r.tz;
+          return along>r.length*.1&&along<r.length*.9&&Math.abs((x-r.ax)*r.tz-(z-r.az)*r.tx)<.1&&(r.tx*dx+r.tz*dz)/length>.999;
+        });
+        if(!adjacent.length)continue;
+        assert.ok(adjacent.some(r=>{
+          const along=(x-r.ax)*r.tx+(z-r.az)*r.tz;
+          const delta=(uv[a*2]+uv[c*2])/2-(r.u0+along*r.du/r.length);
+          const scale=(uv[c*2]-uv[a*2])/length;
+          const vScale=(uv[b*2+1]-uv[a*2+1])/(p[b*3+1]-p[a*3+1]);
+          const vAtReference=uv[a*2+1]+(r.y0-p[a*3+1])*vScale;
+          return Math.abs(delta-Math.round(delta))<.003&&Math.abs(scale-r.du/r.length)<.003&&Math.abs(vAtReference-r.v0)<.003&&Math.abs(vScale-r.vScale)<.003;
+        }),'Window grid jumps between matching LOD walls');checked++;
+      }
+    }
+  }
+  assert.ok(checked>500);
 });

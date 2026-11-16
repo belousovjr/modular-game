@@ -4,7 +4,7 @@ import type {GeometryPart} from '../geometry/index.ts';
 const span={default:30,min:.1,max:1000};
 export const cityTemplates:readonly ObjectTemplate[]=[
   ...['stone','glass','willis','trump','marina','wrigley','tribune'].map((profile):ObjectTemplate=>({
-    id:`city/${profile}`,version:profile==='marina'?2:1,
+    id:`city/${profile}`,version:3,
     parameters:{width:span,depth:span,height:{default:55,min:3,max:600},foundation:{default:2,min:.1,max:20}},
     build({width,depth,height,foundation}) {
       const surface=profile==='willis'?'city-dark':profile==='stone'||profile==='wrigley'||profile==='tribune'||profile==='marina'?'city-stone':'city-glass';
@@ -29,10 +29,15 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       const detail:GeometryPart[]=[];
       if(profile==='marina')for(let y=4;y<height;y+=3.5)detail.push(part(0,y,0,width*.64,.18,depth*.64,'foundation',Math.PI/4));
       else for(const side of [-1,1])detail.push(part(0,2,side*(depth/2+.04),width*.75,3.6,.12,'city-glass'));
+      let reduced=silhouette;
+      if(profile==='marina')reduced=[0,Math.PI/3,Math.PI*2/3].map(angle=>part(0,height/2,0,width*.42,height,depth*.82,surface,angle));
+      else if(profile==='willis')reduced=[part(-width*.3,height*.35,0,width*.4,height*.7,depth*.8),part(0,height*.5,0,width*.4,height,depth),part(width*.3,height*.46,0,width*.4,height*.92,depth*.8)];
+      else if(['trump','wrigley','tribune'].includes(profile))reduced=[part(0,height*.35,0,width,height*.7,depth),part(0,height*.85,0,width*.45,height*.3,depth*.45)];
+      const farCrown=profile==='tribune'?crown.slice(0,1):profile==='wrigley'?[]:crown;
       return {hideDistance:profile==='stone'?300:1200,levels:[
         {distance:0,parts:[...silhouette,foundationPart,...crown,...detail]},
-        {distance:45,parts:[...silhouette,foundationPart,...crown]},
-        {distance:180,parts:[...silhouette,...crown]},
+        {distance:24,parts:[...silhouette,foundationPart,...crown]},
+        {distance:80,parts:[...reduced,foundationPart,...farCrown]},
       ]};
     },
   })),

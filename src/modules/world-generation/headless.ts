@@ -220,7 +220,7 @@ export interface CityMesh { readonly surface: string; readonly positions: readon
 export interface CitySource {
   readonly version: number; readonly id: string; readonly bounds: Rectangle;
   readonly spawn: {readonly x:number;readonly z:number}; readonly waterLevel:number;
-  readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[]}[];
+  readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[];readonly details?:readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[]}[]}[];
   readonly placements: readonly WorldPlacement[];
   readonly colliders: readonly (Rectangle & {readonly id:string;readonly minY:number;readonly maxY:number;readonly outline:readonly (readonly number[])[]})[];
   readonly roads: readonly {readonly id:string;readonly name:string;readonly points:readonly (readonly number[])[];readonly width:number;readonly oneway:string;readonly bridge:boolean;readonly layer:number}[];
@@ -229,14 +229,18 @@ export interface CitySource {
 // Polygon boolean operations and triangulation run offline; runtime validates the pinned result.
 export function generateCity(source: CitySource): CitySource {
   if(source.version!==1 || !source.id.trim() || !validRectangle(source.bounds) || ![source.spawn.x,source.spawn.z,source.waterLevel].every(Number.isFinite) || source.chunks.length>2048 || source.placements.length>20000 || source.roads.length>20000 || source.colliders.length>10000) throw new Error('Invalid city source');
-  const ids=new Set<string>();let vertices=0;
-  for(const chunk of source.chunks) {
+  const ids=new Set<string>();let vertices=0,detailCount=0;
+  for(const base of source.chunks) {
+    detailCount+=base.details?.length??0;
+    if(detailCount>2048||(base.details?.length??0)>1024)throw new Error('Invalid city details');
+    for(const chunk of [base,...base.details??[]]) {
     if(ids.has(chunk.id)||!chunk.id.trim()||!validRectangle(chunk.bounds)||chunk.meshes.length>32)throw new Error('Invalid city chunk');ids.add(chunk.id);
     for(const mesh of chunk.meshes) {
       vertices+=mesh.positions.length/3;
       if(vertices>2000000||!mesh.surface.trim()||!mesh.positions.length||mesh.positions.length%3||mesh.indices.length%3||!mesh.positions.every(Number.isFinite)||!mesh.indices.every(i=>Number.isSafeInteger(i)&&i>=0&&i<mesh.positions.length/3))throw new Error('Invalid city triangles');
       if(mesh.uvs&&(mesh.uvs.length!==mesh.positions.length/3*2||!mesh.uvs.every(Number.isFinite)))throw new Error('Invalid city UVs');
     }
+  }
   }
   for(const p of source.placements) {
     if(ids.has(p.key)||!p.key.trim()||(!p.templateId.startsWith('city/')&&p.templateId!=='world/lamp')||p.position.length!==3||p.rotation.length!==3||![...p.position,...p.rotation,...Object.values(p.parameters)].every(Number.isFinite))throw new Error('Invalid city placement');ids.add(p.key);

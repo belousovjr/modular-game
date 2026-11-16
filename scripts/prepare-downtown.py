@@ -278,10 +278,15 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
         if any(fit.intersection(other).area>.1 for cell in cells for other in occupied[cell]):continue
         for cell in cells:occupied[cell].append(fit)
         if profile in ['stone','glass']:
-            tile_chunk=chunk(math.floor(bx/TILE),math.floor(bz/TILE));surface=f'city-{profile}'
-            tile_chunk['buildingIds'].append(oid)
-            batch=next((m for m in tile_chunk['meshes'] if m['surface']==surface),None)
-            if batch is None:batch={'surface':surface,'positions':[],'indices':[],'uvs':[]};tile_chunk['meshes'].append(batch)
+            far_chunk=chunk(math.floor(bx/TILE),math.floor(bz/TILE));surface=f'city-{profile}'
+            far_chunk['buildingIds'].append(oid)
+            band=next(b['id'] for b in config['buildingLod'] if b['minHeight']<=h<b['maxHeight'])
+            far_surface=surface+'-'+band
+            far_batch=next((m for m in far_chunk['meshes'] if m['surface']==far_surface),None)
+            if far_batch is None:far_batch={'surface':far_surface,'positions':[],'indices':[],'uvs':[]};far_chunk['meshes'].append(far_batch)
+            tile_chunk={'id':f"{config['id']}/detail/{oid}",'bounds':{'minX':p.bounds[0],'maxX':p.bounds[2],'minZ':p.bounds[1],'maxZ':p.bounds[3]},'meshes':[]}
+            far_chunk.setdefault('details',[]).append(tile_chunk)
+            batch={'surface':surface+'-detail','positions':[],'indices':[],'uvs':[]};tile_chunk['meshes'].append(batch)
             def quad(a,b,c,d,uvs):
                 offset=len(batch['positions'])//3
                 for (vx,vy,vz),(u,v) in zip([a,b,c,d],uvs):
@@ -300,13 +305,40 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
             bottom=by+.5;top=by+h-.5;rows=max(1,round((top-bottom)/3.5));storey=(top-bottom)/rows
             inset=p.buffer(-SIZE,join_style='mitre')
             if inset.is_empty:inset=p
+            references=[]
+            for wall in polys(inset):
+                wall=orient(wall,sign=-1)
+                for ring in [wall.exterior,*wall.interiors]:
+                    for a,b in zip(list(ring.coords),list(ring.coords)[1:]):
+                        length=math.dist(a,b)
+                        if length>=1.2:references.append((a,b,length,max(1,round(length/2.8))))
+            def facade_uv(a,b,y0,y1):
+                length=math.dist(a,b);tx,tz=(b[0]-a[0])/length,(b[1]-a[1])/length;mid=Point((a[0]+b[0])/2,(a[1]+b[1])/2)
+                parallel=[r for r in references if ((r[1][0]-r[0][0])*tx+(r[1][1]-r[0][1])*tz)/r[2]>.95]
+                ref=min(parallel or references,key=lambda r:LineString([r[0],r[1]]).distance(mid))
+                origin,end,span,columns=ref;ux,uz=(end[0]-origin[0])/span,(end[1]-origin[1])/span
+                # Positive integer offset preserves window phase while reserving negative UVs for material roles.
+                def u(q):return 128+((q[0]-origin[0])*ux+(q[1]-origin[1])*uz)*columns/span
+                return [(u(a),(y0-bottom)/storey),(u(a),(y1-bottom)/storey),(u(b),(y1-bottom)/storey),(u(b),(y0-bottom)/storey)]
+            # Coarse opaque core stays behind the near facade, with no overlapping exposed planes.
+            near_batch=batch;batch=far_batch
+            core=p.buffer(-.3125,join_style='mitre');coarse=core.simplify(1,preserve_topology=True).intersection(core)
+            if coarse.is_empty:coarse=p.buffer(-.25,join_style='mitre')
+            low=min(terrain(x,z) for x,z in p.exterior.coords)-1;far_top=by+h-.3125
+            for shape in polys(coarse):
+                shape=orient(shape,sign=-1)
+                for ring in [shape.exterior,*shape.interiors]:
+                    for (ax,az),(bx1,bz1) in zip(list(ring.coords),list(ring.coords)[1:]):
+                        quad((ax,low,az),(ax,far_top,az),(bx1,far_top,bz1),(bx1,low,bz1),facade_uv((ax,az),(bx1,bz1),low,far_top))
+                cap(shape,far_top,-2)
+            batch=near_batch
             # Vertical faces map complete window cells to each edge, independent of world orientation/phase.
             for wall in polys(inset):
              wall=orient(wall,sign=-1)
              for ring in [wall.exterior,*wall.interiors]:
               for (ax,az),(bx1,bz1) in zip(list(ring.coords),list(ring.coords)[1:]):
                 columns=max(1,round(math.hypot(bx1-ax,bz1-az)/2.8))
-                uv=[(0,0),(0,rows),(columns,rows),(columns,0)] if math.hypot(bx1-ax,bz1-az)>=1.2 else [(-3,-3)]*4
+                uv=[(128,0),(128,rows),(128+columns,rows),(128+columns,0)] if math.hypot(bx1-ax,bz1-az)>=1.2 else [(-3,-3)]*4
                 quad((ax,bottom,az),(ax,top,az),(bx1,top,bz1),(bx1,bottom,bz1),uv)
             rim=p.difference(inset)
             cap(inset,by+h-SIZE,-2);cap(rim,by+h,-3);cap(rim,bottom,-3);cap(rim,top,-3,down=True)
@@ -518,7 +550,8 @@ print('Markings and signals complete',len(signals),len(crossings),flush=True)
 # Keep source derivation and key counts inspectable; no remote source is needed at runtime.
 counts=Counter()
 for ch in chunks.values():
-    for m in ch['meshes']:counts[m['surface']]+=len(m['indices'])//3
+    for target in [ch,*ch.get('details',[])]:
+      for m in target['meshes']:counts[m['surface']]+=len(m['indices'])//3
 result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':'USGS 3DEP; bilinear 9x9 samples; NAVD88 datum offset 180 m','bathymetry':'procedural reference profile, not survey data'},'trafficLayout':{'junctions':[{'id':j['id'],'nodes':j['nodes'],'outline':outline(j['shape'])} for j in junctions],'crosswalks':crossing_layout,'signals':signal_layout},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(junctions),'crossingStripes':len(crossings),'riverArea':round(water.area,2),'triangles':dict(counts),'chunks':len(chunks)}}
 (DATA/'city.json').write_text(json.dumps(result,separators=(',',':'),ensure_ascii=False)+'\n')
 print(json.dumps(result['report']));print('spawn',result['spawn']);print('bytes',(DATA/'city.json').stat().st_size)

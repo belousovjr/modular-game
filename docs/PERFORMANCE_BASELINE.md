@@ -506,3 +506,45 @@ RTX 3050/D3D12 Chromium 1280×720, three-second settled samples: old 118.3 FPS/P
 Rooftop plant caps had reversed triangle winding: their Babylon normals faced downward, so back-face culling hid the top from above. Corrected winding, retaining ordinary opaque one-sided materials. Wall winding was already outward; walls now use existing textured foundation concrete instead of the very dark tinted metal. Cap uses existing roof texture/normal. No added faces, materials or textures; 567 enclosures retain 5670 total triangles across walls/caps. Door panels/frames remain absent.
 
 114 tests/check/build pass. Regression computes actual Babylon normals for every prepared cap and wall, requiring upward tops and outward sides; it allows only 1.25 m rooftop walls in foundation batches. Bounded RTX 3050/D3D12 Chromium 1280×720, 2 GiB/no swap/timeouts: inspected roof from above and opposite direction; cap visible, concrete walls readable, console/shader errors zero. Artifacts roof-faces-{above,reverse}.png and roof-faces-report.json. Separate FPS benchmark/full route/long soak not repeated for this face/material correction.
+
+## Aggressive building / texture LOD
+
+The former ordinary-building skyline batches included every parapet, plinth and belt out to 1200 m. The pinned source now separates them: coarse opaque prisms inside the original footprint stay in 128 m skyline batches (19088 triangles); per-building optional detail groups contain the full facades/trim/roof plant. Full facade geometry is 135115 triangles, so ordinary distant geometry is about 7.1× lighter. Coarse shapes retain a simplified outline, not necessarily one rectangular cuboid for a concave real footprint. The inset/height offset keeps the coarse shell behind the near opaque surfaces, avoiding exposed coincident planes. Source JSON grows slightly because both representations are pinned; this is not network streaming of JSON.
+
+Details load at 24 m/unload beyond 32 m using existing streaming; a scoped 3D bounds check also disables them beyond 32 m vertically. Collision geometry/IDs are unchanged. Optional CitySource.chunks[].details is validated with shared mesh/UV/ID/vertex budgets, at most 1024 groups in one parent and 2048 overall; legacy sources without it remain accepted. Main regions remain 224; objectCount includes detail meshes. No core or streaming API change.
+
+Landmarks shed small parts at 24 m and strongly simplify at 80 m: Marina 8 radial boxes →3; Willis 9 tubes →3; Trump/Wrigley/Tribune →2 stepped masses plus selected crown/antenna parts. Foundations stay to anchor the silhouette. At most 6 parts remain in any distant landmark model. The skyline range and CSM coverage are retained.
+
+SurfaceScale adds smooth mip bias 0→+3 from 12 to 80 m for albedo/AO and matching normal maps on all world surfaces, using derivative scale in WebGL2 and texture bias in WebGL1. It shares the same 12 textures/22 materials, with no additional texture samples. Window mullions disappear by 32 m. High mips remain resident: no VRAM-streaming or memory-saving claim for texture bias.
+
+116 tests/check/build pass. New regression covers absence of trim roles in the distant buffers, >6× triangle reduction, detail validation/budget, and all five landmark profiles reducing at the earlier thresholds. Existing street seams, roof normals, character/authority/cleanup checks remain. Bounded headed Chromium, 1280×720, ANGLE D3D12 NVIDIA RTX 3050 Laptop, MemoryMax=2 GiB/no swap/120 s, sequential after build:
+
+| View | FPS | P95 ms |
+| --- | --- | --- |
+| Clark street | 97.1 | 16.6 |
+| Randolph junction | 112.9 | 14.9 |
+| Street return | 120.7 | 12.9 |
+| Daley Plaza | 113.3 | 13.0 |
+| Roofs | 109.0 | 16.7 |
+| Skyline | 114.2 | 13.9 |
+| 17 visible people | 83.0 | 18.2 |
+
+This is the current short route, not an isolated performance A/B against older runs (environmental variation remains). Browser audit: near detail meshes=3, at camera Y=600 detail meshes=0 while 67 coarse active entries remain; compiled shader contains the new bias path. Screenshots confirm plain roofs without trim from a distance. After each of three warmed returns: meshes=388, geometries=331, textures=16 (includes hero), skeletons=1. Peak cgroup memory 865218560 bytes (~0.81 GiB); oom/oom_kill zero; console/shader errors zero. Far receiver still inside second CSM layer, 2×1024 / 96 m. Artifacts review-hard-lod-{street,intersection,plaza,roof,skyline,near-lod,high-lod,far-shadow}.png and review-hard-lod-report.json. First diagnostic attempt stopped on an obsolete Effect getter in the local audit script; the application shader was ready. The corrected completed run supplies these results. No multi-hour soak or every-building visual audit.
+
+## Earlier height-aware building disappearance
+
+The preceding aggressive geometry/texture LOD remains. Coarse batches are now split by height/material, using the single district.json.buildingLod table in both offline preparation and the client: below 45 m → load 180/unload 220 m, 45–100 m →400/480 m, ≥100 m →1200/1400 m. Landmarks retain their previous range and reduced silhouettes. Horizontal streaming disposes whole category scopes/geometry buffers; 3D group-bounds hysteresis also disables draw/casters when flying vertically away. Vertical-only hiding can retain the horizontally loaded buffer; it is not claimed as a full 3D memory streamer. Collisions remain authoritative and independent of visibility. Batch bounds are computed from actual vertices; multiple buildings in a batch share the cutoff.
+
+117 tests/check/build pass. Completed bounded RTX 3050/D3D12 Chromium 1280×720 route, 2 GiB/no swap/120 s: street 107.1 FPS/P95 14.7 ms, junction 120.9/12.8, return 110.7/15.8, plaza 108.8/15.3, roofs 104.2/17.7, skyline 120.5/13.6. Crowd: 17 visible people, 74.7 FPS/P95 20.8 ms. These short results do not establish a causal improvement over previous runs or guarantee stable 60.
+
+LOD audit near scene: 3 detail meshes; enabled height-group mesh counts low=6, mid=52, tall=78. At camera Y=600: detail=0, low=0, mid=0, tall=78, with coarse skyline still rendered and compiled mip-bias shader ready. Three warmed returns each leave meshes=262, geometries=205, textures=16 (includes hero), skeletons=1; no growth. Cgroup peak 1504530432 bytes (~1.40 GiB), oom/oom_kill zero. Console/shader errors zero; CSM remains 2×1024/96 m with distant receiver coverage. Artifacts review-height-cull-*.png and review-height-cull-report.json. No full-city manual audit or long memory soak.
+
+## Window phase continuity across building LOD
+
+The coarse facade previously fitted a fresh integer row/column count to its own length/height, visibly shifting windows when near trim vanished. Coarse walls now project onto the detailed facade's reference edges, reusing horizontal pitch and the same bottom/storey vertical origin. Near U receives an integer offset 128 to reserve negative U material roles; this does not move the periodic pattern. Coarse UVs are intentionally fractional. Negative V under the shared facade origin has no windows. Main coarse facade/roof planes now sit 0.0625 m behind detailed surfaces, reducing the previous 0.25/0.5 m geometry offset. Complicated newly simplified facets can still differ from the detailed topology.
+
+Non-fitted landmark windows use the existing SurfaceScale metre projection at 2.8×3.5 m spacing with an integer U offset, eliminating box-size-dependent rescaling between landmark LODs. No extra samples, textures, materials or meshes; the slightly different coarse inset changes coarse geometry from 19088 to 19230 triangles, still >6× below full ordinary detail. Pinned JSON grows due to fractional UV data; GPU UV format remains the same.
+
+118 tests/check/build pass. New regression compares actual vertex/UV buffers for >500 matching parallel walls: horizontal pitch/phase and vertical origin/scale agree; near facade full-cell checks remain, coarse floats are allowed. Bounded RTX 3050/D3D12 Chromium 1280×720, 2 GiB/no swap/60 s, fixed camera at (−16,7,−80), morning light: captured detailed and coarse-only facades without moving the camera, then checked a Marina view. Console/shader errors zero. Central 320×300 image-profile correlation gives horizontal displacement 0 px (r=0.977), vertical −1 px (r=0.848); this is a local alignment measurement, not a bound on every pixel/house. Existing trim/shadows/geometry can naturally differ.
+
+Artifacts window-lod-{near,coarse,landmark}.png and window-lod-alignment.json. Source shader and UVs are the final implementation; the audit only masks render-detail meshes temporarily. Full-route FPS/crowd/long-soak benchmarks were not repeated for this UV/parallax correction; previous hard LOD and height cutoffs remain.
