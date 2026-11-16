@@ -1,0 +1,102 @@
+{
+  "id": "loop-clark-randolph-daley-v1",
+  "description": "Clark Street → Randolph intersection → Daley Plaza; roof and skyline checks",
+  "views": [
+    {
+      "id": "street",
+      "position": [
+        -7,
+        3.4,
+        -80
+      ],
+      "target": [
+        -8,
+        4,
+        0
+      ]
+    },
+    {
+      "id": "intersection",
+      "position": [
+        -7,
+        3.4,
+        8
+      ],
+      "target": [
+        -17,
+        4,
+        42
+      ]
+    },
+    {
+      "id": "street-return",
+      "position": [
+        -7,
+        3.4,
+        -82
+      ],
+      "target": [
+        78,
+        4,
+        -82
+      ]
+    },
+    {
+      "id": "plaza",
+      "position": [
+        78,
+        3.4,
+        -82
+      ],
+      "target": [
+        45,
+        6,
+        -18
+      ]
+    },
+    {
+      "id": "roof",
+      "position": [
+        -5,
+        70,
+        -95
+      ],
+      "target": [
+        -75,
+        54,
+        -45
+      ]
+    },
+    {
+      "id": "skyline",
+      "position": [
+        0,
+        100,
+        -230
+      ],
+      "target": [
+        0,
+        70,
+        100
+      ]
+    }
+  ],
+  "walk": [
+    [
+      -7,
+      -80
+    ],
+    [
+      -7,
+      8
+    ],
+    [
+      -7,
+      -82
+    ],
+    [
+      78,
+      -82
+    ]
+  ]
+}

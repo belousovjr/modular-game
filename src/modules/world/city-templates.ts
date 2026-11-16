@@ -4,7 +4,7 @@ import type {GeometryPart} from '../geometry/index.ts';
 const span={default:30,min:.1,max:1000};
 export const cityTemplates:readonly ObjectTemplate[]=[
   ...['stone','glass','willis','trump','marina','wrigley','tribune'].map((profile):ObjectTemplate=>({
-    id:`city/${profile}`,version:1,
+    id:`city/${profile}`,version:profile==='marina'?2:1,
     parameters:{width:span,depth:span,height:{default:55,min:3,max:600},foundation:{default:2,min:.1,max:20}},
     build({width,depth,height,foundation}) {
       const surface=profile==='willis'?'city-dark':profile==='stone'||profile==='wrigley'||profile==='tribune'||profile==='marina'?'city-stone':'city-glass';
@@ -27,7 +27,7 @@ export const cityTemplates:readonly ObjectTemplate[]=[
         silhouette=Array.from({length:8},(_,i)=>part(0,height/2,0,width*.38,height,depth*.82,surface,i*Math.PI/8));
       }
       const detail:GeometryPart[]=[];
-      if(profile==='marina')for(let y=4;y<height;y+=3.5)detail.push(part(0,y,0,width*.64,.18,depth*.64,'city-stone',Math.PI/4));
+      if(profile==='marina')for(let y=4;y<height;y+=3.5)detail.push(part(0,y,0,width*.64,.18,depth*.64,'foundation',Math.PI/4));
       else for(const side of [-1,1])detail.push(part(0,2,side*(depth/2+.04),width*.75,3.6,.12,'city-glass'));
       return {hideDistance:profile==='stone'?300:1200,levels:[
         {distance:0,parts:[...silhouette,foundationPart,...crown,...detail]},

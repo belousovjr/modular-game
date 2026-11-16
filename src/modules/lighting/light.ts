@@ -34,9 +34,9 @@ export function createLighting(scene: Scene, scope: Scope) {
     sun.diffuse = Color3.Lerp(Color3.FromHexString('#ff9455'), Color3.FromHexString('#fff4df'), smoothstep(0.05, 0.65, height));
     sun.specular.copyFrom(sun.diffuse);
     sun.intensity = 1.05 * smoothstep(0, 0.5, height);
-    ambient.intensity = 0.04 + 0.46 * daylight;
-    ambient.diffuse = Color3.Lerp(Color3.FromHexString('#6077aa'), Color3.FromHexString('#dce9ff'), daylight);
-    ambient.groundColor = Color3.Lerp(Color3.FromHexString('#101420'), Color3.FromHexString('#605d51'), daylight);
+    ambient.intensity = 0.2 + 0.45 * daylight;
+    ambient.diffuse = Color3.Lerp(Color3.FromHexString('#91a6c8'), Color3.FromHexString('#dce9ff'), daylight);
+    ambient.groundColor = Color3.Lerp(Color3.FromHexString('#252c3c'), Color3.FromHexString('#605d51'), daylight);
     settings = Object.freeze({ hour: next.hour });
     changed.notifyObservers();
   }

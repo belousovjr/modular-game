@@ -196,3 +196,63 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
     assert.equal(meshes.some(m=>(m.surface==='urban-ground'||m.surface==='terrain')&&contains(m,x,z)),false,'River exclusion became dry terrain');
   }
 });
+
+test('street entrances and roof plant are batched near details with human-scale dimensions',()=>{
+  let doors=0,roofs=0;
+  const collision=cityCollision(citySource);
+  function groundAt(x:number,z:number){
+    for(const v of collision.triangles??[]){
+      if(x<Math.min(v[0],v[3],v[6])||x>Math.max(v[0],v[3],v[6])||z<Math.min(v[2],v[5],v[8])||z>Math.max(v[2],v[5],v[8]))continue;
+      const det=(v[5]-v[8])*(v[0]-v[6])+(v[6]-v[3])*(v[2]-v[8]);
+      const u=((v[5]-v[8])*(x-v[6])+(v[6]-v[3])*(z-v[8]))/det;
+      const w=((v[8]-v[2])*(x-v[6])+(v[0]-v[6])*(z-v[8]))/det;
+      if(u>=-1e-5&&w>=-1e-5&&u+w<=1.00001)return u*v[1]+w*v[4]+(1-u-w)*v[7];
+    }
+    throw Error('No ground under entrance');
+  }
+  for(const chunk of citySource.chunks)for(const m of chunk.meshes){
+    if(m.surface==='facade')for(let i=0;i<m.positions.length;i+=12){
+      const v=m.positions;
+      assert.ok(Math.abs(Math.hypot(v[i+9]-v[i],v[i+11]-v[i+2])-2.5)<.001);
+      assert.ok(Math.abs(v[i+4]-v[i+1]-2.75)<.001);
+      const ground=groundAt((v[i]+v[i+9])/2,(v[i+2]+v[i+11])/2);
+      assert.ok(v[i+1]<=ground+.001&&v[i+1]>=ground-.2,'Floating or buried entrance');doors++;
+    }
+    if(m.surface==='roof')roofs+=m.indices.length/6;
+  }
+  assert.ok(doors>300&&roofs>300);
+  const world=cityCollision(citySource);
+  assert.ok(world.triangles);
+  // Roof plant tops are visual detail, never a new authority walking plane.
+  for(const c of citySource.chunks)for(const m of c.meshes)if(m.surface==='roof'){
+    const x=m.positions[0],y=m.positions[1],z=m.positions[2];
+    assert.equal(world.triangles.some(t=>t[0]===x&&t[1]===y&&t[2]===z),false);
+  }
+});
+
+test('fixed Chicago review walk remains dry, unobstructed and uses metre-scale actors',()=>{
+  const route=JSON.parse(readFileSync(new URL('../src/modules/world/data/downtown/review-route.json',import.meta.url),'utf8'));
+  const world=cityCollision(citySource),factory=createCharacterAuthorityFactory(world);
+  for(let segment=1;segment<route.walk.length;segment++){
+    const a=route.walk[segment-1],b=route.walk[segment],length=Math.hypot(b[0]-a[0],b[1]-a[1]);
+    for(let station=0;station<=length;station+=2){
+      const t=station/length,x=a[0]+(b[0]-a[0])*t,z=a[1]+(b[1]-a[1])*t;
+      for(const box of world.blockers)assert.ok(x<box.minX-.35||x>box.maxX+.35||z<box.minZ-.35||z>box.maxZ+.35,`Blocked review walk at ${x},${z}`);
+      const actor=factory(0,{x,z});actor.step(1);const snapshot=actor.snapshot();
+      assert.ok(snapshot.grounded&&snapshot.y>citySource.waterLevel+1);
+    }
+  }
+});
+
+test('Marina balcony slabs use textured concrete without facade windows',async()=>{
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const template=cityTemplates.find(t=>t.id==='city/marina');assert.ok(template);
+  for(const candidate of [template,toCityGrid(template)]){
+    const model=candidate.build({width:32,depth:32,height:179,foundation:2});
+    const slabs=model.levels[0].parts.filter(p=>p.size[1]<=.25);
+    assert.ok(slabs.length>40);
+    assert.ok(slabs.every(p=>p.surface==='foundation'));
+    assert.equal(model.levels[0].parts.length-model.levels[1].parts.length,slabs.length);
+    assert.ok(model.levels[1].parts.some(p=>p.surface==='city-stone'));
+  }
+});

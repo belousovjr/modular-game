@@ -8,6 +8,7 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
+import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
 import {cityCollision} from './headless.ts';
 import {geometryModule} from '../geometry/index.ts';
 import {createElement} from 'react';
@@ -66,7 +67,7 @@ export const worldModule = defineModule({
         if(distant){loadedStaticBuildings+=chunk.buildingIds.length;owner.onDispose(()=>{loadedStaticBuildings-=chunk.buildingIds.length;});}
         for(const surface of surfaces) {
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,surface.surface,surface.positions,surface.indices,owner,surface.uvs);
-          mesh.metadata={...mesh.metadata,citySurface:surface.surface,shadowCaster:distant||surface.surface==='bank'};mesh.freezeWorldMatrix();
+          mesh.metadata={...mesh.metadata,citySurface:surface.surface,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(surface.surface)};mesh.freezeWorldMatrix();
         }
       },scope,distant?{load:1200,unload:1400}:{load:192,unload:256});
     }
@@ -143,10 +144,11 @@ export const worldModule = defineModule({
         }
       });
       return progress => {
-        camera.alpha = -Math.PI / 2 + progress * Math.PI * 2;
-        camera.beta = 0.85 + Math.sin(progress * Math.PI * 2) * 0.2;
-        camera.radius = 45 + (Math.sin(progress * Math.PI * 2) + 1) * 45;
-        camera.setTarget(new Vector3(api.collision.spawn.x+Math.sin(progress*Math.PI*2)*100,8,api.collision.spawn.z+progress*450));
+        const phase=progress*(reviewRoute.views.length-1);
+        const index=Math.min(reviewRoute.views.length-2,Math.floor(phase));
+        const from=reviewRoute.views[index],to=reviewRoute.views[index+1],t=phase-index;
+        camera.setTarget(Vector3.Lerp(Vector3.FromArray(from.target),Vector3.FromArray(to.target),t));
+        camera.setPosition(Vector3.Lerp(Vector3.FromArray(from.position),Vector3.FromArray(to.position),t));
       };
     },
   },

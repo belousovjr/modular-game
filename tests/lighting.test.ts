@@ -36,7 +36,7 @@ test('lighting applies validated settings atomically and releases both lights on
     assert.ok(morningX * sun.direction.x < 0);
     api.setSettings({ hour: 0 });
     assert.equal(sun.intensity, 0);
-    assert.ok(ambient.intensity > 0 && ambient.intensity < noonAmbient / 5);
+    assert.ok(ambient.intensity >= 0.15 && ambient.intensity < noonAmbient / 3);
     assert.ok(ambient.diffuse.b > ambient.diffuse.r);
     const midnight = sun.direction.clone();
     api.setSettings({ hour: 23.999 });

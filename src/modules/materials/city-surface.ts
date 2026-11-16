@@ -56,8 +56,13 @@ export class CityFacade extends MaterialPluginBase {
           vec2 cell=vCityUV;
           vec2 uv=abs(fract(cell)-.5);
           vec2 edge=max(fwidth(cell),vec2(.002));
-          float window=(1.-smoothstep(.32-edge.x,.32+edge.x,uv.x))*(1.-smoothstep(.34-edge.y,.34+edge.y,uv.y));
-          baseColor.rgb=mix(baseColor.rgb,vec3(.16,.23,.27),window*.8);
+          float groundFloor=1.-step(1.,cell.y);
+          vec2 opening=mix(vec2(.32,.34),vec2(.40,.39),groundFloor);
+          float window=(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
+          float detail=1.-smoothstep(.04,.16,max(edge.x,edge.y));
+          float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
+          vec3 glazing=baseColor.rgb*vec3(.20,.29,.34)+vec3(.035,.055,.065);
+          baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));
         }
       `,
     }:null;

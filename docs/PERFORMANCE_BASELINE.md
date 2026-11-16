@@ -449,3 +449,28 @@ Small river polygon holes (≤64 m²) are filled before deriving land/banks/bed,
 ### Lamp decorative foot seating
 
 world/lamp v5 moves/resizes the existing foundation box to 0.5 m height centred at local Y=0.125, preserving the buried root while exposing approximately 0.25 m above sidewalk. No new parts, triangles, materials or callbacks. Existing pavement regression now checks visible foot height and burial for both native and grid-aligned templates. 107 tests/check/build pass; no separate FPS benchmark or memory soak for this box transform change.
+
+## Deliveries 13–14: fixed downtown review
+
+Route `loop-clark-randolph-daley-v1`, coordinates in world/data/downtown/review-route.json: Clark Street, Randolph junction, Daley Plaza, roofs and skyline; a return street view was added after the initial capture to avoid interpolating the ground route through Daley Center. Common named views remain directly identifiable. Conditions: headed Chromium 1280×720, ANGLE D3D12 NVIDIA GeForce RTX 3050 Laptop GPU, full selected visual/character modules, same texture assets, CSM 2×1024/96 m, no frame cap. Sequential runs under MemoryMax=2 GiB/no swap, timeout 120 s; build and Node tests finished before measurements. Static views use 1.5 s settling + 1.8 s samples; crowd uses existing runner, six measured seconds, 17 visible people.
+
+Implementation: 421 closed entrances (2.5×2.75 m doors, frame and handles), recessed roofs/parapets and 567 small roof service volumes. Near details are batched in existing facade/foundation/metal/roof surfaces at 192/256 m streaming distances and cast real shadows. 734 source buildings and 888 roads retained. No new textures/materials: 12 environment maps, 22 materials; browser texture count 16 includes character assets. Added geometry versus previous source: 46420 triangles, including parapet inner edges in building batches; city.json ~16.83 MB. Foot/pole collision widths now agree with actual geometry; roof/entrance detail is excluded from walk planes. Night ambient is intentionally artistic, 0.2 versus daytime 0.65; sun and shadow maps switch off at night.
+
+| View | Before FPS / P95 ms | Final exact-source FPS / P95 ms |
+| --- | --- | --- |
+| Clark street | 103.5 / 14.6 | 73.5 / 32.4 |
+| Randolph junction | 112.5 / 13.9 | 71.0 / 30.0 |
+| Daley Plaza | 104.4 / 16.0 | 76.7 / 32.5 |
+| Roofs | 114.0 / 14.1 | 78.5 / 27.1 |
+| Skyline | 117.9 / 13.2 | 71.7 / 31.5 |
+| 17 visible people | 94.7 / 15.4 | 54.7 / 30.5 |
+
+Significant inter-run variation prevents treating this as an isolated causal A/B. The first added-detail run produced 37–64 FPS and 31.1 FPS crowd. An immediate in-browser diagnostic with unchanged geometry produced 100.3 FPS with details, 97.2 with details disabled, 111.0 with the whole facade plugin disabled, and 96.1 after restoring it; disabling all facade shading is not an acceptable visual solution and was diagnostic only. A subsequent full run before the final threshold seating/handle/tint correction produced 114–127 FPS / P95 11.4–13.5 ms, 91.4 FPS crowd / P95 15.3 ms. The last exact-source results above are retained rather than selecting the fastest run. The current average>=30 policy passes, but stable 60 and a performance improvement are **not** established. Environmental/driver scheduling variation has not been pinned down; no unsupported root-cause claim is made.
+
+Final peak cgroup memory 802791424 bytes (~0.75 GiB), oom/oom_kill zero. Three warmed return cycles each: meshes=453, geometries=379, textures=16, skeletons=1. Earlier broader run peak ~1.35 GiB also had no OOM. This is resource stability over three cycles, not a long leak soak. Final console/shader errors=0; all non-emissive world materials audited for albedo + matching normals. CSM remains two 1024² layers, far receiver distance ~74 m inside cascade 1, 13 detail caster batches in that view; night sun intensity=0 and shadowEnabled=false.
+
+109 Node tests + check/build pass. New checks cover door dimensions and seating against actual ground triangles, roof detail exclusion from authority ground, dry obstacle-free review walk, and distinct tints after async loading shared texture assets. Existing tests retain LOD/streaming/shadow cleanup and authority boundaries. Images inspected: street, entrance, roof, night plaza and distant shadow receiver. Artifacts `review-before-*`, `review-after-*`, `review-final-*`, `review-complete-*`, `review-bisect-report.json`; only complete is the final geometry/tint source. Full reproduction and scope limits in DOWNTOWN_REVIEW.md. These results are local hardware evidence, not visual acceptance of every building or a universal FPS guarantee.
+
+### Marina balcony material correction
+
+city/marina v2 assigns existing textured foundation concrete to thin balcony slabs, preserving CityFacade windows on the tower envelope. No new parts, meshes, textures or materials; LOD distances and geometry are unchanged. 110 tests/check/build pass, including slab surfaces before/after grid snapping. Separate FPS comparison and memory soak were not repeated for this material reassignment.

@@ -77,6 +77,10 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const foundation = geometry.getSurfaceMaterial('foundation');
     assert.ok(sidewalk instanceof StandardMaterial && foundation instanceof StandardMaterial);
     assert.equal(sidewalk.diffuseTexture, foundation.diffuseTexture);
+    const door=geometry.getSurfaceMaterial('facade'),metal=geometry.getSurfaceMaterial('metal');
+    assert.ok(door instanceof StandardMaterial&&metal instanceof StandardMaterial);
+    assert.equal(door.diffuseTexture,metal.diffuseTexture);
+    assert.notDeepEqual(door.diffuseColor.asArray(),metal.diffuseColor.asArray());
     assert.equal(sidewalk.bumpTexture, foundation.bumpTexture);
     assert.ok(sidewalk.bumpTexture instanceof Texture);
     assert.equal(sidewalk.bumpTexture.gammaSpace, false);
