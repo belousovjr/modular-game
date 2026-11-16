@@ -122,3 +122,31 @@ test('walk and run use distinct authoritative speeds', () => {
     assert.ok(Math.abs(a.snapshot().z-(run?7:1.8))<1e-8);
   }
 });
+
+test('explicit facing rotates idle and strafing actors without movement, and legacy commands restore travel facing',()=>{
+  const a=createCharacterAuthority({...world,blockers:[],floors:[]});
+  for(const facing of [NaN,Infinity,-Infinity,Math.PI+.01,-Math.PI-.01,'0',undefined,false])assert.equal(a.receive({...command(),facing},'local').reason,'invalid');
+  assert.equal(a.receive({...command(),facing:0,extra:true},'local').reason,'invalid');
+  assert.equal(a.receive({...command(1,0,0),facing:Math.PI/2},'local').accepted,true);
+  assert.equal(a.snapshot().yaw,0,'receive must not change state before a tick');
+  a.step(1);assert.equal(a.snapshot().yaw,Math.PI/2);assert.equal(a.snapshot().moving,false);assert.equal(a.snapshot().x,0);assert.equal(a.snapshot().z,0);
+  assert.equal(a.receive({...command(2,0,1),facing:-Math.PI/2},'local').accepted,true);
+  a.step(2);assert.equal(a.snapshot().yaw,-Math.PI/2);assert.ok(a.snapshot().z>0);
+  assert.equal(a.receive({...command(3,0,1),facing:null},'local').accepted,true);
+  a.step(3);assert.equal(a.snapshot().yaw,0);
+  assert.equal(a.receive(command(4,1,0),'local').accepted,true);
+  a.step(4);assert.equal(a.snapshot().yaw,Math.PI/2);
+});
+
+test('facing intentions use the existing delayed protocol and reject reordered stale headings',async()=>{
+  const a=createCharacterAuthority({...world,blockers:[],floors:[]});
+  const connection=createLocalConnection(a,{latencyTicks:2});
+  const pending=connection.send({...command(1,0,0),facing:Math.PI});
+  assert.equal(a.snapshot().yaw,0);
+  connection.step(1);connection.step(2);assert.equal(a.snapshot().yaw,0);
+  connection.step(3);assert.equal((await pending).accepted,true);assert.equal(a.snapshot().yaw,Math.PI);
+  assert.equal(a.receive({...command(1,0,0),tick:3,facing:0},'local').reason,'sequence');
+  for(let tick=4;tick<=20;tick++)connection.step(tick);
+  assert.equal(a.snapshot().moving,false);assert.equal(a.snapshot().yaw,Math.PI);
+  connection.close();
+});

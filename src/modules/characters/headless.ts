@@ -1,6 +1,6 @@
 import type { CollisionWorld, CollisionBox } from '../world/headless.ts';
 
-export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean }
+export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null }
 export interface CharacterSnapshot {
   readonly tick: number; readonly id: string; readonly ownerId: string;
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
@@ -70,7 +70,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
-  let lastSequence = 0, acceptedTick = -1, expiry = startTick, dx = 0, dz = 0, run = false;
+  let lastSequence = 0, acceptedTick = -1, expiry = startTick, dx = 0, dz = 0, run = false, facing:number|null = null;
   function support(px: number,pz: number) {
     let height=ground(px,pz);
     for(const b of query(cells,px,pz)) if(px>b.minX-RADIUS && px<b.maxX+RADIUS && pz>b.minZ-RADIUS && pz<b.maxZ+RADIUS && b.maxY<=y+.3 && touches(b,px,pz)) height=Math.max(height,b.maxY);
@@ -95,14 +95,14 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
   return {
     receive(input: unknown, ownerId: string): Receipt {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== 8 || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean') return { accepted: false, reason: 'invalid' };
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== ('facing' in input ? 9 : 8) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
       if (ownerId !== 'local') return { accepted: false, reason: 'owner' };
       if (input.sequence <= lastSequence) return { accepted: false, reason: 'sequence' };
       if (input.tick > tick || tick-input.tick > 30) return { accepted: false, reason: 'stale' };
       if (acceptedTick === tick) return { accepted: false, reason: 'rate' };
       lastSequence = input.sequence; acceptedTick = tick; expiry = tick + 12;
       const length = Math.max(1, Math.hypot(input.x,input.z));
-      dx = input.x / length; dz = input.z / length; run = input.run; jump = input.jump && grounded;
+      dx = input.x / length; dz = input.z / length; run = input.run; jump = input.jump && grounded; facing='facing' in input && typeof input.facing==='number'?input.facing:null;
       return { accepted: true, reason: 'accepted' };
     },
     step(nextTick: number) {
@@ -124,7 +124,8 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
           if (grounded) { const floor=support(x,z); if(y-floor>.3) grounded=false; else y=floor; }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
-        if (moving) yaw = Math.atan2(dx,dz);
+        if (facing!==null) yaw=facing;
+        else if (moving) yaw = Math.atan2(dx,dz);
       }
       if (!grounded) {
         airborneTicks++;

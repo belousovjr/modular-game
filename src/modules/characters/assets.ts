@@ -13,10 +13,12 @@ import type { Scope } from '../../core/modules.ts';
 import { createScope } from '../../core/scope.ts';
 import type { geometryModule } from '../geometry/index.ts';
 import type { CharacterSnapshot } from './headless.ts';
+import {createCharacterShadowSource} from './shadow-proxy.ts';
 import manifest from '../../../public/models/human/manifest.json' with { type: 'json' };
 
 export interface AssetStatus { readonly state: 'loading' | 'ready' | 'error'; readonly error: string | null }
 export function createCharacterAssets(scene: Scene, owner: Scope) {
+  const createShadowProxy=createCharacterShadowSource(scene,owner);
   const controller = new AbortController();
   let stopped = false, source: AssetContainer | null = null;
   let status: AssetStatus = Object.freeze({ state:'loading', error:null });
@@ -45,7 +47,7 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
     return null;
   });
   const reportError=(error:unknown)=>{if(!stopped){status=Object.freeze({state:'error',error:error instanceof Error?error.message:String(error)});for(const listener of listeners)listener();}};
-  return { ready, reportError, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { ready, reportError, createShadowProxy, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 
 export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope) {
@@ -53,10 +55,12 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   const root = new TransformNode('character/local-player',scene);
   root.metadata = { assetStatus:'loading' };
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null; root.dispose(); });
+  const shadow=assets.createShadowProxy(root,scope);
+  geometry.registerMeshes([shadow],scope);
   const loading=createScope();scope.onDispose(loading.dispose);
   if (!assets.getContainer()) {
     const capsule=MeshBuilder.CreateCapsule('character/loading',{height:1.8,radius:.28,tessellation:8},scene);
-    loading.onDispose(()=>capsule.dispose());capsule.parent=root;capsule.position.y=.9;
+    loading.onDispose(()=>capsule.dispose());capsule.metadata={shadowCaster:false};capsule.parent=root;capsule.position.y=.9;
     const material=new StandardMaterial('character-loading',scene);loading.onDispose(()=>material.dispose());material.diffuseColor=Color3.FromHexString('#7e929f');capsule.material=material;
     geometry.registerMeshes([capsule],loading);
   }
@@ -67,7 +71,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       entries=container.instantiateModelsToScene(name=>`human/${name}`,false,{doNotInstantiate:true});
       const meshes=entries.rootNodes.flatMap(node=>node.getChildMeshes(false)).filter((mesh):mesh is Mesh=>mesh instanceof Mesh && mesh.getTotalVertices()>0);
       const minimum=new Vector3(Infinity,Infinity,Infinity),maximum=new Vector3(-Infinity,-Infinity,-Infinity);
-      for(const mesh of meshes) { mesh.computeWorldMatrix(true); const b=mesh.getBoundingInfo().boundingBox;minimum.minimizeInPlace(b.minimumWorld);maximum.maximizeInPlace(b.maximumWorld);mesh.isPickable=false; }
+      for(const mesh of meshes) { mesh.computeWorldMatrix(true); const b=mesh.getBoundingInfo().boundingBox;minimum.minimizeInPlace(b.minimumWorld);maximum.maximizeInPlace(b.maximumWorld);mesh.isPickable=false;mesh.metadata={...mesh.metadata,shadowCaster:false}; }
       const height=maximum.y-minimum.y;
       if (!Number.isFinite(height) || height<.1) throw new Error('GLB: invalid human bounds');
       const visual=new TransformNode('human-visual',scene);scope.onDispose(()=>visual.dispose());

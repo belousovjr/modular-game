@@ -474,3 +474,35 @@ Final peak cgroup memory 802791424 bytes (~0.75 GiB), oom/oom_kill zero. Three w
 ### Marina balcony material correction
 
 city/marina v2 assigns existing textured foundation concrete to thin balcony slabs, preserving CityFacade windows on the tower envelope. No new parts, meshes, textures or materials; LOD distances and geometry are unchanged. 110 tests/check/build pass, including slab surfaces before/after grid snapping. Separate FPS comparison and memory soak were not repeated for this material reassignment.
+
+## RPG mouse control
+
+Player control maps both mouse buttons to native ArcRotate rotation. LMB is freelook (held movement basis remains fixed); RMB sends an optional validated facing intention through the existing tick-based character protocol. Authority turns the idle/strafing actor and renderer retains existing yaw smoothing; no direct mesh/state mutation, extra render loop, geometry, textures or lights. Pointer release/cancel clears mouse state independently of held WASD; blur clears all input.
+
+112 tests/check/build pass. Bounded hardware Chromium test dispatches real CDP left/right drags and verifies camera orbit/pitch, unchanged idle heading/position under LMB, RMB yaw alignment, release/blur recovery, stable travel heading during LMB+W and continued walking after releasing the mouse while W remains held. Details are in artifacts/rpg-mouse-report.json. No separate FPS benchmark or long memory soak was run for this input/protocol change.
+
+## Simplified character shadows
+
+Characters now register one hidden-from-camera capsule proxy per avatar (80 triangles, no skinning) instead of casting from the 5970-triangle animated mesh. Main visible model and receiving world shadows remain. The capsule uses native CSM, so direction/occlusion/terrain/jump height are preserved; limb/pose detail is intentionally absent. One shared source geometry and one technical StandardMaterial serve all avatars, no texture or reflection/decal render target. Layer mask zero hides proxies from main cameras, explicit shadow render lists still draw them.
+
+113 tests/check/build pass. NullEngine checks 17 shared proxies, caster list excluding model, movement with parent, budget and cleanup. Bounded RTX 3050/D3D12 Chromium 1280×720 visual test compares native skinned vs capsule shadow, checks no proxy in main active meshes, actual Space jump and 17 visible people. Cleanup leaves one proxy/one skeleton; console/shader errors zero. Initial comparison under a building shadow: 118.9 FPS skinned / 127.8 capsule, crowd 87.6 FPS (P95 16.5 ms). It did not expose the contour, so a second run uses the UI's noon light: 90.8 / 87.7 FPS, crowd 70.5 FPS (P95 23.6 ms). Near contours were inspected in the second run. Variation prevents claiming a measured FPS improvement, despite the much smaller shadow-pass geometry and removal of skeleton-driven map invalidation from these casters. MemoryMax=2 GiB/no swap/timeouts retained; no long soak performed.
+
+Local artifacts: character-shadow-{skinned,capsule,jump}.png and character-shadow-report.json (noon run). Shadows intentionally look like an elongated rounded body rather than a detailed person. Other world shadow settings/cascades are unchanged.
+
+RPG direction correction: while RMB is held, nonzero WASD uses facing=atan2(world-space movement intention); standing still uses the camera's forward facing. Camera orientation remains independent of body yaw, so A/D/S turn the body toward the requested camera-relative travel direction. 113 tests/check/build pass. The bounded Chromium regression now holds RMB while sending each W/A/S/D key and checks actor yaw, positive movement along the requested direction, and unchanged camera alpha; all pass, console errors zero. LMB/release/blur checks also pass. No separate FPS benchmark for this scalar input correction.
+
+## Door removal at user request
+
+Removed generated door panels, frames and handles, and restored continuous plinth quads; no feature flag or dormant portal generator retained. Roof plant, parapets, glazing, streets and authoritative building footprints remain. The source loses 9262 triangles and facade/foundation detail batches; no FPS improvement is claimed without a new measurement. The downtown regression now requires absence of door panel/frame surfaces and retains roof/authority checks. 113 tests/check/build pass; browser/FPS/long-soak checks were not repeated for this geometry deletion. Earlier entrance screenshots are historical, not the current intended appearance.
+
+### Character shadow proportions
+
+Compared three proxy transforms at the same noon view under the existing 2 GiB/no-swap GPU harness: original 0.48×1.65×0.48 m, balanced 0.72×1.05×0.576 m, compact 0.84×0.85×0.64 m. Selected balanced: 36% less height, 50% more width, modest depth increase. It uses the same shared 80-triangle source with per-clone scaling (1.5,1.05/1.65,1.2), centre Y=0.525, bottom at avatar feet. No new draw calls/materials/textures and no global shadow-setting changes. Native sunlight/jump/receiver behaviour remains.
+
+RTX 3050/D3D12 Chromium 1280×720, three-second settled samples: old 118.3 FPS/P95 13.2 ms, balanced 119.7/13.7 ms, compact 119.8/13.6 ms, errors zero. The tiny difference does not establish a speed improvement. Images inspected side by side; artifacts shadow-shape-{old,balanced,compact}.png, shadow-shape-report.json. Candidate transforms were applied in-browser before committing the identical selected transform to the helper. 113 tests/check/build pass; regression now checks actual world extents and foot contact in addition to shared geometry/caster lists/cleanup. Full-route FPS and long soak not repeated for this transform-only adjustment.
+
+## Rooftop enclosure face correction
+
+Rooftop plant caps had reversed triangle winding: their Babylon normals faced downward, so back-face culling hid the top from above. Corrected winding, retaining ordinary opaque one-sided materials. Wall winding was already outward; walls now use existing textured foundation concrete instead of the very dark tinted metal. Cap uses existing roof texture/normal. No added faces, materials or textures; 567 enclosures retain 5670 total triangles across walls/caps. Door panels/frames remain absent.
+
+114 tests/check/build pass. Regression computes actual Babylon normals for every prepared cap and wall, requiring upward tops and outward sides; it allows only 1.25 m rooftop walls in foundation batches. Bounded RTX 3050/D3D12 Chromium 1280×720, 2 GiB/no swap/timeouts: inspected roof from above and opposite direction; cap visible, concrete walls readable, console/shader errors zero. Artifacts roof-faces-{above,reverse}.png and roof-faces-report.json. Separate FPS benchmark/full route/long soak not repeated for this face/material correction.

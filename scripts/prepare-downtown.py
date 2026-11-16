@@ -315,47 +315,18 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
              for ring in [wall.exterior,*wall.interiors]:
               for (ax,az),(bx1,bz1) in zip(list(ring.coords),list(ring.coords)[1:]):
                 quad((ax,by+h,az),(ax,by+h-SIZE,az),(bx1,by+h-SIZE,bz1),(bx1,by+h,bz1),[(-3,-3)]*4)
-            # One street-facing closed entrance, contained within the authoritative footprint.
-            edges=list(zip(list(p.exterior.coords),list(p.exterior.coords)[1:]))
-            eligible=[(a,b) for a,b in edges if math.dist(a,b)>=8 and road.distance(LineString([a,b]).interpolate(.5,normalized=True))<16]
-            entrance=None
-            if eligible:
-                a,b=min(eligible,key=lambda e:road.distance(LineString(e).interpolate(.5,normalized=True)))
-                length=math.dist(a,b);dx,dz=(b[0]-a[0])/length,(b[1]-a[1])/length;nx,nz=-dz,dx
-                cx,cz=(a[0]+b[0])/2,(a[1]+b[1])/2;ey=min(terrain(cx+dx*u,cz+dz*u) for u in [-1.5,0,1.5])-.015625
-                # Skip steep foundations rather than leaving a floating doorway.
-                if abs(ey-(by+SIZE))<.5:
-                    entrance=(a,b,cx,cz,dx,dz,nx,nz,ey)
-                    def point(u,y,depth):return (cx+dx*u-nx*depth,y,cz+dz*u-nz*depth)
-                    footprint=Polygon([(point(u,ey,d)[0],point(u,ey,d)[2]) for u,d in [(-1.5,.03125),(1.5,.03125),(1.5,.1875),(-1.5,.1875)]])
-                    if not p.buffer(.00001).covers(footprint):entrance=None
-                    else:
-                        def portal(surface,u0,u1,y0,y1,depth):detail_quad(tile_chunk,surface,point(u0,y0,depth),point(u0,y1,depth),point(u1,y1,depth),point(u1,y0,depth))
-                        portal('facade',-1.25,1.25,ey,ey+2.75,.1875)
-                        portal('foundation',-1.5,-1.25,ey,ey+3,.03125);portal('foundation',1.25,1.5,ey,ey+3,.03125)
-                        portal('foundation',-1.25,1.25,ey+2.75,ey+3,.03125)
-                        portal('metal',-.0625,.0625,ey,ey+2.75,.15625)
-                        for side in [-1,1]:portal('metal',side*.25-.0625,side*.25+.0625,ey+1,ey+1.5,.125)
-                        for side in [-1,1]:
-                            u=side*1.25
-                            detail_quad(tile_chunk,'foundation',point(u,ey,.03125),point(u,ey+2.75,.03125),point(u,ey+2.75,.1875),point(u,ey,.1875))
-                        detail_quad(tile_chunk,'foundation',point(-1.25,ey+2.75,.1875),point(-1.25,ey+2.75,.03125),point(1.25,ey+2.75,.03125),point(1.25,ey+2.75,.1875))
             # Low rooftop plant is streamed with nearby street details, not the distant skyline.
             plant=p.centroid;pw,pd=3.5,2.5
             if h>15 and p.covers(box(plant.x-pw/2,plant.y-pd/2,plant.x+pw/2,plant.y+pd/2).buffer(.5)):
                 x0,x1=plant.x-pw/2,plant.x+pw/2;z0,z1=plant.y-pd/2,plant.y+pd/2;y0=by+h-SIZE;y1=y0+1.25
                 for a,b in [((x0,z0),(x0,z1)),((x0,z1),(x1,z1)),((x1,z1),(x1,z0)),((x1,z0),(x0,z0))]:
-                    detail_quad(tile_chunk,'metal',(a[0],y0,a[1]),(a[0],y1,a[1]),(b[0],y1,b[1]),(b[0],y0,b[1]))
-                detail_quad(tile_chunk,'roof',(x0,y1,z0),(x0,y1,z1),(x1,y1,z1),(x1,y1,z0))
+                    detail_quad(tile_chunk,'foundation',(a[0],y0,a[1]),(a[0],y1,a[1]),(b[0],y1,b[1]),(b[0],y0,b[1]))
+                detail_quad(tile_chunk,'roof',(x0,y1,z0),(x1,y1,z0),(x1,y1,z1),(x0,y1,z1))
             # Plinth and roof edge project only 10 cm beyond the recessed wall; footprint is unchanged.
             for ring in [p.exterior,*p.interiors]:
              for (ax,az),(bx1,bz1) in zip(list(ring.coords),list(ring.coords)[1:]):
                 low=min(terrain(ax,az),terrain(bx1,bz1))-1
-                if entrance and ((ax,az),(bx1,bz1))==(entrance[0],entrance[1]):
-                    _,_,cx,cz,dx,dz,_,_,_=entrance
-                    left=(cx-dx*1.25,cz-dz*1.25);right=(cx+dx*1.25,cz+dz*1.25)
-                    for a,b in [((ax,az),left),(right,(bx1,bz1))]:quad((a[0],low,a[1]),(a[0],bottom,a[1]),(b[0],bottom,b[1]),(b[0],low,b[1]),[(-1,-1)]*4)
-                else:quad((ax,low,az),(ax,bottom,az),(bx1,bottom,bz1),(bx1,low,bz1),[(-1,-1)]*4)
+                quad((ax,low,az),(ax,bottom,az),(bx1,bottom,bz1),(bx1,low,bz1),[(-1,-1)]*4)
                 quad((ax,top,az),(ax,by+h,az),(bx1,by+h,bz1),(bx1,top,bz1),[(-3,-3)]*4)
             # Trim the recessed wall edge at both ends; keep the belt attached and inside the footprint.
             if rows>=5:

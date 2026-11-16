@@ -197,30 +197,14 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
   }
 });
 
-test('street entrances and roof plant are batched near details with human-scale dimensions',()=>{
-  let doors=0,roofs=0;
-  const collision=cityCollision(citySource);
-  function groundAt(x:number,z:number){
-    for(const v of collision.triangles??[]){
-      if(x<Math.min(v[0],v[3],v[6])||x>Math.max(v[0],v[3],v[6])||z<Math.min(v[2],v[5],v[8])||z>Math.max(v[2],v[5],v[8]))continue;
-      const det=(v[5]-v[8])*(v[0]-v[6])+(v[6]-v[3])*(v[2]-v[8]);
-      const u=((v[5]-v[8])*(x-v[6])+(v[6]-v[3])*(z-v[8]))/det;
-      const w=((v[8]-v[2])*(x-v[6])+(v[0]-v[6])*(z-v[8]))/det;
-      if(u>=-1e-5&&w>=-1e-5&&u+w<=1.00001)return u*v[1]+w*v[4]+(1-u-w)*v[7];
-    }
-    throw Error('No ground under entrance');
-  }
+test('doors are omitted while batched roof plant remains',()=>{
+  let roofs=0;
   for(const chunk of citySource.chunks)for(const m of chunk.meshes){
-    if(m.surface==='facade')for(let i=0;i<m.positions.length;i+=12){
-      const v=m.positions;
-      assert.ok(Math.abs(Math.hypot(v[i+9]-v[i],v[i+11]-v[i+2])-2.5)<.001);
-      assert.ok(Math.abs(v[i+4]-v[i+1]-2.75)<.001);
-      const ground=groundAt((v[i]+v[i+9])/2,(v[i+2]+v[i+11])/2);
-      assert.ok(v[i+1]<=ground+.001&&v[i+1]>=ground-.2,'Floating or buried entrance');doors++;
-    }
+    assert.notEqual(m.surface,'facade','Door panels must not be generated');
+    if(m.surface==='foundation')for(let i=0;i<m.positions.length;i+=12)assert.ok(Math.abs(m.positions[i+4]-m.positions[i+1]-1.25)<.001,'Only roof plant walls, not door frames, may remain');
     if(m.surface==='roof')roofs+=m.indices.length/6;
   }
-  assert.ok(doors>300&&roofs>300);
+  assert.ok(roofs>300);
   const world=cityCollision(citySource);
   assert.ok(world.triangles);
   // Roof plant tops are visual detail, never a new authority walking plane.
@@ -255,4 +239,30 @@ test('Marina balcony slabs use textured concrete without facade windows',async()
     assert.equal(model.levels[0].parts.length-model.levels[1].parts.length,slabs.length);
     assert.ok(model.levels[1].parts.some(p=>p.surface==='city-stone'));
   }
+});
+
+
+test('roof plant caps face upward and walls face outward with textured concrete',async()=>{
+  const {VertexData}=await import('@babylonjs/core/Meshes/mesh.vertexData.js');
+  let count=0;
+  for(const chunk of citySource.chunks){
+    const caps=chunk.meshes.find(m=>m.surface==='roof');
+    if(!caps)continue;
+    const normals:number[]=[];VertexData.ComputeNormals([...caps.positions],[...caps.indices],normals);
+    assert.ok(normals.filter((_,i)=>i%3===1).every(y=>y>.99),'Roof cap is back-facing from above');
+    const walls=chunk.meshes.find(m=>m.surface==='foundation');assert.ok(walls);
+    const wallNormals:number[]=[];VertexData.ComputeNormals([...walls.positions],[...walls.indices],wallNormals);
+    for(let i=0;i<walls.positions.length;i+=12){
+      const v=walls.positions,x=(v[i]+v[i+9])/2,z=(v[i+2]+v[i+11])/2,top=v[i+4];
+      let outward=false;
+      for(let j=0;j<caps.positions.length;j+=12){
+        const roof=caps.positions,cx=(roof[j]+roof[j+6])/2,cz=(roof[j+2]+roof[j+8])/2;
+        if(Math.abs(top-roof[j+1])<.001&&Math.abs(x-cx)<=1.751&&Math.abs(z-cz)<=1.251){
+          outward=wallNormals[i]*(x-cx)+wallNormals[i+2]*(z-cz)>0;break;
+        }
+      }
+      assert.ok(outward,'Roof plant wall has inward normal');count++;
+    }
+  }
+  assert.ok(count>1000);
 });
