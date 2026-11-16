@@ -31,12 +31,12 @@ export const worldStreamingModule = defineModule({
       for (const section of sections.values()) {
         const b = section.bounds;
         const distance = point ? Math.hypot(Math.max(b.minX - point.x, 0, point.x - b.maxX), Math.max(b.minZ - point.z, 0, point.z - b.maxZ)) : Infinity;
-        if (section.owner && distance > 288) {
+        if (section.owner && distance > 256) {
           const owner = section.owner;
           section.owner = undefined; loaded--; unloads++;
           owner.dispose();
         }
-        if (!section.owner && distance <= 224) pending.push({ section, distance });
+        if (!section.owner && distance <= 192) pending.push({ section, distance });
       }
       pending.sort((a, b) => a.distance - b.distance);
       // shortcut: two synchronous sections per frame; revisit with measured stalls or external assets.

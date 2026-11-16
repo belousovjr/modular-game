@@ -32,10 +32,12 @@ test('streaming bounds work across negative coordinates, budget loads, hysteresi
   let active = 0;
   for (let i = 0; i < 4; i++) f.streaming.registerSection(`near/${i}`, { minX: -10, maxX: 10, minZ: -10, maxZ: 10 }, owner => { active++; owner.onDispose(() => active--); }, f.owner);
   f.streaming.registerSection('far', { minX: 990, maxX: 1010, minZ: -10, maxZ: 10 }, owner => { active++; owner.onDispose(() => active--); }, f.owner);
+  f.move({ x: -203, y: 0, z: 0 }); f.frame(); assert.equal(active, 0);
+  f.move({ x: -202, y: 0, z: 0 });
   f.frame(); assert.equal(active, 2);
   f.frame(); assert.equal(active, 4);
-  f.move({ x: -298, y: 0, z: 0 }); f.frame(); assert.equal(active, 4);
-  f.move({ x: -299, y: 0, z: 0 }); f.frame(); assert.equal(active, 0);
+  f.move({ x: -266, y: 0, z: 0 }); f.frame(); assert.equal(active, 4);
+  f.move({ x: -267, y: 0, z: 0 }); f.frame(); assert.equal(active, 0);
   f.move({ x: 1000, y: 0, z: 0 }); f.frame(); assert.equal(active, 1);
   f.move(null); f.frame(); assert.equal(active, 0);
   f.move({ x: 0, y: 0, z: 0 }); f.frame(); f.frame(); assert.equal(active, 4);
