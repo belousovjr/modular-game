@@ -556,3 +556,25 @@ Native CSM now uses three 1024² layers, maxZ 1400 m, lambda .98 (camera minZ .1
 Bounded RTX 3050 Laptop/D3D12 Chromium 1280×720, 2 GiB/no swap/120 s: street 112.2 FPS, intersection 117.5, return 119.6, plaza 114.4, roof 99.3, skyline 110.7. P95 respectively 14.0/12.7/13.1/13.3/18.8/13.7 ms. 17 visible characters: 84.8 FPS/P95 16.8 ms. Short samples, not an isolated before/after speed claim. Type checking overlapped briefly with the run; a controlled performance comparison requires an idle host.
 
 GPU assertions confirmed three layers, coverage at 74/315/1150 m, per-layer bias [.12,.12,2.015] at the high view, back-face mode only in layer 3, near-only exclusion only there, and caster bounds out to 1393 m. Inspected near and distant screenshots; roof striping removed. Comparing 1150 m shadows enabled/disabled gives 135427 pixels darker by more than 30 summed RGB values (excluding UI edges), confirming rendered shadows, not only matrix coverage. Three routes return identically to 262 meshes/205 geometries/16 textures/1 skeleton; cgroup peak 1487507456 bytes, no OOM or console errors. Artifacts review-third-cascade-*.png/report.json. Long soak not performed; this does not prove absence of every leak.
+
+## Street details and closed entrances (delivery 15)
+
+584 ordinary buildings receive one closed 2.5×2.75 m door panel with metal trim/reveals/handles, only in the existing 24/32 m near-detail layer. Blocked approaches are removed after all building footprints are known. Opaque panels cover the facade/plinth behind them; doors do not open and no interiors or new gameplay access are added. The panels/trim add 15184 triangles across the entire pinned city, not simultaneously visible. Existing facade/metal textures, baked AO and normal maps are reused.
+
+Daley Plaza gets a separate paved patch cut out of ground (with closed raised edges), four benches, four rectangular planting beds and six bollards, all at its edges. Near furniture totals 576 triangles (4×48 + 4×60 + 6×24); parts reduce aggressively and hide at 60–85 m. Static collision bounds/outlines match full near geometry and persist after visual unload. Street props and skyline use separate stream-section keys so a landmark in the same tile no longer promotes lamp/furniture loading to 1200/1400 m. No additional material or texture assets.
+
+119 tests/check/build pass. Tests cover one near-only door per suitable building, clear approaches, roof winding, paving seams, no overlapping furniture parts, render/collision bounds, unobstructed central axis and review walk. Hardware browser review inspected front/oblique entrances, bench/planter/bollard from player height, plaza above/far, daylight/night. GPU audit confirms furniture receives and casts real shadows and disappears at distance; no browser errors. This is an authored seating-area adaptation, not a full architectural reconstruction of Daley Plaza or the Picasso sculpture.
+
+Final headed Chromium 1280×720, ANGLE D3D12 NVIDIA RTX 3050 Laptop, MemoryMax=2 GiB/no swap/120 s, measured after build/tests completed:
+
+| View | FPS | P95 ms |
+| --- | --- | --- |
+| Clark street | 103.3 | 17.0 |
+| Randolph junction | 125.5 | 12.7 |
+| Street return | 128.5 | 11.9 |
+| Daley Plaza | 124.0 | 12.3 |
+| Roofs | 132.6 | 11.7 |
+| Skyline | 129.3 | 11.6 |
+| 17 visible people | 82.6 | 16.9 |
+
+Three return cycles give exactly 289 meshes/208 geometries/16 textures/1 skeleton each time. Cgroup peak 853487616 bytes, OOM=0; this reports the bounded browser test, not all GPU/driver memory. An earlier review run (before portal filtering/foot-geometry fixes) varied from 70.9 FPS on the first street view to 129.7 on roofs, crowd 89.4; its peak was 1511538688 bytes, also OOM=0. These short runs do not establish an isolated speed gain or guaranteed 100 FPS; loading/compilation/environment variation and frame spikes remain. Artifacts review-street-details-final-*.png/report.json (earlier review-street-details-*). No long soak or visual inspection of every generated door was performed.

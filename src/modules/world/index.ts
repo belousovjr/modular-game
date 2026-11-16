@@ -34,7 +34,8 @@ export const worldModule = defineModule({
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
     for (const placement of placements) {
       const [x, , z] = placement.position;
-      const key = placement.templateId === 'world/terrain' ? placement.key : `${Math.floor(x / 128)}/${Math.floor(z / 128)}`;
+      const streetProp = placement.templateId === 'world/lamp' || placement.templateId === 'city/signal' || placement.key.startsWith('authored/daley/');
+      const key = placement.templateId === 'world/terrain' ? placement.key : `${Math.floor(x / 128)}/${Math.floor(z / 128)}/${streetProp?'street':'skyline'}`;
       // Include full surfaces and facade overhangs, so long tiles survive near a section boundary.
       const halfX = placement.templateId === 'city/signal' ? (placement.parameters.armLength ?? 4) + .5 : (placement.parameters.width ?? 2) / 2 + 4;
       const halfZ = placement.templateId === 'city/signal' ? (placement.parameters.armLength ?? 4) + .5 : (placement.parameters.depth ?? 2) / 2 + 4;
@@ -54,10 +55,10 @@ export const worldModule = defineModule({
           const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial);
           object.root.position.copyFromFloats(...placement.position);
           object.root.rotation.copyFromFloats(...placement.rotation);
-          const list = placement.templateId === 'city/signal' || placement.templateId === 'world/lamp' ? lamps : buildings;
+          const list = placement.templateId === 'city/signal' || placement.templateId === 'world/lamp' ? lamps : placement.key.startsWith('authored/daley/') ? undefined : buildings;
           if (list) { list.add(object); owner.onDispose(() => list.delete(object)); }
         }
-      }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp')?{load:1200,unload:1400}:{load:192,unload:256});
+      }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp'&&!p.key.startsWith('authored/daley/'))?{load:1200,unload:1400}:{load:192,unload:256});
     }
     const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number}>();
     const heights=new Map(city.placements.map(p=>[p.key,p.parameters.height]));

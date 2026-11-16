@@ -136,7 +136,10 @@ pavement=road.buffer(3.25,join_style='round',quad_segs=3).intersection(bounds).s
 sidewalk=pavement.difference(road).difference(water.difference(road.buffer(3.3)))
 land=bounds.difference(water)
 parks=unary_union([polygon(refs) for t,refs in ways.values() if t.get('leisure') in ['park','garden'] or t.get('landuse')=='grass']).intersection(land).difference(pavement)
-ground=land.difference(pavement).difference(parks)
+# Small authored plaza patch follows the same ground facets; no coplanar overlay.
+plaza=box(3,-76,89,-42).intersection(land).difference(pavement)
+parks=parks.difference(plaza)
+ground=land.difference(pavement).difference(parks).difference(plaza)
 curb=road.buffer(.25,join_style='round',quad_segs=3).difference(road).intersection(sidewalk)
 sidewalk=sidewalk.difference(curb)
 assert road.intersection(sidewalk).area<1e-5 and curb.intersection(sidewalk).area<1e-5,'Overlapping street surfaces'
@@ -171,7 +174,7 @@ def mesh(surface,triangles,fn,ix,iz):
 for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
  for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
     tile=box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE).intersection(bounds)
-    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('terrain',parks,terrain,32),('road',road,lambda x,z:terrain(x,z),32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
+    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('terrain',parks,terrain,32),('road',road,lambda x,z:terrain(x,z),32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('sidewalk',plaza,lambda x,z:terrain(x,z)+SIZE,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
         patch=shape.intersection(tile)
         if patch.area<1e-7:continue
         triangles=[]
@@ -218,9 +221,10 @@ def edge_mesh(shape,surface,top,bottom):
         counts[surface]+=len(data['indices'])//3
 edge_mesh(curb,'curb',lambda x,z:terrain(x,z)+SIZE,lambda x,z:terrain(x,z))
 edge_mesh(pavement.difference(water.difference(road.buffer(3.3))),'sidewalk',lambda x,z:terrain(x,z)+SIZE,terrain)
+edge_mesh(plaza,'sidewalk',lambda x,z:terrain(x,z)+SIZE,terrain)
 edge_mesh(water,'bank',terrain,bed)
 edge_mesh(road.intersection(water.buffer(2)),'bank',lambda x,z:terrain(x,z),lambda x,z:terrain(x,z)-.7)
-buildable=land.difference(pavement.buffer(.25))
+buildable=land.difference(pavement.buffer(.25)).difference(plaza)
 buildable_cover=prep(buildable.buffer(.03))
 print('Tiled surfaces prepared',dict(counts),flush=True)
 # Buildings retain original footprints. No invented buildings in road/river gaps.
@@ -347,6 +351,35 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
              for ring in [wall.exterior,*wall.interiors]:
               for (ax,az),(bx1,bz1) in zip(list(ring.coords),list(ring.coords)[1:]):
                 quad((ax,by+h,az),(ax,by+h-SIZE,az),(bx1,by+h-SIZE,bz1),(bx1,by+h,bz1),[(-3,-3)]*4)
+            # One closed portal per street-facing building, batched with its near facade.
+            edges=[(a,b) for a,b in zip(list(p.exterior.coords),list(p.exterior.coords)[1:]) if math.dist(a,b)>=8]
+            if edges:
+                a,b=min(edges,key=lambda e:road.distance(LineString(e).interpolate(.5,normalized=True)))
+                length=math.dist(a,b);tx,tz=(b[0]-a[0])/length,(b[1]-a[1])/length;nx,nz=-tz,tx
+                cx,cz=(a[0]+b[0])/2,(a[1]+b[1])/2
+                front=Point(cx+nx*.75,cz+nz*.75)
+                if road.distance(front)<22 or plaza.covers(front):
+                    base=min(terrain(front.x+tx*u,front.y+tz*u) for u in [-1.5,1.5])+(SIZE if sidewalk.covers(front) or plaza.covers(front) else 0)
+                    def portal_point(u,y,d):return (cx+tx*u+nx*d,base+y,cz+tz*u+nz*d)
+                    def portal_face(surface,u0,y0,u1,y1,d):
+                        detail_quad(tile_chunk,surface,portal_point(u0,y0,d),portal_point(u0,y1,d),portal_point(u1,y1,d),portal_point(u1,y0,d))
+                    portal_face('facade',-1.25,0,1.25,2.75,.03125)
+                    for u0,y0,u1,y1 in [(-1.5,0,-1.25,3),(1.25,0,1.5,3),(-1.25,2.75,1.25,3)]:
+                        portal_face('metal',u0,y0,u1,y1,.125)
+                    for u in [-1.25,1.25]:
+                        points=[portal_point(u,0,.03125),portal_point(u,2.75,.03125),portal_point(u,2.75,.125),portal_point(u,0,.125)]
+                        if u<0:points.reverse()
+                        detail_quad(tile_chunk,'metal',*points)
+                    detail_quad(tile_chunk,'metal',portal_point(-1.25,2.75,.03125),portal_point(-1.25,2.75,.125),portal_point(1.25,2.75,.125),portal_point(1.25,2.75,.03125))
+                    # Outer reveals join the recessed facade instead of floating in front of it.
+                    for u in [-1.5,1.5]:
+                        points=[portal_point(u,0,-.25),portal_point(u,3,-.25),portal_point(u,3,.125),portal_point(u,0,.125)]
+                        if u>0:points.reverse()
+                        detail_quad(tile_chunk,'metal',*points)
+                    detail_quad(tile_chunk,'metal',portal_point(-1.5,3,.125),portal_point(-1.5,3,-.25),portal_point(1.5,3,-.25),portal_point(1.5,3,.125))
+                    portal_face('metal',-.0625,0,.0625,2.75,.0625)
+                    # Handles are one small continuous bar per leaf, not separate animated hardware.
+                    for u in [-.25,.25]:portal_face('metal',u-.03125,1,u+.03125,1.5,.09375)
             # Low rooftop plant is streamed with nearby street details, not the distant skyline.
             plant=p.centroid;pw,pd=3.5,2.5
             if h>15 and p.covers(box(plant.x-pw/2,plant.y-pd/2,plant.x+pw/2,plant.y+pd/2).buffer(.5)):
@@ -381,6 +414,19 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
         placements.append({'key':oid,'templateId':f'city/{profile}','parameters':{'width':round(width,3),'depth':round(depth,3),'height':round(max(6,min(600,h)),2),'foundation':math.ceil(max(2,by-min(terrain(x,z) for x,z in list(fit.exterior.coords))+1)/SIZE)*SIZE},'position':[round(bx,3),round(by,4),round(bz,3)],'rotation':[0,round(yaw,8),0]})
         colliders.append({'id':oid,'minX':min(x for x,z in outline),'maxX':max(x for x,z in outline),'minZ':min(z for x,z in outline),'maxZ':max(z for x,z in outline),'minY':by-2,'maxY':by+h,'outline':outline})
         building_data.append({'id':oid,'name':t.get('name',''),'profile':profile,'height':h,'heightSource':method,'sourceFootprint':[[round(x,3),round(z,3)] for x,z in list(p.exterior.coords)]})
+# Neighbouring footprints are known only after placement; omit portals with blocked approaches.
+closed_portals=0
+for ch in chunks.values():
+    for detail in ch.get('details',[]):
+        panel=next((m for m in detail['meshes'] if m['surface']=='facade'),None)
+        if panel is None:continue
+        v=panel['positions'];cx,cz=(v[0]+v[9])/2,(v[2]+v[11])/2;tx,tz=(v[9]-v[0])/2.5,(v[11]-v[2])/2.5;nx,nz=-tz,tx
+        approach=Polygon([(cx+tx*u+nx*d,cz+tz*u+nz*d) for u,d in [(-1.75,.15),(1.75,.15),(1.75,2),(-1.75,2)]])
+        own=detail['id'].split('/detail/')[1]
+        if any(b['id']!=own and approach.intersects(Polygon(b['outline'])) for b in colliders):
+            detail['meshes']=[m for m in detail['meshes'] if m['surface'] not in ['facade','metal']]
+        else:closed_portals+=1
+print('Unobstructed closed portals',closed_portals,flush=True)
 print('Building placement complete',len(colliders),flush=True)
 # Treat a physical junction as one layout, not one independent layout per OSM way split.
 width_by_way={r['id'].split('/')[1][1:]:r['width'] for r in roads}
@@ -539,6 +585,24 @@ for r in roads:
             lamps.append({'key':f"osm/lamp/{r['id']}/{distance}/{side}",'templateId':'world/lamp','parameters':{},'position':[round(lx,3),round(support_height(lx,lz),4),round(lz,3)],'rotation':[0,snap(math.atan2(side*dx,side*dz),ANGLE),0]})
 placements.extend(lamps)
 placements.extend(signals)
+# A restrained authored seating area: keep the centre and the pinned walking route open.
+plaza_props=[]
+for x,z in [(12,-51),(76,-51),(12,-68),(76,-68)]:
+    plaza_props.append(('planter',x,z,5,2.5,0))
+for x,z in [(20,-51),(68,-51),(20,-68),(68,-68)]:
+    plaza_props.append(('bench',x,z,3,.75,0 if z==-51 else math.pi))
+for x in [9,12,15,73,76,79]:plaza_props.append(('bollard',x,-73,.5,.5,0))
+used=[]
+for kind,x,z,w,d,yaw in plaza_props:
+    footprint=box(x-w/2,z-d/2,x+w/2,z+d/2)
+    assert plaza.buffer(.01).covers(footprint.buffer(.5)), 'Plaza prop outside paving'
+    assert all(footprint.distance(Polygon(b['outline']))>2 for b in colliders), 'Plaza prop touches building'
+    assert all(footprint.distance(Point(p['position'][0],p['position'][2]))>1 for p in lamps+signals), 'Plaza prop touches infrastructure'
+    assert all(footprint.distance(other)>1 for other in used), 'Overlapping plaza props'
+    used.append(footprint)
+    y=min(terrain(px,pz)+SIZE for px,pz in footprint.exterior.coords)
+    placements.append({'key':f'authored/daley/{kind}/{x}/{z}','templateId':f'city/{kind}','parameters':{},'position':[x,round(y,4),z],'rotation':[0,yaw,0]})
+
 # A dry, wide, unobstructed road segment supports the existing 4x4 crowd test.
 candidates=[]
 for r in roads:

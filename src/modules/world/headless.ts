@@ -47,7 +47,15 @@ export function cityCollision(city:CitySource):CollisionWorld {
       triangles.push([mesh.positions[a],mesh.positions[a+1],mesh.positions[a+2],mesh.positions[b],mesh.positions[b+1],mesh.positions[b+2],mesh.positions[c],mesh.positions[c+1],mesh.positions[c+2]]);
     }
   }
-  const blockers=[...city.colliders,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
+  const furniture=city.placements.flatMap(p=>{
+    const size=p.templateId==='city/bench'?[3,.75,1.25]:p.templateId==='city/planter'?[5,2.5,.75]:p.templateId==='city/bollard'?[.5,.5,1]:null;
+    if(!size)return [];
+    const [x,y,z]=p.position, [width,depth,height]=size;
+    const c=Math.cos(p.rotation[1]),s=Math.sin(p.rotation[1]);
+    const outline=[[-width/2,-depth/2],[width/2,-depth/2],[width/2,depth/2],[-width/2,depth/2]].map(([u,v])=>[x+u*c+v*s,z-u*s+v*c]);
+    return [{id:p.key,minX:Math.min(...outline.map(v=>v[0])),maxX:Math.max(...outline.map(v=>v[0])),minZ:Math.min(...outline.map(v=>v[1])),maxZ:Math.max(...outline.map(v=>v[1])),minY:y,maxY:y+height,outline}];
+  });
+  const blockers=[...city.colliders,...furniture,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
     const [x,y,z]=p.position;
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];

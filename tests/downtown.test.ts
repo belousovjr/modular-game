@@ -198,14 +198,36 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
   }
 });
 
-test('doors are omitted while batched roof plant remains',()=>{
-  let roofs=0;
+test('closed street doors are near-only batched detail while roof plant remains',()=>{
+  let roofs=0,doors=0;
   for(const chunk of citySource.chunks)for(const m of [...chunk.meshes,...(chunk.details??[]).flatMap(d=>d.meshes)]){
-    assert.notEqual(m.surface,'facade','Door panels must not be generated');
+    if(m.surface==='facade'){
+      assert.ok((chunk.details??[]).some(d=>d.meshes.includes(m)),'Doors must not enter distant skyline');
+      assert.equal(m.indices.length,6,'Only one closed door panel per building');
+      assert.ok(Math.abs(m.positions[4]-m.positions[1]-2.75)<.001);
+      assert.ok(Math.abs(Math.hypot(m.positions[9]-m.positions[0],m.positions[11]-m.positions[2])-2.5)<.001);
+      doors++;
+    }
     if(m.surface==='foundation')for(let i=0;i<m.positions.length;i+=12)assert.ok(Math.abs(m.positions[i+4]-m.positions[i+1]-1.25)<.001,'Only roof plant walls, not door frames, may remain');
     if(m.surface==='roof')roofs+=m.indices.length/6;
   }
-  assert.ok(roofs>300);
+  assert.ok(roofs>300);assert.ok(doors>400&&doors<citySource.colliders.length);
+  const inside=(x:number,z:number,ring:readonly (readonly number[])[])=>{
+    let hit=false;
+    for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+      const a=ring[i],b=ring[j];
+      if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])hit=!hit;
+    }
+    return hit;
+  };
+  for(const chunk of citySource.chunks)for(const detail of chunk.details??[])for(const panel of detail.meshes.filter(m=>m.surface==='facade')){
+    const v=panel.positions,tx=(v[9]-v[0])/2.5,tz=(v[11]-v[2])/2.5;
+    for(const distance of [.25,.75,1.5])for(const side of [-1.4,0,1.4]){
+      const x=(v[0]+v[9])/2-tz*distance+tx*side,z=(v[2]+v[11])/2+tx*distance+tz*side;
+      for(const other of citySource.colliders)assert.equal(inside(x,z,other.outline),false,'Door approach enters a building');
+    }
+  }
+
   const world=cityCollision(citySource);
   assert.ok(world.triangles);
   // Roof plant tops are visual detail, never a new authority walking plane.
@@ -344,4 +366,47 @@ test('coarse and detailed facades share window pitch and phase on matching walls
     }
   }
   assert.ok(checked>500);
+});
+
+
+test('Daley street furniture stays sparse, matches permanent blockers and simplifies with distance',async()=>{
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const props=citySource.placements.filter(p=>p.key.startsWith('authored/daley/'));
+  assert.equal(props.length,14);
+  const world=cityCollision(citySource);
+  for(const prop of props){
+    const template=cityTemplates.find(t=>t.id===prop.templateId);assert.ok(template);
+    const model=toCityGrid(template).build({});
+    assert.ok(model.hideDistance<=85);
+    assert.ok(model.levels.at(-1)!.parts.length<model.levels[0].parts.length);
+    assert.ok(model.levels[0].parts.length<=5);
+    const blocker=world.blockers.find(b=>b.id===prop.key);assert.ok(blocker);
+    const [x,y,z]=prop.position;
+    assert.ok(y>citySource.waterLevel+1);
+    for(const part of model.levels[0].parts){
+      const [u,v,w]=part.position??[0,0,0],c=Math.cos(prop.rotation[1]),s=Math.sin(prop.rotation[1]);
+      for(const sx of [-1,1])for(const sz of [-1,1]){
+        const px=x+(u+sx*part.size[0]/2)*c+(w+sz*part.size[2]/2)*s;
+        const pz=z-(u+sx*part.size[0]/2)*s+(w+sz*part.size[2]/2)*c;
+        assert.ok(px>=blocker.minX-.001&&px<=blocker.maxX+.001&&pz>=blocker.minZ-.001&&pz<=blocker.maxZ+.001);
+      }
+      assert.ok(y+v-part.size[1]/2>=blocker.minY-.001&&y+v+part.size[1]/2<=blocker.maxY+.001);
+      assert.ok(['foundation','metal','terrain'].includes(part.surface));
+    }
+    const parts=model.levels[0].parts;
+    for(let a=0;a<parts.length;a++)for(let b=0;b<a;b++){
+      const pa=parts[a],pb=parts[b];
+      const overlap=pa.size.map((size,axis)=>Math.min((pa.position?.[axis]??0)+size/2,(pb.position?.[axis]??0)+pb.size[axis]/2)-Math.max((pa.position?.[axis]??0)-size/2,(pb.position?.[axis]??0)-pb.size[axis]/2));
+      assert.ok(overlap.some(v=>v<=.00001),'Furniture parts intersect instead of joining at their faces');
+    }
+    for(const other of world.blockers)if(other.id!==blocker.id){
+      assert.ok(blocker.maxX+.5<=other.minX||other.maxX+.5<=blocker.minX||blocker.maxZ+.5<=other.minZ||other.maxZ+.5<=blocker.minZ,'Furniture overlaps another obstacle');
+    }
+  }
+  // A wide central pedestrian axis remains open; authority sees these obstacles before rendering.
+  const factory=createCharacterAuthorityFactory(world);
+  for(let z=-74;z<=-44;z+=2){
+    const actor=factory(0,{x:44,z});actor.step(1);
+    assert.ok(actor.snapshot().grounded&&Math.abs(actor.snapshot().x-44)<.01);
+  }
 });

@@ -41,6 +41,25 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       ]};
     },
   })),
+  {id:'city/bench',version:1,parameters:{},build:()=>{
+    const seat:GeometryPart={surface:'foundation',size:[3,.25,.75],position:[0,.625,0]};
+    const legs:GeometryPart[]=[-1,1].map(x=>({surface:'foundation',size:[.5,.5,.5],position:[x,.25,0]}));
+    const back:GeometryPart={surface:'metal',size:[3,.5,.25],position:[0,1,-.25]};
+    return {hideDistance:85,levels:[{distance:0,parts:[seat,...legs,back]},{distance:22,parts:[seat,...legs]},{distance:50,parts:[{surface:'foundation',size:[3,.75,.75],position:[0,.375,0]}]}]};
+  }},
+  {id:'city/planter',version:1,parameters:{},build:()=>{
+    const walls:GeometryPart[]=[-1,1].flatMap(side=>[
+      {surface:'foundation',size:[5,.75,.25],position:[0,.375,side*1.125]},
+      {surface:'foundation',size:[.25,.75,2],position:[side*2.375,.375,0]},
+    ]);
+    const fill:GeometryPart={surface:'terrain',size:[4.5,.5,2],position:[0,.25,0]};
+    return {hideDistance:85,levels:[{distance:0,parts:[...walls,fill]},{distance:35,parts:[{surface:'foundation',size:[5,.75,2.5],position:[0,.375,0]}]}]};
+  }},
+  {id:'city/bollard',version:1,parameters:{},build:()=>{
+    const post:GeometryPart={surface:'metal',size:[.25,.75,.25],position:[0,.625,0]};
+    const base:GeometryPart={surface:'foundation',size:[.5,.25,.5],position:[0,.125,0]};
+    return {hideDistance:60,levels:[{distance:0,parts:[post,base]},{distance:20,parts:[{surface:'metal',size:[.25,1,.25],position:[0,.5,0]}]}]};
+  }},
   {id:'city/signal',version:2,parameters:{armLength:{default:4,min:2,max:12}},build:({armLength})=>{
     const pole:GeometryPart={surface:'metal',size:[.25,6.75,.25],position:[0,3.375,0]};
     const arm:GeometryPart={surface:'metal',size:[armLength,.25,.25],position:[-armLength/2,6.625,0]};
