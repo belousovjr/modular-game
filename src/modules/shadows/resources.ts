@@ -15,7 +15,9 @@ const CASCADE_MAP_SIZE = 1024;
 // WebGL1/NullEngine fallback keeps a single bounded map.
 const HALF_SIZE = 80;
 const CASTER_RADIUS = 128;
-const SHADOW_DISTANCE = 96;
+const SHADOW_DISTANCE = 1400;
+const FAR_CASTER_RADIUS = 1600;
+const NORMAL_BIAS = .12;
 const SHADOW_MIN_Z = 0.1;
 const SHADOW_MAX_Z = 400;
 
@@ -33,9 +35,9 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
   const cascaded = generator instanceof CascadedShadowGenerator ? generator : undefined;
   let cascadePlanesReady = false;
   if (cascaded) {
-    cascaded.numCascades = 2;
+    cascaded.numCascades = 3;
     cascaded.shadowMaxZ = SHADOW_DISTANCE;
-    cascaded.lambda = 0.8;
+    cascaded.lambda = 0.98;
     cascaded.stabilizeCascades = true;
     cascaded.depthClamp = true;
     cascaded.autoCalcDepthBounds = false;
@@ -43,9 +45,19 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
     cascaded.freezeShadowCastersBoundingInfo = true;
   }
   const planes = Frustum.GetPlanes(Matrix.Identity());
-  generator.customAllowRendering = subMesh => !cascadePlanesReady || subMesh.getMesh().isInFrustum(planes);
+  const casterRadius = cascaded ? FAR_CASTER_RADIUS : CASTER_RADIUS;
+  let currentLayer = 0;
+  generator.customAllowRendering = subMesh => !cascadePlanesReady || ((!cascaded || currentLayer < 2 || subMesh.getMesh().metadata?.shadowNearOnly !== true) && subMesh.getMesh().isInFrustum(planes));
   const shadowTarget = generator.getShadowMap();
   const mapObserver = shadowTarget?.onBeforeRenderObservable.add(layer => {
+    currentLayer = layer;
+    // Back faces avoid roof acne at the coarse far-cascade texel size.
+    generator.forceBackFacesOnly = !!cascaded && layer === 2;
+    generator.normalBias = NORMAL_BIAS;
+    if (cascaded && layer === 2) {
+      const min = cascaded.getCascadeMinExtents(layer), max = cascaded.getCascadeMaxExtents(layer);
+      if (min && max) generator.normalBias = Math.max(NORMAL_BIAS, Math.max(max.x - min.x, max.y - min.y) / CASCADE_MAP_SIZE * .75);
+    }
     const transform = cascaded ? cascaded.getCascadeTransformMatrix(layer) : generator.getTransformMatrix();
     if (!transform) return;
     Frustum.GetPlanesToRef(transform, planes);
@@ -55,11 +67,13 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
     cascadePlanesReady = true;
   });
   if (mapObserver) scope.onDispose(() => shadowTarget?.onBeforeRenderObservable.remove(mapObserver));
+  const afterMapObserver = shadowTarget?.onAfterRenderObservable.add(() => { generator.normalBias = NORMAL_BIAS; generator.forceBackFacesOnly = false; });
+  if (afterMapObserver) scope.onDispose(() => shadowTarget?.onAfterRenderObservable.remove(afterMapObserver));
   generator.usePercentageCloserFiltering = true;
   generator.filteringQuality = cascaded ? ShadowGenerator.QUALITY_MEDIUM : ShadowGenerator.QUALITY_LOW;
   generator.bias = 0.0005;
-  generator.normalBias = 0.12;
-  // The legacy map keeps its back-face bias; CSM uses the chicago-test settings.
+  generator.normalBias = NORMAL_BIAS;
+  // Only the far CSM layer uses back-face rendering.
   generator.forceBackFacesOnly = false;
   generator.frustumEdgeFalloff = 0.1;
   sun.autoUpdateExtends = false;
@@ -134,7 +148,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
         const min = box.minimumWorld;
         const max = box.maximumWorld;
         const distance = Math.hypot(Math.max(min.x - origin.x, 0, origin.x - max.x), Math.max(min.y - origin.y, 0, origin.y - max.y), Math.max(min.z - origin.z, 0, origin.z - max.z));
-        if (distance <= CASTER_RADIUS) casters.push(mesh);
+        if (distance <= casterRadius) casters.push(mesh);
       }
     }
     count = casters.length;
@@ -165,6 +179,6 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
   scope.onDispose(() => scene.onBeforeRenderObservable.remove(observer));
   return { getStats() {
     if (stopped) throw new Error('Тени остановлены');
-    return { enabled, casters: count, mapSize: cascaded ? CASCADE_MAP_SIZE : MAP_SIZE, halfSize: cascaded ? null : HALF_SIZE, cascades: cascaded ? 2 : 1, revision, casterRadius: CASTER_RADIUS };
+    return { enabled, casters: count, mapSize: cascaded ? CASCADE_MAP_SIZE : MAP_SIZE, halfSize: cascaded ? null : HALF_SIZE, cascades: cascaded ? 3 : 1, revision, casterRadius };
   } };
 }

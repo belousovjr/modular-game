@@ -18,7 +18,7 @@ test('character shadows share a low-poly capsule, follow the avatar and stay out
   const roots=Array.from({length:17},()=>new TransformNode('avatar',scene));
   const proxies=roots.map(root=>create(root,views));
   for(const proxy of proxies){
-    assert.equal(proxy.layerMask,0);assert.equal(proxy.isPickable,false);assert.equal(proxy.isEnabled(),true);
+    assert.equal(proxy.layerMask,0);assert.equal(proxy.metadata.shadowNearOnly,true);assert.equal(proxy.isPickable,false);assert.equal(proxy.isEnabled(),true);
     assert.equal(proxy.geometry,proxies[0].geometry);assert.equal(proxy.material,proxies[0].material);
     assert.ok(proxy.getTotalIndices()/3<=128);assert.equal(proxy.skeleton,null);
     proxy.computeWorldMatrix(true);

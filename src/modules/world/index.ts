@@ -90,7 +90,7 @@ export const worldModule = defineModule({
         for(const surface of detail.meshes){
           const material=surface.surface.replace(/-detail$/,'');
           const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
-          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowCaster:true};mesh.freezeWorldMatrix();
+          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};mesh.freezeWorldMatrix();
           view.meshes.push(mesh);
           for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
         }

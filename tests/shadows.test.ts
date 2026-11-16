@@ -133,6 +133,7 @@ test('light-space culling rejects side misses but keeps occluders beyond depth p
   t.after(() => { owner.dispose(); scene.dispose(); engine.dispose(); });
   new FreeCamera('camera', Vector3.Zero(), scene);
   const mesh = MeshBuilder.CreateBox('probe', { size: 1 }, scene);
+  mesh.metadata={shadowNearOnly:true};
   owner.onDispose(() => mesh.dispose());
   const light = createLighting(scene, owner).getSunLight();
   createShadows(scene, light, () => [mesh], () => ({ x: 0, y: 0, z: 0 }), owner);
@@ -140,7 +141,11 @@ test('light-space culling rejects side misses but keeps occluders beyond depth p
   const generator = light.getShadowGenerator();
   assert.ok(generator instanceof ShadowGenerator);
   const map = generator.getShadowMap(); assert.ok(map);
+  generator.normalBias=3;
   map.onBeforeRenderObservable.notifyObservers(0);
+  assert.equal(generator.normalBias,.12);
+  map.onAfterRenderObservable.notifyObservers(0);
+  assert.equal(generator.normalBias,.12);
   const subMesh = mesh.subMeshes[0]; assert.ok(subMesh);
   assert.equal(generator.customAllowRendering(subMesh), true);
   mesh.position.copyFrom(light.position).addInPlace(light.direction.scale(1000));

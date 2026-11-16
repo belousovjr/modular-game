@@ -20,7 +20,7 @@ export function createCharacterShadowSource(scene:Scene,owner:Scope){
     // Explicit shadow render lists ignore layer masks; ordinary cameras never draw this caster.
     proxy.layerMask=0;
     proxy.isPickable=false;
-    proxy.metadata={characterShadow:true};
+    proxy.metadata={characterShadow:true,shadowNearOnly:true};
     return proxy;
   };
 }
