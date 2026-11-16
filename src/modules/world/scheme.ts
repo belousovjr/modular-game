@@ -1,20 +1,22 @@
-import type { WorldScheme, WorldPlacement } from '../world-generation/index.ts';
+import type { WorldScheme, WorldPlacement, WorldRegion } from '../world-generation/index.ts';
+import data from './data/river-north.json' with { type: 'json' };
 
 export const scheme: WorldScheme = {
-  id: 'first-district', seed: 2026,
-  bounds: { minX: -550, maxX: 550, minZ: -550, maxZ: 550 },
+  id: 'river-north', seed: 2026, bounds: data.bounds,
   baseHeight: 0.3, slopeX: 0.015, lampSpacing: 20,
-  streets: Array.from({ length: 11 }, (_, index) => (index - 5) * 96).flatMap(coordinate => {
-    const avenue = coordinate === -96 || coordinate === 288;
-    const width = avenue ? 24 : 6;
-    const sidewalk = avenue ? 4 : 2;
-    return [
-      { id: `east-west-${coordinate}`, axis: 'x', coordinate, width, sidewalk },
-      { id: `north-south-${coordinate}`, axis: 'z', coordinate, width, sidewalk },
-    ];
+  streets: data.streets.map(street => {
+    if (street.axis !== 'x' && street.axis !== 'z') throw new Error('Некорректная ось улицы River North');
+    return { ...street, axis: street.axis };
   }),
   reserved: [{ minX: 6, maxX: 14, minZ: 6, maxZ: 14 }],
 };
+
+export const regions: readonly WorldRegion[] = [
+  { id: 'river-north/south-west', bounds: { ...scheme.bounds, maxX: 0, maxZ: 0 } },
+  { id: 'river-north/south-east', bounds: { ...scheme.bounds, minX: 0, maxZ: 0 } },
+  { id: 'river-north/north-west', bounds: { ...scheme.bounds, maxX: 0, minZ: 0 } },
+  { id: 'river-north/north-east', bounds: { ...scheme.bounds, minX: 0, minZ: 0 } },
+];
 
 export const insertions: readonly WorldPlacement[] = [{
   key: 'first-district/author-plaza', templateId: 'world/plaza', parameters: {},

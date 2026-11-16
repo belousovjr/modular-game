@@ -84,6 +84,9 @@ test('world places persistent generated content, keeps fallback styling without 
     const diagnostics: Readonly<Record<string, number>>[] = [];
     const update = scenario.setup({ onDispose: cleanup => cleanups.push(cleanup) }, values => diagnostics.push(values));
     assert.ok(api);
+    assert.equal(api.regions.length, 4);
+    assert.equal(new Set(api.regions.map(region => region.id)).size, 4);
+    assert.equal(api.regions.reduce((sum, region) => sum + region.objectCount, 0) + 1, api.objectCount);
     assert.ok(api.visibility().buildings >= 1000);
     for (let step = 0; step <= 24; step++) {
       update(step / 24);

@@ -1,0 +1,190 @@
+{
+  "source": {
+    "repository": "https://github.com/Chicago/osd-street-center-line",
+    "commit": "ee45d118cec6760619568a5675278454d6324cf1",
+    "file": "data/Transportation.geojson",
+    "license": "MIT",
+    "origin": {
+      "longitude": -87.6333,
+      "latitude": 41.896
+    },
+    "metersPerUnit": 1
+  },
+  "bounds": {
+    "minX": -480,
+    "maxX": 608,
+    "minZ": -512,
+    "maxZ": 624
+  },
+  "streets": [
+    {
+      "id": "sedgwick",
+      "axis": "z",
+      "coordinate": -447,
+      "width": 6,
+      "sidewalk": 2,
+      "start": -220
+    },
+    {
+      "id": "orleans",
+      "axis": "z",
+      "coordinate": -320,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "franklin",
+      "axis": "z",
+      "coordinate": -196,
+      "width": 6,
+      "sidewalk": 2,
+      "end": 418
+    },
+    {
+      "id": "wells",
+      "axis": "z",
+      "coordinate": -73,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "la-salle",
+      "axis": "z",
+      "coordinate": 50,
+      "width": 24,
+      "sidewalk": 4
+    },
+    {
+      "id": "clark",
+      "axis": "z",
+      "coordinate": 174,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "dearborn",
+      "axis": "z",
+      "coordinate": 295,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "state",
+      "axis": "z",
+      "coordinate": 425,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "wabash",
+      "axis": "z",
+      "coordinate": 538,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "grand",
+      "axis": "x",
+      "coordinate": -489,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "ohio",
+      "axis": "x",
+      "coordinate": -400,
+      "width": 24,
+      "sidewalk": 4
+    },
+    {
+      "id": "ontario",
+      "axis": "x",
+      "coordinate": -311,
+      "width": 24,
+      "sidewalk": 4
+    },
+    {
+      "id": "erie",
+      "axis": "x",
+      "coordinate": -220,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "huron",
+      "axis": "x",
+      "coordinate": -134,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "superior",
+      "axis": "x",
+      "coordinate": -44,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "chicago",
+      "axis": "x",
+      "coordinate": 68,
+      "width": 24,
+      "sidewalk": 4
+    },
+    {
+      "id": "institute",
+      "axis": "x",
+      "coordinate": 155,
+      "width": 6,
+      "sidewalk": 2,
+      "start": -320,
+      "end": -73
+    },
+    {
+      "id": "pearson",
+      "axis": "x",
+      "coordinate": 171,
+      "width": 6,
+      "sidewalk": 2,
+      "start": 295
+    },
+    {
+      "id": "chestnut",
+      "axis": "x",
+      "coordinate": 241,
+      "width": 6,
+      "sidewalk": 2
+    },
+    {
+      "id": "locust",
+      "axis": "x",
+      "coordinate": 328,
+      "width": 6,
+      "sidewalk": 2,
+      "end": -73
+    },
+    {
+      "id": "delaware",
+      "axis": "x",
+      "coordinate": 354,
+      "width": 6,
+      "sidewalk": 2,
+      "start": 50
+    },
+    {
+      "id": "walton",
+      "axis": "x",
+      "coordinate": 418,
+      "width": 6,
+      "sidewalk": 2,
+      "start": -320
+    },
+    {
+      "id": "oak",
+      "axis": "x",
+      "coordinate": 505,
+      "width": 6,
+      "sidewalk": 2
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateWorld, type WorldScheme, type WorldPlacement, type Rectangle } from '../src/modules/world-generation/headless.ts';
+import { generateWorld, generateWorldRegions, type WorldScheme, type WorldPlacement, type Rectangle } from '../src/modules/world-generation/headless.ts';
 
 const scheme: WorldScheme = {
   id: 'test-district', seed: 12345, bounds: { minX: -20, maxX: 20, minZ: -20, maxZ: 20 },
@@ -111,4 +111,53 @@ test('invalid roads, height data, seeds and excessive generation budgets fail be
   ];
   for (const input of invalid) assert.throws(() => generateWorld(input));
   assert.doesNotThrow(() => generateWorld({ ...scheme, seed: 0 }));
+});
+
+test('finite streets form T junctions without extending roads, sidewalks or lamps beyond their endpoints', () => {
+  const input: WorldScheme = { ...scheme, bounds: { minX: -40, maxX: 40, minZ: -40, maxZ: 40 }, streets: [
+    { ...scheme.streets[0], start: -40, end: 0 }, scheme.streets[1],
+  ] };
+  const result = generateWorld(input);
+  const surfaces = result.objects.filter(o => ['world/road', 'world/sidewalk', 'world/curb'].includes(o.templateId));
+  let roadArea = 0;
+  for (const o of surfaces) {
+    const b = footprint(o);
+    if (o.templateId === 'world/road') roadArea += (b.maxX - b.minX) * (b.maxZ - b.minZ);
+    assert.ok(b.maxX <= 5 || b.minZ >= 5 || b.maxZ <= -5);
+  }
+  assert.ok(Math.abs(roadArea - (40 * 6 + 80 * 6 - 3 * 6)) < 1e-9);
+  for (const o of result.objects.filter(o => o.key.includes('/lamp/horizontal/'))) assert.ok(o.position[0] < 0);
+  for (const start of [NaN, Infinity, 1, -41]) assert.throws(() => generateWorld({ ...input, streets: [{ ...input.streets[0], start }] }));
+  assert.throws(() => generateWorld({ ...input, streets: [{ ...input.streets[0], end: 41 }] }));
+});
+
+
+test('regional generation preserves road area, seam heights, seeded buildings, keys and author exclusions', () => {
+  const input = { ...scheme, reserved: [{ minX: 6, maxX: 12, minZ: 6, maxZ: 12 }] };
+  const regions = [
+    { id: 'west', bounds: { ...input.bounds, maxX: 0 } },
+    { id: 'east', bounds: { ...input.bounds, minX: 0 } },
+  ];
+  const before = JSON.stringify({ input, regions });
+  const a = generateWorldRegions(input, regions);
+  assert.deepEqual(a, generateWorldRegions(input, regions));
+  assert.equal(JSON.stringify({ input, regions }), before);
+  const whole = generateWorld(input);
+  const objects = a.flatMap(r => r.objects);
+  assert.deepEqual(objects.filter(o => o.templateId === 'world/building').sort((a,b) => a.key.localeCompare(b.key)),
+    whole.objects.filter(o => o.templateId === 'world/building').sort((a,b) => a.key.localeCompare(b.key)));
+  assert.equal(new Set(objects.map(o => o.key)).size, objects.length);
+  for (const type of ['terrain', 'road', 'curb', 'sidewalk']) {
+    const area = (os: readonly WorldPlacement[]) => os.filter(o => o.templateId === `world/${type}`).reduce((sum, o) => sum + o.parameters.width * Math.cos(o.rotation[2]) * o.parameters.depth, 0);
+    assert.ok(Math.abs(area(objects) - area(whole.objects)) < 1e-9);
+  }
+  for (let i = 0; i < a.length; i++) for (const o of a[i].objects.filter(o => o.templateId !== 'world/lamp' && o.templateId !== 'world/building')) {
+    const b = footprint(o);
+    assert.ok(b.minX >= a[i].bounds.minX - 1e-9 && b.maxX <= a[i].bounds.maxX + 1e-9);
+    const elevation = o.templateId === 'world/terrain' ? -0.05 : o.templateId === 'world/road' ? 0 : o.templateId === 'world/curb' ? 0.2 : 0.18;
+    for (const x of [b.minX, b.maxX]) assert.ok(Math.abs(o.position[1] + (x - o.position[0]) * input.slopeX - (input.baseHeight + x * input.slopeX + elevation)) < 1e-9);
+    if (o.templateId !== 'world/terrain') assert.equal(overlap(b, input.reserved[0]), false);
+  }
+  for (const bad of [[], [regions[0]], [regions[0], regions[0]], [{ ...regions[0], id: '' }, regions[1]],
+    [regions[0], { ...regions[1], bounds: { ...regions[1].bounds, minX: -1 } }]]) assert.throws(() => generateWorldRegions(input, bad));
 });

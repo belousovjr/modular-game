@@ -6,23 +6,23 @@ import { objectRenderingModule } from '../object-rendering/index.ts';
 import { worldStreamingModule, type SectionBounds } from '../world-streaming/index.ts';
 import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
-import { scheme, insertions } from './scheme.ts';
+import { scheme, regions, insertions } from './scheme.ts';
 
 export const worldModule = defineModule({
   id: 'world', title: 'Первый квартал', category: 'Окружение',
   requires: { generator: worldGenerationModule, templates: objectTemplatesModule, rendering: objectRenderingModule, streaming: worldStreamingModule },
   setup({ deps, scope }) {
-    const generated = deps.generator.generate(scheme);
+    const generated = deps.generator.generateRegions(scheme, regions);
     for (const template of worldTemplates) deps.templates.register(template, scope);
     const buildings = new Set<ReturnType<typeof deps.rendering.createObject>>();
     const lamps: typeof buildings = new Set();
-    const placements = [...generated.objects, ...insertions];
+    const placements = [...generated.flatMap(region => region.objects), ...insertions];
     const buildingCount = placements.filter(p => p.templateId === 'world/building').length;
     const lampCount = placements.filter(p => p.templateId === 'world/lamp').length;
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
     for (const placement of placements) {
       const [x, , z] = placement.position;
-      const key = placement.templateId === 'world/terrain' ? 'terrain' : `${Math.floor(x / 128)}/${Math.floor(z / 128)}`;
+      const key = placement.templateId === 'world/terrain' ? placement.key : `${Math.floor(x / 128)}/${Math.floor(z / 128)}`;
       // Include full surfaces and facade overhangs, so long tiles survive near a section boundary.
       const halfX = (placement.parameters.width ?? 2) / 2 + 4;
       const halfZ = (placement.parameters.depth ?? 2) / 2 + 4;
@@ -47,7 +47,8 @@ export const worldModule = defineModule({
         }
       }, scope);
     }
-    return { bounds: generated.bounds, objectCount: generated.objects.length + insertions.length,
+    return { bounds: scheme.bounds, objectCount: placements.length,
+      regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount: region.objects.length })),
       streaming: deps.streaming.getStats,
       visibility() {
         const lods = [0, 0, 0];

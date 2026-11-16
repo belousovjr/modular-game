@@ -5,8 +5,10 @@ export interface Street {
   readonly coordinate: number;
   readonly width: number;
   readonly sidewalk: number;
+  readonly start?: number;
+  readonly end?: number;
 }
-// shortcut: straight full-span streets on one height plane, extend when a chosen map needs curves or terrain.
+// shortcut: axis-aligned street segments on one height plane; extend for diagonal streets or terrain.
 export interface WorldScheme {
   readonly id: string;
   readonly seed: number;
@@ -45,8 +47,8 @@ function overlaps(a: Rectangle, b: Rectangle) {
 function ribbon(street: Street, bounds: Rectangle, margin: number): Rectangle {
   const half = street.width / 2 + margin;
   return street.axis === 'x'
-    ? { ...bounds, minZ: street.coordinate - half, maxZ: street.coordinate + half }
-    : { ...bounds, minX: street.coordinate - half, maxX: street.coordinate + half };
+    ? { minX: street.start ?? bounds.minX, maxX: street.end ?? bounds.maxX, minZ: street.coordinate - half, maxZ: street.coordinate + half }
+    : { minZ: street.start ?? bounds.minZ, maxZ: street.end ?? bounds.maxZ, minX: street.coordinate - half, maxX: street.coordinate + half };
 }
 function contains(rect: Rectangle, x: number, z: number) {
   return x > rect.minX && x < rect.maxX && z > rect.minZ && z < rect.maxZ;
@@ -61,10 +63,11 @@ function validate(scheme: WorldScheme) {
   for (const street of scheme.streets) {
     if (!street.id.trim() || ids.has(street.id) || !['x', 'z'].includes(street.axis) ||
         ![street.coordinate, street.width, street.sidewalk].every(Number.isFinite) || street.width < 2 || street.sidewalk < 1) throw new Error('Некорректная улица');
+    if ([street.start, street.end].some(value => value !== undefined && !Number.isFinite(value))) throw new Error('Некорректная длина улицы');
     ids.add(street.id);
     const area = ribbon(street, bounds, street.sidewalk);
-    if (area.minX < bounds.minX || area.maxX > bounds.maxX || area.minZ < bounds.minZ || area.maxZ > bounds.maxZ) throw new Error('Улица выходит за границы участка');
-    const length = street.axis === 'x' ? bounds.maxX - bounds.minX : bounds.maxZ - bounds.minZ;
+    if (!validRectangle(area) || area.minX < bounds.minX || area.maxX > bounds.maxX || area.minZ < bounds.minZ || area.maxZ > bounds.maxZ) throw new Error('Улица выходит за границы участка');
+    const length = street.axis === 'x' ? area.maxX - area.minX : area.maxZ - area.minZ;
     lampCandidates += 2 * Math.ceil(length / scheme.lampSpacing);
   }
   if (lampCandidates > MAX_OBJECTS) throw new Error('Превышен бюджет генерации фонарей');
@@ -105,6 +108,9 @@ export function generateWorld(scheme: WorldScheme): GeneratedWorld {
   const zs = new Set([bounds.minZ, bounds.maxZ]);
   for (const street of scheme.streets) {
     const cuts = street.axis === 'x' ? zs : xs;
+    const along = street.axis === 'x' ? xs : zs;
+    if (street.start !== undefined) along.add(street.start);
+    if (street.end !== undefined) along.add(street.end);
     for (const margin of [0, CURB_WIDTH, street.sidewalk]) {
       cuts.add(street.coordinate - street.width / 2 - margin);
       cuts.add(street.coordinate + street.width / 2 + margin);
@@ -145,17 +151,17 @@ export function generateWorld(scheme: WorldScheme): GeneratedWorld {
     }
   }
   for (const street of scheme.streets) {
-    const start = street.axis === 'x' ? bounds.minX : bounds.minZ;
-    const end = street.axis === 'x' ? bounds.maxX : bounds.maxZ;
+    const start = street.start ?? (street.axis === 'x' ? bounds.minX : bounds.minZ);
+    const end = street.end ?? (street.axis === 'x' ? bounds.maxX : bounds.maxZ);
     const count = Math.ceil((end - start) / scheme.lampSpacing);
     for (let i = 0; i < count; i++) {
       const along = start + (i + 0.5) * scheme.lampSpacing;
       if (along + 0.4 > end) continue;
-      if (scheme.streets.some(other => other.axis !== street.axis && Math.abs(along - other.coordinate) < other.width / 2 + other.sidewalk + 0.6)) continue;
       for (const side of [-1, 1]) {
         const across = street.coordinate + side * (street.width / 2 + street.sidewalk - 0.45);
         const x = street.axis === 'x' ? along : across;
         const z = street.axis === 'x' ? across : along;
+        if (scheme.streets.some(other => other !== street && contains(ribbon(other, bounds, other.sidewalk + 0.6), x, z))) continue;
         if (scheme.reserved.some(zone => overlaps(zone, { minX: x - 0.4, maxX: x + 0.4, minZ: z - 0.4, maxZ: z + 0.4 }))) continue;
         add({ key: `${scheme.id}/lamp/${street.id}/${i}/${side}`, templateId: 'world/lamp', parameters: {},
           position: [x, height(x) + SIDEWALK_HEIGHT, z], rotation: [0, street.axis === 'x' ? side * Math.PI / 2 : side > 0 ? Math.PI : 0, 0] });
@@ -163,4 +169,49 @@ export function generateWorld(scheme: WorldScheme): GeneratedWorld {
     }
   }
   return { version: 1, schemeId: scheme.id, seed: scheme.seed, randomState, bounds: { ...bounds }, objects };
+}
+
+
+export interface WorldRegion { readonly id: string; readonly bounds: Rectangle }
+
+export function generateWorldRegions(scheme: WorldScheme, regions: readonly WorldRegion[]): readonly GeneratedWorld[] {
+  validate(scheme);
+  if (!regions.length || regions.length > 16) throw new Error('Нужно от 1 до 16 участков');
+  const ids = new Set<string>();
+  let area = 0;
+  for (let i = 0; i < regions.length; i++) {
+    const { id, bounds: b } = regions[i];
+    if (!id.trim() || ids.has(id) || !validRectangle(b) || b.minX < scheme.bounds.minX || b.maxX > scheme.bounds.maxX ||
+        b.minZ < scheme.bounds.minZ || b.maxZ > scheme.bounds.maxZ || regions.slice(0, i).some(r => overlaps(r.bounds, b))) throw new Error('Некорректные границы участков');
+    ids.add(id); area += (b.maxX - b.minX) * (b.maxZ - b.minZ);
+  }
+  const totalArea = (scheme.bounds.maxX - scheme.bounds.minX) * (scheme.bounds.maxZ - scheme.bounds.minZ);
+  if (!Number.isFinite(area) || Math.abs(area - totalArea) > totalArea * 1e-12) throw new Error('Участки должны покрывать всю схему');
+  const generated = generateWorld(scheme);
+  const angle = Math.atan(scheme.slopeX);
+  let objectCount = 0;
+  return regions.map(region => {
+    const objects: WorldPlacement[] = [];
+    for (const object of generated.objects) {
+      const [x, , z] = object.position;
+      const b = region.bounds;
+      if (!['world/terrain', 'world/road', 'world/sidewalk', 'world/curb'].includes(object.templateId)) {
+        // Half-open ownership assigns boundary objects exactly once; full bounds still drive streaming.
+        if (x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ) objects.push(object);
+        continue;
+      }
+      const halfX = object.parameters.width * Math.cos(angle) / 2;
+      const halfZ = object.parameters.depth / 2;
+      const minX = Math.max(b.minX, x - halfX), maxX = Math.min(b.maxX, x + halfX);
+      const minZ = Math.max(b.minZ, z - halfZ), maxZ = Math.min(b.maxZ, z + halfZ);
+      if (maxX - minX < 1e-9 || maxZ - minZ < 1e-9) continue;
+      const centerX = (minX + maxX) / 2;
+      objects.push({ ...object, key: `${object.key}@${region.id}`,
+        parameters: { ...object.parameters, width: (maxX - minX) / Math.cos(angle), depth: maxZ - minZ },
+        position: [centerX, object.position[1] + (centerX - x) * scheme.slopeX, (minZ + maxZ) / 2] });
+    }
+    objectCount += objects.length;
+    if (objectCount > MAX_OBJECTS) throw new Error('Превышен бюджет объектов участков');
+    return { ...generated, schemeId: region.id, bounds: { ...region.bounds }, objects };
+  });
 }
