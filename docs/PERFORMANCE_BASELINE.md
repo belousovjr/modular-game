@@ -425,3 +425,9 @@ RTX 3050 Laptop/D3D12, Chromium headed 1280×720, без ограничения 
 Пик cgroup 1369.4 MiB, max/oom/oom_kill=0. Предварительные и финальный запуск последовательные, многочасового soak нет.
 
 102 tests/check/build прошли. Проверки включают сетку узлов/размеров/rotations, локальные размеры и ориентации частей, реальные карты каждого неэмиссивного материала и сохранение контраста curb. Артефакты artifacts/downtown-grid-report.json и downtown-grid-{street,river,skyline}.png. Это сознательно регулярная адаптация карты, не точный digital twin Чикаго.
+
+## 2026-11-16 — приоритет глубины разметки и плафон без пересечений
+
+Подтверждено пересечение head/arm после quarter-grid snapping: прежние box имели одинаковые наружные плоскости. Lamp v4 выносит head за конец arm; native/raw и snapped AABB не имеют общего объёма. Для marking включены zOffset=-1/zOffsetUnits=-2, depth test/write сохранены, обычные перекрытия объектами действуют. Нет новых mesh/material/texture allocations или проходов; сетка, дальности LOD и shadow config прежние.
+
+104 Node tests + check/build проходят. RTX 3050 D3D12, headed Chromium 1280×720, ограничение MemoryMax=2G/swap=0/timeout: проверены четыре ближних/дальних вида плафона и улицы, GLSL errors=0. Плафон в просмотренных видах больше не пересекает консоль и не имеет полос на светящейся поверхности; разметка сохраняет штатный depth priority. Артефакты artifacts/depth-report.json и depth-{lamp,markings}-{near,far}.png. Это визуальный smoke, не отдельный FPS-бенчмарк/длительный soak; субпиксельное исчезновение очень тонких линий на большой дистанции этим не объявляется устранённым.
