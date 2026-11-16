@@ -578,3 +578,23 @@ Final headed Chromium 1280×720, ANGLE D3D12 NVIDIA RTX 3050 Laptop, MemoryMax=2
 | 17 visible people | 82.6 | 16.9 |
 
 Three return cycles give exactly 289 meshes/208 geometries/16 textures/1 skeleton each time. Cgroup peak 853487616 bytes, OOM=0; this reports the bounded browser test, not all GPU/driver memory. An earlier review run (before portal filtering/foot-geometry fixes) varied from 70.9 FPS on the first street view to 129.7 on roofs, crowd 89.4; its peak was 1511538688 bytes, also OOM=0. These short runs do not establish an isolated speed gain or guaranteed 100 FPS; loading/compilation/environment variation and frame spikes remain. Artifacts review-street-details-final-*.png/report.json (earlier review-street-details-*). No long soak or visual inspection of every generated door was performed.
+
+## Local pedestrian patrols (delivery 17)
+
+Optional `npc` module registers outside the default set. Eight pedestrians patrol bounded Clark/Daley zones using deterministic headless BFS paths around conservative expanded static AABBs. Shared character authority owns movement/terrain collisions at 60 Hz; one static character index per population. There is no client NPC command API, live server, general city navmesh, traffic-light behaviour or collision/avoidance between people. Stable outer NPC IDs belong to NPC authority; private locomotion controllers consume the existing validated MoveCommand internally. Loop animation phases differ deterministically by ID; GLB geometry/material/atlas source remains shared.
+
+123 tests/check/build pass: obstacle detour without teleporting, bounds/count/path/spawn-budget validation, blocked/unreachable/duplicate nodes, fixed-tick equality at 30/144 render FPS and retained 20-second debt, 16 pedestrians advancing for 60 seconds on the pinned dry city routes. Browser inspected street/plaza walking and turns, tested 8 then 24 NPC plus hero, 16 test models in active meshes throughout each stress sample, and module disable back to the single player.
+
+Headed Chromium 1280×720, ANGLE D3D12 NVIDIA RTX 3050 Laptop, 2 GiB/no swap/120 s, no overlapping build/tests:
+
+| Population / view | FPS | P95 ms |
+| --- | --- | --- |
+| 8 NPC, Clark | 66.2 | 32.7 |
+| 8 NPC, plaza | 71.8 | 33.4 |
+| 8 NPC, overhead | 77.3 | 31.6 |
+| 24 NPC, scenario cycle 1 | 55.0 | 27.9 |
+| 24 NPC, scenario cycle 2 | 53.6 | 29.2 |
+| 24 NPC, scenario cycle 3 | 49.6 | 32.3 |
+| 0 NPC, overhead after module disable | 75.8 | 31.7 |
+
+Eight remains the default; 24 is a stress case and is not recommended as the current density budget. Different cameras/content and host variation prevent treating these samples as isolated AI cost or guaranteed FPS; the no-NPC overhead result also differs from earlier city-route baselines. No 100+ FPS claim. All three scenario cleanups return identically to 380 meshes/229 geometries/24 textures/9 skeletons; disabling NPC returns to 1 skeleton/16 textures. Each additional skeleton has one native bone texture; color/normal atlases are not duplicated. Cgroup peak 1489612800 bytes, OOM=0, browser errors=0. Artifacts npc-{clark,plaza,overview,density-24}.png and npc-report.json. Long soak and mutual human avoidance are not tested/implemented by this delivery.

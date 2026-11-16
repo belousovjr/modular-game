@@ -90,6 +90,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   let previous: CharacterSnapshot | null = null, speed=0;
   return (s: CharacterSnapshot) => {
     if (disposed) return;
+    root.name=`character/${s.id}`;
     root.position.set(s.x,s.y,s.z);
     root.rotation.y=previous?smoothYaw(root.rotation.y,s.yaw,scene.getEngine().getDeltaTime()):s.yaw;
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
@@ -98,7 +99,14 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     const name=selectAnimation(s);
     const next=entries.animationGroups.find(group=>group.name.endsWith('/'+name));
     if (!next) return;
-    if (next!==active) { if(!next.isPlaying) { next.start(true);next.weight=0; } active=next; }
+    if (next!==active) {
+      if(!next.isPlaying) {
+        next.start(true);next.weight=0;
+        const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
+        if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));
+      }
+      active=next;
+    }
     blendAnimations(entries.animationGroups,active,scene.getEngine().getDeltaTime());
     root.metadata.animation=name;
     active.speedRatio=!name.startsWith('Jump_') && s.moving?Math.max(.65,Math.min(s.running?1.4:1.2,speed/(s.running?7:1.6))):1;

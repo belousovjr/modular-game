@@ -12,5 +12,6 @@ import { materialsModule } from './modules/materials/index.ts';
 import { shadowsModule } from './modules/shadows/index.ts';
 import { charactersModule } from './modules/characters/index.ts';
 import { playerControlModule } from './modules/player-control/index.ts';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule, charactersModule, playerControlModule];
+import { npcModule } from './modules/npc/index.ts';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule, charactersModule, playerControlModule, npcModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];
