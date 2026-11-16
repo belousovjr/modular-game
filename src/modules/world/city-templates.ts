@@ -36,17 +36,15 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       ]};
     },
   })),
-  {id:'city/signal',version:1,parameters:{},build:()=>({hideDistance:130,levels:[
-    {distance:0,parts:[
-      {surface:'metal',size:[.14,5.5,.14],position:[0,2.75,0]},
-      {surface:'metal',size:[3.2,.15,.15],position:[1.5,5.4,0]},
-      {surface:'signal-body',size:[.42,1.15,.32],position:[2.9,4.9,0]},
-      {surface:'signal-red',size:[.23,.23,.04],position:[2.9,5.23,-.18]},
-      {surface:'signal-off',size:[.23,.23,.04],position:[2.9,4.91,-.18]},
-      {surface:'signal-off',size:[.23,.23,.04],position:[2.9,4.59,-.18]},
-    ]},
-    {distance:40,parts:[{surface:'metal',size:[.15,5.5,.15],position:[0,2.75,0]},{surface:'signal-body',size:[.42,1.15,.32],position:[2.9,4.9,0]}]},
-  ]})},
+  {id:'city/signal',version:2,parameters:{armLength:{default:4,min:2,max:12}},build:({armLength})=>{
+    const pole:GeometryPart={surface:'metal',size:[.25,6.75,.25],position:[0,3.375,0]};
+    const arm:GeometryPart={surface:'metal',size:[armLength,.25,.25],position:[-armLength/2,6.625,0]};
+    const head:GeometryPart={surface:'signal-body',size:[.5,1.25,.5],position:[-armLength,5.875,0]};
+    return {hideDistance:130,levels:[
+      {distance:0,parts:[pole,arm,head,...[6.25,5.875,5.5].map((y,i):GeometryPart=>({surface:i===0?'signal-red':'signal-off',size:[.25,.25,.25],position:[-armLength,y,-.375]}))]},
+      {distance:40,parts:[pole,arm,head]},
+    ]};
+  }},
 ];
 
 // Parts use the quarter-metre module; centres need half a module to align their faces.

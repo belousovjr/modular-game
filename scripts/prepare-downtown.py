@@ -305,12 +305,18 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
                 low=min(terrain(ax,az),terrain(bx1,bz1))-1
                 quad((ax,low,az),(ax,bottom,az),(bx1,bottom,bz1),(bx1,low,bz1),[(-1,-1)]*4)
                 quad((ax,top,az),(ax,by+h,az),(bx1,by+h,bz1),(bx1,top,bz1),[(-3,-3)]*4)
-            # Two slim belts on the longest facade, not a ring around every tiny footprint edge.
+            # Trim the recessed wall edge at both ends; keep the belt attached and inside the footprint.
             if rows>=5:
-             edges=list(zip(list(p.exterior.coords),list(p.exterior.coords)[1:]));a,b=max(edges,key=lambda e:math.dist(*e))
-             length=math.dist(a,b);nx=-(b[1]-a[1])/length;nz=(b[0]-a[0])/length
+             wall=max(polys(inset),key=lambda w:w.area);wall=orient(wall,sign=-1)
+             edges=list(zip(list(wall.exterior.coords),list(wall.exterior.coords)[1:]));a,b=max(edges,key=lambda e:math.dist(*e))
+             length=math.dist(a,b);dx=(b[0]-a[0])/length;dz=(b[1]-a[1])/length;nx,nz=-dz,dx
+             margin=min(.5,length/4)
+             a=(a[0]+dx*margin+nx*.0625,a[1]+dz*margin+nz*.0625)
+             b=(b[0]-dx*margin+nx*.0625,b[1]-dz*margin+nz*.0625)
+             belt=Polygon([a,b,(b[0]-nx*.1875,b[1]-nz*.1875),(a[0]-nx*.1875,a[1]-nz*.1875)])
+             assert p.buffer(.00001).covers(belt) and inset.intersection(belt).area>0,'Detached facade belt'
              for level in sorted({1,max(2,round(rows*.65))}):
-                y=bottom+level*storey;ax,az=a;bx1,bz1=b;ix,iz=ax-nx*SIZE,az-nz*SIZE;jx,jz=bx1-nx*SIZE,bz1-nz*SIZE
+                y=bottom+level*storey;ax,az=a;bx1,bz1=b;ix,iz=ax-nx*.1875,az-nz*.1875;jx,jz=bx1-nx*.1875,bz1-nz*.1875
                 uv=[(-3,-3)]*4
                 quad((ax,y-SIZE/2,az),(ax,y+SIZE/2,az),(bx1,y+SIZE/2,bz1),(bx1,y-SIZE/2,bz1),uv)
                 quad((ax,y+SIZE/2,az),(ix,y+SIZE/2,iz),(jx,y+SIZE/2,jz),(bx1,y+SIZE/2,bz1),uv)
@@ -321,49 +327,147 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
         colliders.append({'id':oid,'minX':min(x for x,z in outline),'maxX':max(x for x,z in outline),'minZ':min(z for x,z in outline),'maxZ':max(z for x,z in outline),'minY':by-2,'maxY':by+h,'outline':outline})
         building_data.append({'id':oid,'name':t.get('name',''),'profile':profile,'height':h,'heightSource':method,'sourceFootprint':[[round(x,3),round(z,3)] for x,z in list(p.exterior.coords)]})
 print('Building placement complete',len(colliders),flush=True)
-# Mapped signals and actual connected junctions, with approach-facing crosswalks.
-intersection_ids={n for n,rs in node_roads.items() if len({r[0] for r in rs})>=3}
-signals=[];crossings=[]
-sidewalk_near=prep(sidewalk.buffer(.6));road_expanded=prep(road.buffer(.02));water_near=prep(water.buffer(2));inner_bounds=prep(bounds.buffer(-12))
-for nid in sorted(set(intersection_ids)|{n for n,t in node_tags.items() if t.get('highway')=='traffic_signals'}):
-    if nid not in nodes or nid not in node_roads:continue
+# Treat a physical junction as one layout, not one independent layout per OSM way split.
+width_by_way={r['id'].split('/')[1][1:]:r['width'] for r in roads}
+candidates=[]
+inner_junction_bounds=prep(bounds.buffer(-16));junction_water=prep(water.buffer(2))
+for nid in sorted(node_roads):
+    if nid not in nodes:continue
     x,z=nodes[nid]
-    if not inner_bounds.contains(Point(x,z)) or water_near.contains(Point(x,z)):continue
+    if not inner_junction_bounds.contains(Point(x,z)) or junction_water.contains(Point(x,z)):continue
     approaches=[]
-    for wid,t,width in node_roads[nid]:
-        refs=ways[wid][1]
+    for wid,t,old_width in node_roads[nid]:
+        refs=ways[wid][1];width=width_by_way.get(wid,old_width)
         for j,ref in enumerate(refs):
             if ref!=nid:continue
             for k in [j-1,j+1]:
-                if 0<=k<len(refs) and refs[k] in nodes:
-                    q=nodes[refs[k]];dx=q[0]-x;dz=q[1]-z;length=math.hypot(dx,dz)
-                    if length<1:continue
-                    direction=(dx/length,dz/length,width)
-                    if not any(direction[0]*a[0]+direction[1]*a[1]>.97 for a in approaches):approaches.append(direction)
-    if len(approaches)<2:continue
-    radius=max(a[2] for a in approaches)/2+3
-    for j,(dx,dz,width) in enumerate(approaches):
-        # Signal heads sit on the downstream sidewalk corner, away from the crossing stripes.
-        sx=snap(x+dx*(radius+2)-dz*(width/2+1.3),POSITION);sz=snap(z+dz*(radius+2)+dx*(width/2+1.3),POSITION)
-        if sidewalk_near.contains(Point(sx,sz)):
-            signals.append({'key':f'osm/signal/{nid}/{j}','templateId':'city/signal','parameters':{},'position':[round(sx,3),math.ceil((terrain(sx,sz)+SIZE)/SIZE)*SIZE,round(sz,3)],'rotation':[0,snap(math.atan2(dx,dz)+math.pi,ANGLE),0]})
-        cx=x+dx*radius;cz=z+dz*radius
-        for k in range(-int(width/2)+1,int(width/2),2):
-            px=cx-dz*k;pz=cz+dx*k
-            stripe=Polygon([(px-dx*1.5-dz*.4,pz-dz*1.5+dx*.4),(px+dx*1.5-dz*.4,pz+dz*1.5+dx*.4),(px+dx*1.5+dz*.4,pz+dz*1.5-dx*.4),(px-dx*1.5+dz*.4,pz-dz*1.5-dx*.4)])
-            if road_expanded.covers(stripe):crossings.append(stripe)
-# Mark lane centres only outside junctions; mapped separate carriageways stay separate.
-junction_mask=unary_union([Point(nodes[n]).buffer(20) for n in intersection_ids if n in nodes])
+                if not 0<=k<len(refs) or refs[k] not in nodes:continue
+                q=nodes[refs[k]];dx=q[0]-x;dz=q[1]-z;length=math.hypot(dx,dz)
+                if length<1:continue
+                direction=(dx/length,dz/length,width)
+                if not any(direction[0]*a[0]+direction[1]*a[1]>.966 for a in approaches):approaches.append(direction)
+    # Two opposite arms are a way split, not a new intersection/crosswalk pair.
+    if len(approaches)>=3:candidates.append({'id':nid,'point':Point(x,z),'radius':max(a[2] for a in approaches)/2+2,'ways':{w for w,_,_ in node_roads[nid]}})
+groups=[]
+for candidate in candidates:
+    joined=[g for g in groups if any(candidate['ways']&m['ways'] and candidate['point'].distance(m['point'])<max(candidate['radius'],m['radius'])+5 for m in g)]
+    if joined:
+        merged=[candidate]
+        for group in joined:merged.extend(group);groups.remove(group)
+        groups.append(merged)
+    else:groups.append([candidate])
+junctions=[]
+for group in groups:
+    hull=unary_union([m['point'].buffer(m['radius'],quad_segs=4) for m in group]).convex_hull
+    junctions.append({'id':min(m['id'] for m in group),'shape':hull,'nodes':[m['id'] for m in group]})
+junctions.sort(key=lambda j:j['id'])
+intersection_ids={m['id'] for m in candidates}
+junction_mask=unary_union([j['shape'].buffer(4) for j in junctions])
+sidewalk_near=prep(sidewalk.buffer(.6));road_expanded=prep(road.buffer(.02));water_near=prep(water.buffer(2));inner_bounds=prep(bounds.buffer(-12))
+walk_support=prep(sidewalk);road_interior=prep(road.buffer(-.35));crossing_layout=[];signal_layout=[];signals=[];crossings=[];stop_lines=[];crossing_zones=[];pole_points=[]
+road_lines=[(r,LineString(r['points'])) for r in roads]
+
+def line_parts(g):return [g] if g.geom_type=='LineString' else [p for p in getattr(g,'geoms',[]) if p.geom_type=='LineString']
+def local_rectangle(cx,cz,tx,tz,u0,u1,v0,v1):
+    nx,nz=-tz,tx
+    return Polygon([(cx+nx*u+tx*v,cz+nz*u+tz*v) for u,v in [(u0,v0),(u1,v0),(u1,v1),(u0,v1)]])
+def outline(p):return [[round(x,4),round(z,4)] for x,z in list(p.exterior.coords)[:-1]]
+
+def support_height(x,z):
+    # Roots follow the continuous pavement, with burial covering the small slope under the foot.
+    return min(terrain(x+dx,z+dz) for dx in [-.375,.375] for dz in [-.375,.375])+SIZE-.125
+
+for junction in junctions:
+    hull=junction['shape'];arms=[]
+    for r,line in road_lines:
+        if not line.intersects(hull):continue
+        for piece in line_parts(line.difference(hull)):
+            if piece.length<9:continue
+            points=list(piece.coords)
+            for reverse in [False,True]:
+                endpoint=points[-1] if reverse else points[0]
+                if hull.boundary.distance(Point(endpoint))>.05:continue
+                outward=LineString(points[::-1] if reverse else points)
+                a=outward.interpolate(2);b=outward.interpolate(5);dx=b.x-a.x;dz=b.y-a.y;length=math.hypot(dx,dz)
+                if length<1:continue
+                angle=snap(math.atan2(dx,dz),ANGLE);tx,tz=math.sin(angle),math.cos(angle)
+                if any(tx*t[2]+tz*t[3]>.966 and a.distance(t[1].interpolate(2))<max(r['width'],t[0]['width'])*.65 for t in arms):continue
+                arms.append((r,outward,tx,tz,line))
+    arms.sort(key=lambda arm:(round(math.atan2(arm[2],arm[3]),6),arm[0]['id']))
+    for arm_index,(r,path,tx,tz,original) in enumerate(arms):
+        chosen=None;nx,nz=-tz,tx
+        for station in [3,5,7,9]:
+            sample=path.interpolate(station);cx,cz=snap(sample.x,POSITION),snap(sample.y,POSITION)
+            if any(other['id']!=junction['id'] and other['shape'].buffer(1).contains(Point(cx,cz)) for other in junctions):continue
+            across=LineString([(cx-nx*40,cz-nz*40),(cx+nx*40,cz+nz*40)])
+            spans=[s for s in line_parts(road.intersection(across)) if s.distance(Point(cx,cz))<.1]
+            if not spans:continue
+            span=max(spans,key=lambda s:s.length)
+            if span.length<5 or span.length>max(12,r['width']*1.65):continue
+            uv=[(x-cx)*nx+(z-cz)*nz for x,z in span.coords];left,right=min(uv)+.3,max(uv)-.3
+            band=local_rectangle(cx,cz,tx,tz,left,right,-1.5,1.5)
+            if not road_expanded.covers(band) or any(band.buffer(.75).intersects(zone) for zone in crossing_zones):continue
+            ends=[Point(cx+nx*u,cz+nz*u) for u in [left-.3,right+.3]]
+            if any(sidewalk.distance(p)>1 for p in ends):continue
+            count=math.floor((right-left)/1.0)
+            if count<4:continue
+            first=(left+right)/2-(count-1)*.5
+            stripes=[local_rectangle(cx,cz,tx,tz,first+i-.25,first+i+.25,-1.5,1.5) for i in range(count)]
+            if not all(road_expanded.covers(s) for s in stripes):continue
+            chosen=(cx,cz,left,right,band,stripes);break
+        if chosen is None:continue
+        cx,cz,left,right,band,stripes=chosen;cid=f"osm/crosswalk/{junction['id']}/{arm_index}"
+        crossing_zones.append(band);crossings.extend(stripes)
+        crossing_layout.append({'id':cid,'junctionId':junction['id'],'center':[cx,cz],'direction':[tx,tz],'depth':3,'width':right-left,'outline':outline(band),'stripes':[outline(p) for p in stripes]})
+        along=original.project(Point(cx,cz));before=original.interpolate(max(0,along-.5));after=original.interpolate(min(original.length,along+.5));forward=(after.x-before.x)*tx+(after.y-before.y)*tz
+        incoming=r['oneway']=='no' or (r['oneway']=='yes' and forward<0) or (r['oneway']=='-1' and forward>0)
+        if not incoming:continue
+        # Stop upstream of the pedestrian crossing, across only the incoming carriageway.
+        stop_left=left if r['oneway']!='no' else max(0,left)
+        stop=local_rectangle(cx,cz,tx,tz,stop_left,right,2.75,3.25)
+        if road_expanded.covers(stop) and not any(stop.intersects(zone) for zone in crossing_zones):stop_lines.append(stop)
+        # The head faces this approach; local -X reaches inward from the right curb.
+        yaw=snap(math.atan2(-tx,-tz),ANGLE);ax,az=math.cos(yaw),-math.sin(yaw)
+        center=hull.centroid;extent=max((center.x-x)*tx+(center.y-z)*tz for x,z in hull.exterior.coords)
+        far=(center.x-tx*max(1,extent-1),center.y-tz*max(1,extent-1))
+        preferred=[('far-side',far[0]+nx*(r['width']/2+1),far[1]+nz*(r['width']/2+1)),('near-side',cx-tx*3+nx*(right+1),cz-tz*3+nz*(right+1))]
+        selected=None
+        offsets=sorted([(x,z) for x in range(-3,4) for z in range(-3,4)],key=lambda p:p[0]*p[0]+p[1]*p[1])
+        for mode,px,pz in preferred:
+          for ox,oz in offsets:
+            sx,sz=snap(px,POSITION)+ox,snap(pz,POSITION)+oz;point=Point(sx,sz)
+            if not walk_support.covers(point.buffer(.25)) or water_near.contains(point):continue
+            clearance=road.distance(point)
+            if not .75<=clearance<=1.75 or any(point.distance(p)<2 for p in pole_points):continue
+            nominal=snap(max(2,min(12,r['width']/4+1)),SIZE)
+            for reach in [nominal,nominal+.5,nominal+1,nominal-.5]:
+                if not 2<=reach<=12:continue
+                hx,hz=sx-ax*reach,sz-az*reach
+                if not road_interior.covers(Point(hx,hz)) or (cx-hx)*tx+(cz-hz)*tz<2:continue
+                selected=(mode,sx,sz,reach,hx,hz,clearance);break
+            if selected:break
+          if selected:break
+        if selected is None:continue
+        mode,sx,sz,reach,hx,hz,clearance=selected;sid=f"osm/signal/{junction['id']}/{arm_index}";pole_points.append(Point(sx,sz))
+        signals.append({'key':sid,'templateId':'city/signal','parameters':{'armLength':reach},'position':[sx,round(support_height(sx,sz),4),sz],'rotation':[0,yaw,0]})
+        signal_layout.append({'id':sid,'crosswalkId':cid,'junctionId':junction['id'],'mode':mode,'pole':[sx,sz],'head':[hx,hz],'facing':[tx,tz],'curbClearance':round(clearance,4)})
+print('Traffic layout',len(junctions),'junctions',len(crossing_layout),'crosswalks',len(signals),'signals',flush=True)
+# Validate the complete layout before baking; never publish partial crossing fragments.
+assert all(road_expanded.covers(p) for p in crossings)
+assert all(sidewalk.covers(p.buffer(.25)) for p in pole_points)
+assert all(road_interior.covers(Point(s['head'])) for s in signal_layout)
+stop_lines=[p for p in stop_lines if not any(p.intersects(zone) for zone in crossing_zones)]
+# Road markings are static batches, not a mesh for every stripe.
 markings=[]
 for r in roads:
     line=LineString(r['points'])
-    if r['oneway']=='no' and r['width']>=9:
-        markings.extend(polys(line.buffer(.065).difference(junction_mask)))
-marking=unary_union(markings+crossings)
-for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
- for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
-    patch=marking.intersection(box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE))
-    mesh('marking',terrain_faces(patch),lambda x,z:terrain(x,z)+.015,ix,iz)
+    if r['oneway']=='no' and r['width']>=9:markings.extend(polys(line.buffer(.065).difference(junction_mask)))
+for surface,shape in [('marking',unary_union(crossings+stop_lines+markings))]:
+ for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
+  for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
+    patch=shape.intersection(box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE))
+    mesh(surface,terrain_faces(patch),lambda x,z:terrain(x,z)+.015,ix,iz)
+lamp_junction_mask=unary_union([Point(nodes[n]).buffer(20) for n in intersection_ids])
 lamps=[];lamp_cells=defaultdict(list)
 for r in roads:
     line=LineString(r['points'])
@@ -374,10 +478,10 @@ for r in roads:
             offset=(r['width']/2+1.3)*side;lx=p.x-dz/length*offset;lz=p.y+dx/length*offset;point=Point(lx,lz)
             lx=snap(lx,POSITION);lz=snap(lz,POSITION);point=Point(lx,lz)
             cell=(math.floor(lx/12),math.floor(lz/12))
-            if not inner_bounds.contains(point) or not sidewalk_near.contains(point) or junction_mask.distance(point)<4 or water_near.contains(point):continue
+            if not inner_bounds.contains(point) or not sidewalk.covers(point.buffer(.375)) or lamp_junction_mask.distance(point)<4 or water_near.contains(point):continue
             if any(point.distance(other)<12 for ix in range(cell[0]-1,cell[0]+2) for iz in range(cell[1]-1,cell[1]+2) for other in lamp_cells[ix,iz]):continue
             lamp_cells[cell].append(point)
-            lamps.append({'key':f"osm/lamp/{r['id']}/{distance}/{side}",'templateId':'world/lamp','parameters':{},'position':[round(lx,3),math.ceil((terrain(lx,lz)+SIZE)/SIZE)*SIZE,round(lz,3)],'rotation':[0,snap(math.atan2(side*dx,side*dz),ANGLE),0]})
+            lamps.append({'key':f"osm/lamp/{r['id']}/{distance}/{side}",'templateId':'world/lamp','parameters':{},'position':[round(lx,3),round(support_height(lx,lz),4),round(lz,3)],'rotation':[0,snap(math.atan2(side*dx,side*dz),ANGLE),0]})
 placements.extend(lamps)
 placements.extend(signals)
 # A dry, wide, unobstructed road segment supports the existing 4x4 crowd test.
@@ -392,7 +496,7 @@ print('Markings and signals complete',len(signals),len(crossings),flush=True)
 counts=Counter()
 for ch in chunks.values():
     for m in ch['meshes']:counts[m['surface']]+=len(m['indices'])//3
-result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':'USGS 3DEP; bilinear 9x9 samples; NAVD88 datum offset 180 m','bathymetry':'procedural reference profile, not survey data'},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(intersection_ids),'crossingStripes':len(crossings),'riverArea':round(water.area,2),'triangles':dict(counts),'chunks':len(chunks)}}
+result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':'USGS 3DEP; bilinear 9x9 samples; NAVD88 datum offset 180 m','bathymetry':'procedural reference profile, not survey data'},'trafficLayout':{'junctions':[{'id':j['id'],'nodes':j['nodes'],'outline':outline(j['shape'])} for j in junctions],'crosswalks':crossing_layout,'signals':signal_layout},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(junctions),'crossingStripes':len(crossings),'riverArea':round(water.area,2),'triangles':dict(counts),'chunks':len(chunks)}}
 (DATA/'city.json').write_text(json.dumps(result,separators=(',',':'),ensure_ascii=False)+'\n')
 print(json.dumps(result['report']));print('spawn',result['spawn']);print('bytes',(DATA/'city.json').stat().st_size)
 

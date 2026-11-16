@@ -77,7 +77,7 @@ test('coarse city grid keeps object anchors, sizes and headings quantised',()=>{
 test('reusable architectural parts use quarter-metre dimensions and 15 degree rotations',async()=>{
   const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
   const onGrid=(v:number,step:number)=>Math.abs(v/step-Math.round(v/step))<1e-6;
-  for(const template of cityTemplates)for(const level of toCityGrid(template).build({width:32,depth:28,height:60,foundation:2}).levels)for(const part of level.parts){
+  for(const template of cityTemplates)for(const level of toCityGrid(template).build({width:32,depth:28,height:60,foundation:2,armLength:4}).levels)for(const part of level.parts){
     assert.ok(part.size.every(v=>v>=.25&&onGrid(v,.25)));
     assert.ok(!part.rotation||part.rotation.every(v=>onGrid(v,Math.PI/12)));
     assert.ok(!part.position||part.position.every(v=>onGrid(v,.125)));
@@ -117,4 +117,50 @@ test('lamp light box does not overlap its metal arm before or after grid snappin
     assert.ok(overlaps.some(v=>v<=1e-8),'Lamp box intersects its arm and shares visible coplanar faces');
     assert.ok(head.position[0]-head.size[0]/2>=arm.position[0]+arm.size[0]/2-1e-8);
   }
+});
+
+test('traffic layouts have complete separated crossings and curbside signals reaching over asphalt',()=>{
+  const data=JSON.parse(readFileSync(new URL('../src/modules/world/data/downtown/city.json',import.meta.url),'utf8'));
+  const {crosswalks,signals}=data.trafficLayout;
+  assert.ok(crosswalks.length>100);assert.ok(signals.length>50);
+  // Separating axes check uses the exported bands, independently of the offline polygon library.
+  const overlaps=(a:number[][],b:number[][])=>[a,b].every(poly=>poly.every((p,i)=>{
+    const q=poly[(i+1)%poly.length],nx=q[1]-p[1],nz=p[0]-q[0];
+    const pa=a.map(v=>v[0]*nx+v[1]*nz),pb=b.map(v=>v[0]*nx+v[1]*nz);
+    return Math.max(...pa)>Math.min(...pb)+.001&&Math.max(...pb)>Math.min(...pa)+.001;
+  }));
+  for(let i=0;i<crosswalks.length;i++){
+    const c=crosswalks[i];assert.equal(c.depth,3);assert.ok(c.stripes.length>=4);
+    for(let j=0;j<i;j++)assert.equal(overlaps(c.outline,crosswalks[j].outline),false,`Overlapping crossings ${c.id}`);
+  }
+  for(const s of signals){
+    const p=citySource.placements.find(p=>p.key===s.id);assert.ok(p);
+    assert.ok(s.curbClearance>=.75&&s.curbClearance<=1.75);
+    const reach=p.parameters.armLength,yaw=p.rotation[1];
+    assert.ok(Math.abs(p.position[0]-Math.cos(yaw)*reach-s.head[0])<.001);
+    assert.ok(Math.abs(p.position[2]+Math.sin(yaw)*reach-s.head[1])<.001);
+    assert.ok(-Math.sin(yaw)*s.facing[0]-Math.cos(yaw)*s.facing[1]>.99);
+  }
+});
+
+test('street supports are embedded in the rendered sidewalk, including sloped pavement',()=>{
+  let checked=0;
+  for(const p of citySource.placements){
+    if(p.templateId!=='world/lamp'&&p.templateId!=='city/signal')continue;
+    const [x,y,z]=p.position;let pavement=-Infinity;
+    for(const c of citySource.chunks){
+      if(x<c.bounds.minX||x>c.bounds.maxX||z<c.bounds.minZ||z>c.bounds.maxZ)continue;
+      for(const m of c.meshes)if(m.surface==='sidewalk')for(let i=0;i<m.indices.length;i+=3){
+        const a=m.indices[i]*3,b=m.indices[i+1]*3,d=m.indices[i+2]*3,v=m.positions;
+        const det=(v[b+2]-v[d+2])*(v[a]-v[d])+(v[d]-v[b])*(v[a+2]-v[d+2]);
+        if(Math.abs(det)<1e-8)continue;
+        const u=((v[b+2]-v[d+2])*(x-v[d])+(v[d]-v[b])*(z-v[d+2]))/det;
+        const w=((v[d+2]-v[a+2])*(x-v[d])+(v[a]-v[d])*(z-v[d+2]))/det;
+        if(u>=-1e-5&&w>=-1e-5&&u+w<=1.00001)pavement=Math.max(pavement,u*v[a+1]+w*v[b+1]+(1-u-w)*v[d+1]);
+      }
+    }
+    assert.ok(Number.isFinite(pavement),`No sidewalk below ${p.key}`);
+    assert.ok(y<pavement-.1&&y>pavement-.3,`Floating or buried support ${p.key}: ${y-pavement}`);checked++;
+  }
+  assert.ok(checked>1000);
 });

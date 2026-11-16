@@ -34,8 +34,8 @@ export const worldModule = defineModule({
       const [x, , z] = placement.position;
       const key = placement.templateId === 'world/terrain' ? placement.key : `${Math.floor(x / 128)}/${Math.floor(z / 128)}`;
       // Include full surfaces and facade overhangs, so long tiles survive near a section boundary.
-      const halfX = (placement.parameters.width ?? 2) / 2 + 4;
-      const halfZ = (placement.parameters.depth ?? 2) / 2 + 4;
+      const halfX = placement.templateId === 'city/signal' ? (placement.parameters.armLength ?? 4) + .5 : (placement.parameters.width ?? 2) / 2 + 4;
+      const halfZ = placement.templateId === 'city/signal' ? (placement.parameters.armLength ?? 4) + .5 : (placement.parameters.depth ?? 2) / 2 + 4;
       const bounds = { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
       const section = sections.get(key);
       if (section) {
