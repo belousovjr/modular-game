@@ -396,6 +396,7 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
                     # Handles are one small continuous bar per leaf, not separate animated hardware.
                     for u in [-.25,.25]:portal_face('metal',u-.03125,1,u+.03125,1.5,.09375)
             # Low rooftop plant is streamed with nearby street details, not the distant skyline.
+            # Keep one box per detail; cityCollision reads the cap corners and first wall base.
             plant=p.centroid;pw,pd=3.5,2.5
             if h>15 and p.covers(box(plant.x-pw/2,plant.y-pd/2,plant.x+pw/2,plant.y+pd/2).buffer(.5)):
                 x0,x1=plant.x-pw/2,plant.x+pw/2;z0,z1=plant.y-pd/2,plant.y+pd/2;y0=by+h-SIZE;y1=y0+1.25

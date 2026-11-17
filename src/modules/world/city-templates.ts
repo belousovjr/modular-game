@@ -1,6 +1,6 @@
 import type {ObjectTemplate} from '../object-templates/index.ts';
 import type {GeometryPart} from '../geometry/index.ts';
-import {snapCityMeasure,steppedBuildingParts} from './headless.ts';
+import {snapCityMeasure,steppedBuildingParts,steppedBuildingCrownParts} from './headless.ts';
 
 const span={default:30,min:.1,max:1000};
 export const cityTemplates:readonly ObjectTemplate[]=[
@@ -17,13 +17,12 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       let silhouette:GeometryPart[]=tiers?.map(tier=>({...tier,surface}))??[body];
       if(profile==='willis') {
         crown.push(part(-width/6,height+35,-depth/6,.8,70,.8,'metal'),part(width/6,height+35,depth/6,.8,70,.8,'metal'));
-      } else if(profile==='trump'||profile==='tribune'||profile==='wrigley') {
-        if(profile==='trump')crown.push(part(0,height+24,0,.8,48,.8,'metal'));
-        if(profile==='tribune')for(const x of [-1,1])for(const z of [-1,1])crown.push(part(x*width*.22,height*.97,z*depth*.22,width*.08,height*.12,depth*.08));
-        if(profile==='wrigley')crown.push(part(0,height*1.015,0,width*.24,height*.03,depth*.24,'roof'));
+      } else if(profile==='trump') {
+        crown.push(part(0,height+24,0,.8,48,.8,'metal'));
       } else if(profile==='marina') {
         silhouette=[{...part(0,height/2,0,width*.96,height,depth*.96),radialSegments:16}];
       }
+      for(const p of steppedBuildingCrownParts(profile,width,depth,height))crown.push(part(...p.position,...p.size,profile==='wrigley'?'roof':surface));
       const detail:GeometryPart[]=[];
       if(profile==='marina')for(let y=4;y<height;y+=3.5)detail.push({...part(0,y,0,width,.18,depth,'foundation'),radialSegments:16});
       else for(const side of [-1,1])detail.push(part(0,2,side*(depth/2+.04),width*.75,3.6,.12,'city-glass'));

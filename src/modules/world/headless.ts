@@ -12,25 +12,33 @@ export interface CollisionWorld {
   readonly spawn: { readonly x: number; readonly z: number };
 }
 
+const buildingPart=(x:number,y:number,z:number,w:number,h:number,d:number)=>({
+  position:[x,y,z] as const,
+  size:[w,h,d] as const,
+});
+
 export function steppedBuildingParts(profile:string,width:number,depth:number,height:number) {
-  const part=(x:number,y:number,z:number,w:number,h:number,d:number)=>({
-    position:[x,y,z] as const,
-    size:[w,h,d] as const,
-  });
   if(profile==='willis'){
     return [.52,.72,.92,.72,1,.92,.52,.72,.52].map((scale,i)=>{
       const h=height*scale;
-      return part((i%3-1)*width/3,h/2,(Math.floor(i/3)-1)*depth/3,width/3,h,depth/3);
+      return buildingPart((i%3-1)*width/3,h/2,(Math.floor(i/3)-1)*depth/3,width/3,h,depth/3);
     });
   }
   if(profile==='trump'||profile==='wrigley'||profile==='tribune'){
     return [
-      part(0,height*.27,0,width,height*.54,depth),
-      part(0,height*.69,0,width*.72,height*.3,depth*.72),
-      part(0,height*.92,0,width*.42,height*.16,depth*.42),
+      buildingPart(0,height*.27,0,width,height*.54,depth),
+      buildingPart(0,height*.69,0,width*.72,height*.3,depth*.72),
+      buildingPart(0,height*.92,0,width*.42,height*.16,depth*.42),
     ];
   }
   return null;
+}
+
+export function steppedBuildingCrownParts(profile:string,width:number,depth:number,height:number) {
+  if(profile==='wrigley')return [buildingPart(0,height*1.015,0,width*.24,height*.03,depth*.24)];
+  if(profile==='tribune')return [-1,1].flatMap(x=>[-1,1].map(z=>
+    buildingPart(x*width*.22,height*.97,z*depth*.22,width*.08,height*.12,depth*.08)));
+  return [];
 }
 
 export const snapCityMeasure=(value:number,step:number)=>Math.round(value/step)*step;
@@ -72,6 +80,15 @@ export function cityCollision(city:CitySource):CollisionWorld {
       (mesh.surface==='water'?water:triangles).push([mesh.positions[a],mesh.positions[a+1],mesh.positions[a+2],mesh.positions[b],mesh.positions[b+1],mesh.positions[b+2],mesh.positions[c],mesh.positions[c+1],mesh.positions[c+2]]);
     }
   }
+  const rooftopBlockers:CollisionBox[]=[];
+  for(const chunk of city.chunks)for(const detail of chunk.details??[]){
+    const cap=detail.meshes.find(m=>m.surface==='roof');
+    const walls=detail.meshes.find(m=>m.surface==='foundation');
+    if(!cap||!walls)continue;
+    // prepare-downtown emits one rectangular plant per detail, with a cap quad and four walls.
+    const v=cap.positions;
+    rooftopBlockers.push({id:`${detail.id}/roof-plant`,minX:v[0],maxX:v[6],minZ:v[2],maxZ:v[8],minY:walls.positions[1],maxY:v[1]});
+  }
   const furniture=city.placements.flatMap(p=>{
     const size=p.templateId==='city/bench'?[3,.75,1.25]:p.templateId==='city/planter'?[5,2.5,.75]:p.templateId==='city/bollard'?[.5,.5,1]:null;
     if(!size)return [];
@@ -90,11 +107,13 @@ export function cityCollision(city:CitySource):CollisionWorld {
     const placement=placements.get(source.id);
     if(placement){
       const {width,depth,height,foundation}=placement.parameters;
-      const tiers=steppedBuildingParts(placement.templateId.slice('city/'.length),width,depth,height);
+      const profile=placement.templateId.slice('city/'.length);
+      const tiers=steppedBuildingParts(profile,width,depth,height);
       if(tiers){
         const [x,y,z]=placement.position;
         const angle=snapCityMeasure(placement.rotation[1],Math.PI/12),c=Math.cos(angle),s=Math.sin(angle);
-        return [...tiers,{position:[0,-foundation/2,0],size:[width,foundation,depth]}].map((part,index)=>{
+        return [...tiers,buildingPart(0,-foundation/2,0,width,foundation,depth),
+          ...steppedBuildingCrownParts(profile,width,depth,height)].map((part,index)=>{
           const [cx,cy,cz]=part.position.map(v=>snapCityMeasure(v,.125));
           const [w,h,d]=part.size.map(v=>Math.max(.25,snapCityMeasure(v,.25)));
           const outline=[[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]]
@@ -113,7 +132,7 @@ export function cityCollision(city:CitySource):CollisionWorld {
       minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),
     }));
   });
-  const blockers=[...buildingBlockers,...furniture,...trees,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
+  const blockers=[...buildingBlockers,...rooftopBlockers,...furniture,...trees,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
     const [x,y,z]=p.position;
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];

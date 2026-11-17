@@ -198,7 +198,7 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
   }
 });
 
-test('closed street doors are near-only batched detail while roof plant remains',()=>{
+test('closed street doors are near-only detail and rooftop plants have matching permanent blockers',()=>{
   let roofs=0,doors=0;
   for(const chunk of citySource.chunks)for(const m of [...chunk.meshes,...(chunk.details??[]).flatMap(d=>d.meshes)]){
     if(m.surface==='facade'){
@@ -230,11 +230,39 @@ test('closed street doors are near-only batched detail while roof plant remains'
 
   const world=cityCollision(citySource);
   assert.ok(world.triangles);
-  // Roof plant tops are visual detail, never a new authority walking plane.
-  for(const c of citySource.chunks)for(const m of (c.details??[]).flatMap(d=>d.meshes))if(m.surface==='roof'){
-    const x=m.positions[0],y=m.positions[1],z=m.positions[2];
+  const plants=new Map(world.blockers.filter(b=>b.id.endsWith('/roof-plant')).map(b=>[b.id,b]));
+  assert.equal(plants.size,roofs);
+  for(const c of citySource.chunks)for(const detail of c.details??[]){
+    const roof=detail.meshes.find(m=>m.surface==='roof');
+    if(!roof)continue;
+    const walls=detail.meshes.find(m=>m.surface==='foundation');assert.ok(walls);
+    const id=`${detail.id}/roof-plant`;
+    const axis=(n:number)=>walls.positions.filter((_,i)=>i%3===n);
+    assert.deepEqual(plants.get(id),{id,minX:Math.min(...axis(0)),maxX:Math.max(...axis(0)),minY:Math.min(...axis(1)),maxY:Math.max(...axis(1)),minZ:Math.min(...axis(2)),maxZ:Math.max(...axis(2))});
+    const [x,y,z]=roof.positions;
     assert.equal(world.triangles.some(t=>t[0]===x&&t[1]===y&&t[2]===z),false);
   }
+
+  const plant=[...plants.values()].find(b=>b.id.includes('/detail/osm/'));assert.ok(plant);
+  const host=world.blockers.find(b=>b.id===plant.id.slice(`${citySource.id}/detail/`.length,-'/roof-plant'.length));assert.ok(host);
+  const actor=createCharacterAuthorityFactory(world)();
+  const z=(plant.minZ+plant.maxZ)/2;
+  actor.setVehicleFrame({blocker:plant,pose:null,release:{x:plant.minX-1,y:host.maxY,z,yaw:0}});
+  actor.setVehicleFrame(null);
+  for(let tick=1;tick<=40;tick++){
+    if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:false,jump:false},'local').accepted);
+    actor.step(tick);
+  }
+  assert.ok(Math.abs(actor.snapshot().x-(plant.minX-.35))<.04,JSON.stringify(actor.snapshot()));
+  assert.equal(actor.snapshot().y,host.maxY);
+  actor.setVehicleFrame({blocker:plant,pose:null,release:{x:(plant.minX+plant.maxX)/2,y:plant.maxY+2,z,yaw:0}});
+  actor.setVehicleFrame(null);
+  for(let tick=41;tick<=90;tick++){
+    if(tick%6===5)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:0,z:0,run:false,jump:false,locomotion:{flight:tick===41?true:null,lift:-1,boost:false}},'local').accepted);
+    actor.step(tick);
+  }
+  assert.equal(actor.snapshot().y,plant.maxY);
+  assert.ok(actor.snapshot().grounded);
 });
 
 test('fixed Chicago review walk remains dry, unobstructed and uses metre-scale actors',()=>{
@@ -547,7 +575,7 @@ test('the Art Institute courtyard is open below the surrounding facade and landm
     for(const p of citySource.placements.filter(p=>p.templateId===template.id)){
       const volumes=world.blockers.filter(b=>b.id===p.key||b.id.startsWith(p.key+'/volume/'));
       const model:import('../src/modules/object-templates/index.ts').TemplateContent=toCityGrid(template).build(p.parameters);
-      const count=profile==='willis'?10:4;
+      const count={willis:10,trump:4,wrigley:5,tribune:8}[profile];assert.ok(count);
       assert.equal(volumes.length,count);
       for(let i=0;i<count;i++){
         const part=model.levels[1].parts[i],volume=volumes[i],y=p.position[1]+(part.position?.[1]??0);
