@@ -452,3 +452,17 @@ test('Marina twins share dimensions, orientation, floor phase and matching radia
     assert.ok(collider.outline.every(([x,z])=>Math.abs(Math.hypot(x-p.position[0],z-p.position[2])-13.25)<.001));
   }
 });
+
+test('aviation lights mark only the five tallest buildings and follow snapped antenna tips',async()=>{
+  const {aviationLightPositions}=await import('../src/modules/world/aviation-lights.ts');
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const anchors=aviationLightPositions(citySource,p=>{
+    const template=cityTemplates.find(t=>t.id===p.templateId);
+    assert.ok(template);
+    return toCityGrid(template).build(p.parameters).levels[0].parts;
+  });
+  assert.equal(anchors.length,6);
+  assert.deepEqual(anchors.map(p=>p[1]).sort((a,b)=>a-b),[308.9,313.4,350.15,476.65,515.4,515.4]);
+  const willis=anchors.filter(p=>p[1]>500);
+  assert.ok(Math.abs(willis[0][0]-willis[1][0])>20&&Math.abs(willis[0][2]-willis[1][2])>30);
+});

@@ -9,6 +9,7 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
+import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
 import district from './data/downtown/district.json' with {type:'json'};
 import {cityCollision} from './headless.ts';
@@ -28,6 +29,8 @@ export const worldModule = defineModule({
     const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+city.placements.filter(p=>p.position[0]>=c.bounds.minX&&p.position[0]<c.bounds.maxX&&p.position[2]>=c.bounds.minZ&&p.position[2]<c.bounds.maxZ).length}));
     for(const template of cityTemplates)deps.templates.register(toCityGrid(template),scope);
     for (const template of worldTemplates) deps.templates.register(template.id==='world/lamp'?toCityGrid(template):template, scope);
+    const aviationLights=aviationLightPositions(city,p=>deps.templates.resolve(p.templateId,p.parameters).levels[0].parts);
+    const updateAviationLights=createAviationLights(core.scene,scope,aviationLights);
     const buildings = new Set<ReturnType<typeof deps.rendering.createObject>>();
     const lamps: typeof buildings = new Set();
     const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass');
@@ -116,6 +119,7 @@ export const worldModule = defineModule({
     }
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
       const point=deps.rendering.getDistanceOrigin();
+      updateAviationLights(point);
       for(const view of surfaceViews){
         const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
         view.visibility.setVisible(distance<=(view.visibility.isVisible()?view.unload:view.load),!point);
