@@ -19,7 +19,10 @@ export class WaterSurface extends MaterialPluginBase {
 }
 export class CityFacade extends MaterialPluginBase {
   constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false},true,true);this.doNotSerialize=true;}
+  night=0;
   getClassName(){return 'CityFacade';}
+  getUniforms(){return {ubo:[{name:'cityNight',size:1,type:'float'}]};}
+  bindForSubMesh(buffer:UniformBuffer){buffer.updateFloat('cityNight',this.night);}
   getAttributes(attributes:string[]){for(const name of ['uv','normal'])if(!attributes.includes(name))attributes.push(name);}
   prepareDefinesBeforeAttributes(defines:MaterialDefines,_scene:Scene,mesh:AbstractMesh){defines.FITTED_SURFACE_UV=mesh.metadata?.fittedUV===true;}
   getCustomCode(type:string):Record<string,string>|null{
@@ -45,7 +48,9 @@ export class CityFacade extends MaterialPluginBase {
     };
     return type==='fragment'?{
       CUSTOM_FRAGMENT_DEFINITIONS:'varying vec2 vCityUV;',
+      CUSTOM_FRAGMENT_BEFORE_FOG:'color.rgb+=cityWindowGlow;',
       CUSTOM_FRAGMENT_BEFORE_LIGHTS:`
+        vec3 cityWindowGlow=vec3(0.);
         if(vCityUV.x<-.5){
           if(vCityUV.x<-2.5)baseColor.rgb*=1.12;
           else if(vCityUV.x<-1.5)diffuseColor=vec3(.9);
@@ -61,6 +66,14 @@ export class CityFacade extends MaterialPluginBase {
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
           vec3 glazing=baseColor.rgb*vec3(.20,.29,.34)+vec3(.035,.055,.065);
           baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));
+          if(cityNight>.001){
+          vec2 room=floor(cell)+floor(vPositionW.xz/64.);
+          float occupied=fract(sin(dot(room,vec2(12.9898,78.233)))*43758.5453);
+          vec3 warm=mix(vec3(.58,.54,.46),vec3(.49,.52,.53),step(.985,occupied));
+          float interior=(.45+.35*fract(cell.y))*(.85+.15*step(.15,fract(cell.y*8.)));
+          float bright=mix(.25,1.,step(.975,occupied));
+          cityWindowGlow=warm*cityNight*window*(1.-mullion*.9)*smoothstep(.87,.90,occupied)*interior*bright*1.0;
+          }
         }
       `,
     }:null;

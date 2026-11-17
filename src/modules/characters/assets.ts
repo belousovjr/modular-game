@@ -5,7 +5,8 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
-import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+import { Frustum } from '@babylonjs/core/Maths/math.frustum.js';
+import { Quaternion, Vector3, Matrix } from '@babylonjs/core/Maths/math.vector.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { AssetContainer, InstantiatedEntries } from '@babylonjs/core/assetContainer.js';
 import { Animation } from '@babylonjs/core/Animations/animation.js';
@@ -20,13 +21,20 @@ import manifest from '../../../public/models/human/manifest.json' with { type: '
 export interface AssetStatus { readonly state: 'loading' | 'ready' | 'error'; readonly error: string | null }
 export function createCharacterAssets(scene: Scene, owner: Scope) {
   const createShadowProxy=createCharacterShadowSource(scene,owner);
+  const frustum=Frustum.GetPlanes(Matrix.Identity()),center=Vector3.Zero();let frustumFrame=-1,frustumCamera=scene.activeCamera;
+  const shouldAnimate=(x:number,y:number,z:number)=>{
+    const camera=scene.activeCamera;if(!camera)return true;camera.getViewMatrix();
+    if(Math.hypot(camera.globalPosition.x-x,camera.globalPosition.y-y,camera.globalPosition.z-z)>120)return false;
+    const frame=scene.getEngine().frameId;if(frame!==frustumFrame||camera!==frustumCamera){camera.getProjectionMatrix();Frustum.GetPlanesToRef(camera.getTransformationMatrix(),frustum);frustumFrame=frame;frustumCamera=camera;}
+    center.set(x,y+.9,z);return frustum.every(plane=>plane.dotCoordinate(center)>-3);
+  };
   const controller = new AbortController();
   let stopped = false, source: AssetContainer | null = null;
   let status: AssetStatus = Object.freeze({ state:'loading', error:null });
   const listeners = new Set<() => void>();
   owner.onDispose(() => { stopped = true; controller.abort(); listeners.clear(); source?.dispose(); source=null; });
   const ready = (async () => {
-    const response = await fetch(`${import.meta.env.BASE_URL}models/human/character.glb`,{ signal:controller.signal });
+    const response = await fetch(`${import.meta.env?.BASE_URL??'/'}models/human/character.glb`,{ signal:controller.signal });
     if (!response.ok) throw new Error(`GLB: HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (stopped) return null;
@@ -48,7 +56,7 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
     return null;
   });
   const reportError=(error:unknown)=>{if(!stopped){status=Object.freeze({state:'error',error:error instanceof Error?error.message:String(error)});for(const listener of listeners)listener();}};
-  return { ready, reportError, createShadowProxy, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  return { ready, reportError, createShadowProxy, shouldAnimate, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 
 export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope) {
@@ -92,6 +100,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   };
   const existing=assets.getContainer();if(existing)load(existing);else void assets.ready.then(load);
   let previous: CharacterSnapshot | null = null, speed=0;
+  const paused:AnimationGroup[]=[];scope.onDispose(()=>{paused.length=0;});
   return (s: CharacterSnapshot) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
@@ -100,6 +109,13 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
+    if(!assets.shouldAnimate(s.x,s.y,s.z)){
+      for(const group of entries.animationGroups)if(group.isPlaying){group.pause();paused.push(group);}
+      root.metadata.animationCulled=true;
+      if(root.rotationQuaternion)smoothCharacterRotation(root.rotationQuaternion,s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0),deltaMs,root.rotationQuaternion);
+      return;
+    }
+    for(const group of paused)group.restart();paused.length=0;root.metadata.animationCulled=false;
     const name=selectAnimation(s);
     const next=entries.animationGroups.find(group=>group.name.endsWith('/'+name));
     if (!next) return;

@@ -135,3 +135,11 @@ test('completed action keeps its final pose available for an ordinary animation 
     assert.ok(action.weight>0&&action.weight<1);assert.ok(target.position.x>0&&target.position.x<1);
   }finally{scene.dispose();engine.dispose();}
 });
+
+test('animation visibility ignores distant and offscreen avatars without changing their simulation',async()=>{
+ const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');const {Scene}=await import('@babylonjs/core/scene.js');const {FreeCamera}=await import('@babylonjs/core/Cameras/freeCamera.js');const {Vector3}=await import('@babylonjs/core/Maths/math.vector.js');const {createScope}=await import('../src/core/scope.ts');const {createCharacterAssets}=await import('../src/modules/characters/assets.ts');
+ const engine=new NullEngine(),scene=new Scene(engine),owner=createScope();try{const camera=new FreeCamera('view',new Vector3(0,2,-10),scene);camera.setTarget(new Vector3(0,1,0));camera.getViewMatrix(true);scene.activeCamera=camera;const assets=createCharacterAssets(scene,owner);
+  assert.equal(assets.shouldAnimate(0,0,0),true);assert.equal(assets.shouldAnimate(0,0,200),false);assert.equal(assets.shouldAnimate(0,0,-30),false);
+  camera.setTarget(new Vector3(0,1,-40));camera.getViewMatrix(true);engine.endFrame();assert.equal(assets.shouldAnimate(0,0,-30),true);assert.equal(assets.shouldAnimate(0,0,20),false);await assets.ready;
+ }finally{owner.dispose();scene.dispose();engine.dispose();}
+});

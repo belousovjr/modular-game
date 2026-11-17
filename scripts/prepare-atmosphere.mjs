@@ -1,0 +1,8 @@
+import sharp from 'sharp';import {readFile,writeFile,mkdir} from 'node:fs/promises';import {createHash} from 'node:crypto';
+const source=process.argv[2];if(!source)throw Error('Usage: node scripts/prepare-atmosphere.mjs <directory with chicago.jpg, moon.jpg, query.txt>');
+const out='public/textures/atmosphere';await mkdir(out,{recursive:true});const image=await sharp(source+'/chicago.jpg').removeAlpha().raw().toBuffer({resolveWithObject:true}),{width,height,channels}=image.info;
+// The service has no imagery for outer lake tiles; extend each row's last valid lake colour into nodata.
+for(let y=0;y<height;y++)for(let x=Math.floor(width/2)+1;x<width;x++){const i=(y*width+x)*channels;if(image.data[i]>250&&image.data[i+1]>250&&image.data[i+2]>250)for(let c=0;c<channels;c++)image.data[i+c]=image.data[i-channels+c];}
+await sharp(image.data,{raw:image.info}).webp({quality:86}).toFile(out+'/chicago.webp');await sharp(source+'/moon.jpg').resize(512,256).webp({quality:88}).toFile(out+'/moon.webp');
+const manifest={aerial:{url:(await readFile(source+'/query.txt','utf8')).trim(),credit:'USGS, USDA, The National Map — public-domain orthoimagery',spanMeters:18000,origin:[-87.63075,41.88425],nodata:'White missing lake tiles extended from valid colour on the same row'},moon:{url:'http://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_1k.jpg',credit:'NASA / GSFC / Arizona State University, LRO LROC, CGI Moon Kit; public domain'},files:{}};
+for(const file of ['chicago.webp','moon.webp']){const bytes=await readFile(out+'/'+file);manifest.files[file]={bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};}await writeFile(out+'/manifest.json',JSON.stringify(manifest,null,2)+'\n');console.log(manifest.files);

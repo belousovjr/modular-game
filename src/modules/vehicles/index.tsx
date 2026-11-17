@@ -10,11 +10,12 @@ import {createVehicleAuthority,createVehicleConnection,type VehicleSnapshot,type
 import {createCarView} from './view.ts';
 import type {CoreContext} from '../../core/context.ts';
 const feedback:Record<string,string>={'overturned':'В перевёрнутую машину сесть нельзя','too-far':'Подойдите к водительской двери','blocked-exit':'Слева нет безопасного места для выхода','blocked-door':'Подход к двери перекрыт','unavailable':'Действие сейчас недоступно','driver':'Сначала сядьте за руль'};
+const phaseLabels:Record<VehicleSnapshot['phase'],string>={parked:'Припаркована',approaching:'Подход к двери',entering:'Посадка',driving:'За рулём',exiting:'Выход'};
 function VehicleInfo({read,onFrame}:{read:()=>{snapshot:VehicleSnapshot;state:string;error:string};onFrame:CoreContext['onFrame']}){
   const [state,setState]=useState(read);
   useEffect(()=>{let elapsed=0;const observer=onFrame.add(delta=>{elapsed+=delta;if(elapsed>=200){elapsed=0;setState(read());}});return()=>{onFrame.remove(observer);};},[read,onFrame]);
   return <><Text as="p" size="2">E — сесть / выйти. O — левая дверь, Shift+O — правая. WASD — ехать и поворачивать. Space — тормоз. Выход доступен и на ходу.</Text><DataList.Root>
-    <DataList.Item><DataList.Label>Машина</DataList.Label><DataList.Value>{state.state==='ready'?state.snapshot.phase:state.state}</DataList.Value></DataList.Item>
+    <DataList.Item><DataList.Label>Машина</DataList.Label><DataList.Value>{state.state==='ready'?phaseLabels[state.snapshot.phase]:state.state==='loading'?'Загрузка':'Ошибка'}</DataList.Value></DataList.Item>
     <DataList.Item><DataList.Label>Скорость</DataList.Label><DataList.Value>{(state.snapshot.speed*3.6).toFixed(0)} км/ч</DataList.Value></DataList.Item>
   </DataList.Root>{(state.error||state.snapshot.message)&&<Text as="p" color="red">{state.error||feedback[state.snapshot.message]||state.snapshot.message}</Text>}</>;
 }

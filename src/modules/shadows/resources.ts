@@ -1,5 +1,6 @@
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent.js';
 import { CascadedShadowGenerator } from '@babylonjs/core/Lights/Shadows/cascadedShadowGenerator.js';
+import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator.js';
 import { Frustum } from '@babylonjs/core/Maths/math.frustum.js';
@@ -157,7 +158,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
     const camera = scene.activeCamera;
     const viewProjection = camera?.getTransformationMatrix();
     const revisions = casters.map(casterRevision);
-    const uncached = casters.some(mesh => !(mesh.material instanceof StandardMaterial) || mesh.material.needAlphaTesting() || mesh.material.needAlphaBlendingForMesh(mesh) || mesh.material.shadowDepthWrapper || mesh.skeleton || mesh.morphTargetManager);
+    const uncached = casters.some(mesh => (!(mesh.material instanceof StandardMaterial)&&!(mesh.material instanceof PBRMaterial&&mesh.metadata?.shadowStaticMaterial===true)) || !mesh.material || mesh.material.needAlphaTesting() || mesh.material.needAlphaBlendingForMesh(mesh) || mesh.material.shadowDepthWrapper || mesh.skeleton || mesh.morphTargetManager);
     const dirty = uncached || enabled !== previousEnabled || (cascaded && (camera !== previousCamera || !viewProjection || !viewProjection.equals(previousView))) ||
       !sun.direction.equals(previousDirection) || !sun.position.equals(previousPosition) || casters.length !== previousCasters.length ||
       casters.some((mesh, index) => mesh !== previousCasters[index] || revisions[index].some((value, key) => value !== previousRevisions[index]?.[key]));

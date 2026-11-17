@@ -652,3 +652,50 @@ Independent scoped GPU fixture used the same car/avatar renderers and unchanged 
 Correction to the earlier crawl visual check: the broad source-name suffix `Door` assigned `door/right` both to `Interior Door` and the actual `R Door`. The renderer selected the interior part first, so the numeric right-door angle changed while the exterior door stayed closed. The earlier check of the snapshot angle did not establish that the actual exterior mesh opened.
 
 The builder now names only `L Door`/`R Door` as functional doors. Interior Door remains a body node; offline preparation, asset regression and loader all require unique exterior-door IDs. Car geometry/texture budgets remain 3442 triangles/two materials with the same maps. The repeated overturned-car GPU run asserts quaternion rotation of the real exterior right-door transform (y≈0.544 at angle 1.15), visually shows the open doorway while crawling and the door remaining open afterward. Browser errors=0 under the existing 2 GiB cap. 144 tests/check/build passed. No full-city performance rerun for this node-name correction.
+
+
+### Local visual demo, atmosphere and animation visibility — 2026-11-17
+
+Production build, real RTX 3050 Laptop through ANGLE/D3D12, Chromium 1280×720 DPR 1, uncapped. Full city, materials, unchanged 3×1024 shadows/1400 m, player camera/hero, 8 NPC, Cannon car, optional atmosphere; ground/beacon also enabled. Runs sequential, no concurrent builds. Browser V8 limit 512 MiB, Node 256 MiB, whole cgroup MemoryMax=2 GiB/no swap/timeout. Host background load/power remain uncontrolled. Optional atmosphere does not change the saved module selection or default set.
+
+| View | Average FPS | P95 frame ms |
+| --- | ---: | ---: |
+| Day Daley Plaza | 83.1 | 21.9 |
+| Day Clark Street | 86.6 | 20.9 |
+| Day skyline | 92.3 | 16.7 |
+| Night Daley Plaza | 101.0 | 15.2 |
+| Night skyline | 106.3 | 15.9 |
+
+These five samples are 2.2 s each after warmup, not a sustained 100 FPS guarantee. Peak cgroup 1649508352 bytes; OOM=0, browser errors=0. The earlier same views measured 78–102 FPS before animation culling but used a 256 MiB V8 cap: that comparison is confounded and does not isolate optimisation gain. Existing average>=30 threshold is unchanged; 100+ everywhere remains unachieved.
+
+Optimisations: opaque, explicitly tagged static PBR car materials now participate in the existing shadow cache; transforms/LOD/light and alpha/skeleton/morph cases still invalidate. Character native animation groups pause outside the camera frustum (3 m margin) or beyond 120 m and resume with preserved weights/ordinary crossfade. Authority/NPC movement, root rotation and collision continue; no character meshes or skeletons are recreated. Shared camera/frustum cache once per frame. Node regressions cover visibility/rotation/distance and PBR cache invalidation.
+
+One sphere/draw, two shared atmosphere textures (268190 bytes WebP); local USGS aerial 18 km square and NASA LRO moon, provenance/hashes/rebuild in public/textures/atmosphere. Daytime-dependent EXP2 haze, analytic sun, textured moon and sparse stars; artistic celestial path, not astronomical simulation. Night glazing uses the existing textured facade UV/window mask and shader emission with blinds/interior variation; no per-window mesh, light or render target. Lamp emission follows time. Night windows stay visually tied to their UV cells; the same normal/AO materials remain shared.
+
+Two atmosphere on/off cycles measured 71.8 FPS on versus 72.1 off in the same view, P95 33.4/33.0 ms (short noisy samples, no guaranteed isolated cost). Both on states had exactly 348 meshes / 230 geometries / 30 materials / 30 textures / 9 skeletons / 2 lights; off states 336/218/29/28/9/2. Peak 879554560 bytes, OOM=0, errors=0. The toggles recreate the selected scene through the existing manager; the full difference includes warmed streaming sections, not just sky geometry.
+
+Ordinary keyboard flow verified approach/Car_Enter → Driving_Loop → accelerate 3.8 m in 1 s → moving Car_Exit → Idle → walking down the 0.25 m curb → Jump_Loop. No direct authority/mesh-position mutation. Then native scoped scenarios ran in the same city with car/atmosphere and the normal 8 NPC:
+
+| Scoped test | Total characters | Average FPS | P95 frame ms | Check |
+| --- | ---: | ---: | ---: | --- |
+| characters | 25 | 70.6 | 20.0 | visibleMin 17, run/jump |
+| npc | 25 | 75.2 | 19.4 | visibleMin 16, moving 15, arrivals 9 |
+| atmosphere | 9 | 91.8 | 16.5 | all hours, 2 textures ready, 0 errors |
+
+Each test restores 9 skeletons / 30 textures; temporary 16 bone textures are released. Peak 1628438528 bytes, OOM=0, browser errors=0. Keep default 8 NPC; 24 is a stress scenario. No new foot IK or avoidance between people; exact planted feet on every incline are not claimed. Single-city character/car trace does not replace exhaustive driving/animation QA.
+
+District route persisted in world/data/downtown/review-route.json: Michigan, South Clark, River Wacker, West Lake, return Daley Plaza. Two continuous loops (4 s travel per leg, including streaming costs) measured 81.6–85.7 average FPS, P95 17.9–30.4 ms. Both returns exactly 396 meshes / 241 geometries / 30 materials / 30 textures / 9 skeletons / 2 lights. Peak 1658757120 bytes, OOM=0, browser errors=0. Existing territory only; no new unmeasured expansion. Cold transitions still have individual ~47–52 ms frames; average FPS does not erase these hitches.
+
+
+Extended return test: **eight complete district loops**, 40 continuous legs plus warmup/stops/screenshots over several minutes. Every return had the same 396/241/30/30/9/2 resource counts above; only the number of animation-culled NPC varied with patrol phase. Average per leg 70.4–84.2 FPS, worst P95 33.5 ms. Cgroup peak 958087168 bytes, OOM=0, browser errors=0; same 2 GiB cap. This is evidence against resource accumulation on repeated routes, not proof of no possible leak or an overnight soak. Earlier combined tour/reset automation timed out; split tour and scene-reset checks subsequently completed. Do not interpret that automation timeout as established OOM.
+
+
+### Distant terrain backbone and quieter night windows — 2026-11-17
+
+At the user's revised request, no decorative outer skyline was added. World merges canonical urban-ground/terrain/road/sidewalk/water/riverbed triangles by 1024 m region and material, with the tall-building 1200/1400 m load/unload range. At most 24 merged meshes for this dataset; these surfaces are removed from the near chunk batches, so there is no second coplanar layer. Heights, river cutout, triangles and authority collision are unchanged. Curbs, painted markings and vertical banks stay 192/256 m; props and building LOD keep their previous ranges. The existing textured materials, baked AO, normals and distance mip bias remain shared. Horizontal surfaces receive shadows but do not add casters. This extends coverage within the current map only.
+
+Night facade coverage decreases from roughly 38% to 10–13%; most illuminated rooms are another 4× dimmer than the rare brighter ones. Neutral warm grey/cool grey replaces the saturated orange/blue. chicago-test was read as an aesthetic reference (10–15% coverage, mostly dim emission); no assets/code were copied or edited there. The same UV mask/hash/blinds remain, with no new samplers/draw calls.
+
+Same full city/8 NPC/car/atmosphere, RTX 3050 Laptop ANGLE/D3D12, 1280×720 uncapped, 512 MiB V8 / 256 MiB Node / 2 GiB cgroup cap, no swap, sequential GPU samples (2.2 s each): day plaza 84.7 FPS / P95 30.9 ms, day street 89.1 / 18.5, day skyline 97.1 / 15.7, night plaza 103.0 / 15.0, night skyline 107.8 / 14.7. Earlier five views were 83.1/86.6/92.3/101.0/106.3 FPS. Host variation and short samples do not establish an isolated improvement; the day-plaza P95 is worse in this sample, so no claim that all frame hitches improved. Peak 1703358464 bytes, OOM=0, browser errors=0. Visually checked ground continuity, river/park coverage, elevated views and subdued night glazing. Nightly soak was not repeated for this change.
+
+Two district loops with the new backbone: 65.9–84.8 average FPS per continuous 4 s leg, worst P95 33.7 ms. Both returns exactly 365 meshes / 210 geometries / 30 materials / 30 textures / 9 skeletons / 2 lights, including 22 distant ground packets. Peak 950587392 bytes, OOM=0, errors=0. No resource growth across these returns; this is not a long soak or an isolated same-session A/B benchmark. 149 Node tests/check/build pass.

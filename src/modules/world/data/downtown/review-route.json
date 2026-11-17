@@ -1,6 +1,6 @@
 {
   "id": "loop-clark-randolph-daley-v1",
-  "description": "Clark Street → Randolph intersection → Daley Plaza; roof and skyline checks",
+  "description": "Clark Street → Randolph intersection → Daley Plaza; roof and skyline checks; extended local demonstration: Michigan, South Clark, River/Wacker and West Lake",
   "views": [
     {
       "id": "street",
@@ -98,5 +98,59 @@
       78,
       -82
     ]
+  ],
+  "districtViews": [
+    {
+      "id": "michigan",
+      "position": [
+        517,
+        5,
+        -220
+      ],
+      "target": [
+        515,
+        8,
+        -110
+      ]
+    },
+    {
+      "id": "south-clark",
+      "position": [
+        -5,
+        5,
+        -515
+      ],
+      "target": [
+        -4,
+        8,
+        -445
+      ]
+    },
+    {
+      "id": "river-wacker",
+      "position": [
+        225,
+        8,
+        286
+      ],
+      "target": [
+        180,
+        3,
+        350
+      ]
+    },
+    {
+      "id": "west-lake",
+      "position": [
+        -690,
+        8,
+        164
+      ],
+      "target": [
+        -600,
+        5,
+        165
+      ]
+    }
   ]
 }

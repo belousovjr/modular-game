@@ -154,3 +154,21 @@ test('world places persistent generated content, keeps fallback styling without 
     assert.equal(scene.onBeforeRenderObservable.hasObservers(), false);
   }
 });
+
+test('distant ground batches preserve canonical geometry and avoid per-tile draws',async()=>{
+  const {groupDistantSurfaces,distantSurfaces}=await import('../src/modules/world/distant-surfaces.ts');
+  const {citySource}=await import('../src/modules/world/city.ts');
+  const groups=groupDistantSurfaces(citySource);
+  assert.ok(groups.length<=24);
+  for(const surface of distantSurfaces){
+    const source=citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface===surface)),batches=groups.filter(g=>g.surface===surface);
+    assert.equal(batches.reduce((n,m)=>n+m.positions.length,0),source.reduce((n,m)=>n+m.positions.length,0));
+    assert.equal(batches.reduce((n,m)=>n+m.indices.length,0),source.reduce((n,m)=>n+m.indices.length,0));
+    for(const batch of batches)assert.ok(batch.indices.every(i=>i>=0&&i<batch.positions.length/3));
+  }
+  const chunk=citySource.chunks[0];
+  const triangle={surface:'water',positions:[0,0,0,1,0,0,0,0,1],indices:[0,1,2]};
+  const paired=groupDistantSurfaces({...citySource,chunks:[{...chunk,meshes:[triangle,{...triangle,positions:triangle.positions.map((v,i)=>i%3===0?v+2:v)}]}]});
+  assert.deepEqual(paired[0].indices,[0,1,2,3,4,5]);
+  assert.ok(!distantSurfaces.has('curb')&&!distantSurfaces.has('marking'));
+});

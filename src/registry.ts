@@ -1,3 +1,4 @@
+import { atmosphereModule } from './modules/atmosphere/index.tsx';
 import { groundModule } from './modules/ground/index.ts';
 import { beaconModule } from './modules/beacon/index.ts';
 import { simulationModule } from './modules/simulation/index.tsx';
@@ -14,5 +15,5 @@ import { charactersModule } from './modules/characters/index.ts';
 import { playerControlModule } from './modules/player-control/index.ts';
 import { npcModule } from './modules/npc/index.ts';
 import { vehiclesModule } from './modules/vehicles/index.tsx';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule, charactersModule, playerControlModule, npcModule, vehiclesModule];
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, materialsModule, shadowsModule, charactersModule, playerControlModule, npcModule, vehiclesModule, atmosphereModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

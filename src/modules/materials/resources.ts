@@ -20,6 +20,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   const tints=new Map<StandardMaterial,Color3>();scope.onDispose(()=>tints.clear());
   const materials = new Map<string, readonly StandardMaterial[]>();
   let stopped = false;
+  const facades:CityFacade[]=[];
   let snapshot: MaterialsSnapshot = { materials: 0, textures: 0, loading: 0, failed: 0, estimatedBytes: 0, errors: [] };
   function publish() {
     if (stopped) return;
@@ -80,7 +81,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     if(surface==='marking'){material.zOffset=-1;material.zOffsetUnits=-2;}
     if(surface==='bank')material.backFaceCulling=false;
     if (surface==='water') { material.alpha=.88;material.specularColor=Color3.FromHexString('#a3c2c2');material.specularPower=80;material.backFaceCulling=false;new WaterSurface(material); }
-    if (surface.startsWith('city-')) new CityFacade(material);
+    if (surface.startsWith('city-')) facades.push(new CityFacade(material));
     if (surface==='signal-red') material.emissiveColor=Color3.FromHexString('#a3200b');
     if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
     if (style.texture) {
@@ -97,6 +98,12 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   scope.onDispose(() => { stopped = true; changed.clear(); });
   return {
     getSnapshot: () => snapshot,
+    setNightFactor(value:number|null){
+      if(stopped)throw new Error('Материалы остановлены');
+      if(value!==null&&(!Number.isFinite(value)||value<0||value>1))throw new Error('Night factor must be between 0 and 1');
+      for(const facade of facades)facade.night=value??0;
+      const lamp=materials.get('lamp-head')?.[0];if(lamp)lamp.emissiveColor=value===null?Color3.FromHexString(surfaces['lamp-head'].color):Color3.FromHexString('#ffd7a0').scale(.1+.9*value);
+    },
     subscribe(listener: () => void) {
       if (stopped) throw new Error('Материалы остановлены');
       const observer = changed.add(listener);

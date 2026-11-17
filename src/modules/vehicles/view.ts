@@ -35,7 +35,7 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
     }
     root.scaling.y=1.04; // Extra cabin clearance; detached wheels retain their authored shape.
     const meshes=container.meshes.filter((m):m is Mesh=>m instanceof Mesh&&m.getTotalVertices()>0);
-    for(const mesh of meshes){mesh.isPickable=false;mesh.metadata={...mesh.metadata,shadowNearOnly:true,shadowCaster:mesh.material?.name!=='car/glass'};}
+    for(const mesh of meshes){mesh.isPickable=false;mesh.metadata={...mesh.metadata,shadowNearOnly:true,shadowStaticMaterial:mesh.material?.name==='car/textured',shadowCaster:mesh.material?.name!=='car/glass'};}
     geometry.registerMeshes(meshes,scope);status='ready';root.metadata={assetStatus:status,triangles:manifest.triangles};
   })().catch((e:unknown)=>{if(!stopped){status='error';error=e instanceof Error?e.message:String(e);root.metadata={assetStatus:status,error};}});
   return {ready,status:()=>({state:status,error}),render(s:VehicleSnapshot){

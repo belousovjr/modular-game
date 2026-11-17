@@ -1,3 +1,5 @@
+import {createElement} from 'react';
+import {ControlPanel} from './panel.tsx';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
@@ -10,6 +12,7 @@ export const playerControlModule = defineModule({
   id: 'player-control', title: 'Управление персонажем', category: 'Игра',
   requires: { characters: charactersModule, rendering: objectRenderingModule, world: worldModule },
   setup({ core, deps, scope }) {
+    scope.onDispose(core.panels.register('player-control','Управление',createElement(ControlPanel)));
     const previous = core.scene.activeCamera;
     const canvas = core.scene.getEngine().getRenderingCanvas();
     const camera = new ArcRotateCamera('player-camera', -Math.PI/2, 1.1, 6, Vector3.Zero(), core.scene);
