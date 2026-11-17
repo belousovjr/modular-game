@@ -9,7 +9,7 @@ test('atmosphere cycles locally, changes shared night materials and restores res
   const original={mode:scene.fogMode,density:scene.fogDensity,color:scene.fogColor.clone(),clear:scene.clearColor.clone()},counts={meshes:scene.meshes.length,materials:scene.materials.length,textures:scene.textures.length};
   const city=deps.geometry.getSurfaceMaterial('city-stone');assert.ok(city instanceof StandardMaterial);const facade=city.pluginManager?.getPlugin('CityFacade');assert.ok(facade instanceof CityFacade);
   for(let repeat=0;repeat<3;repeat++){
-   const owner=createScope(),api=createAtmosphere(scene,lighting,materials,onFrame,owner);assert.equal(scene.meshes.length,counts.meshes+1);assert.equal(scene.lights.length,2);
+   const owner=createScope(),api=createAtmosphere(scene,lighting,materials,onFrame,owner);assert.equal(scene.meshes.length,counts.meshes+1);assert.equal(scene.lights.length,2);assert.equal(scene.textures.length,counts.textures+1);
    api.setPlaying(false);lighting.setSettings({hour:0});assert.equal(facade.night,1);const nightFog=scene.fogColor.clone();lighting.setSettings({hour:12});assert.equal(facade.night,0);assert.ok(Math.hypot(...scene.fogColor.subtract(nightFog).asArray())>.1);
    onFrame.notifyObservers(1000);assert.equal(lighting.getSettings().hour,12);api.setPlaying(true);onFrame.notifyObservers(60000);assert.ok(Math.abs(lighting.getSettings().hour-13.2)<1e-8);
    const before:number=facade.night;assert.throws(()=>materials.setNightFactor(NaN));assert.equal(facade.night,before);
@@ -25,5 +25,5 @@ test('atmosphere colours remain continuous at midnight and local texture assets 
  const midnight=atmosphereColors(0),almost=atmosphereColors(23.999);assert.ok(Math.hypot(...midnight.horizon.subtract(almost.horizon).asArray())<.001);assert.equal(atmosphereColors(12).night,0);assert.equal(midnight.night,1);assert.throws(()=>atmosphereColors(NaN));
  const manifest=JSON.parse(readFileSync('public/textures/atmosphere/manifest.json','utf8'));let bytes=0;
  for(const [file,entry]of Object.entries<{bytes:number;sha256:string}>(manifest.files)){const buffer=readFileSync('public/textures/atmosphere/'+file);bytes+=buffer.length;assert.equal(createHash('sha256').update(buffer).digest('hex'),entry.sha256);assert.equal(buffer.length,entry.bytes);}
- assert.ok(bytes<400000);assert.equal(manifest.aerial.spanMeters,18000);
+ assert.ok(bytes<40000);assert.deepEqual(Object.keys(manifest.files),['moon.webp']);
 });
