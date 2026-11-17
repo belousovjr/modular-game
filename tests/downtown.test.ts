@@ -321,11 +321,11 @@ test('every landmark sheds detail early and strongly reduces its distant silhoue
 });
 
 
-test('coarse building batches are split by height with much shorter small-building ranges',()=>{
+test('coarse building ranges stay ordered and converge towards the unchanged tall-building range',()=>{
   const bands=district.buildingLod;
-  assert.ok(bands[0].unload<bands[1].load&&bands[1].unload<bands[2].load);
+  assert.ok(bands[0].unload<bands[1].load&&bands[1].unload<=bands[2].load);
   assert.equal(bands[2].load,1200);assert.equal(bands[2].unload,1400);
-  assert.ok(bands[0].unload<=220&&bands[1].unload<=480);
+  assert.deepEqual(bands.map(b=>[b.load,b.unload]),[[800,950],[1000,1200],[1200,1400]]);
   const surfaces=citySource.chunks.flatMap(c=>c.meshes).filter(m=>m.surface.startsWith('city-'));
   for(const band of bands)assert.ok(surfaces.some(m=>m.surface.endsWith('-'+band.id)));
   assert.ok(surfaces.every(m=>bands.some(b=>m.surface.endsWith('-'+b.id))));
