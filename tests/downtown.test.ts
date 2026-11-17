@@ -23,7 +23,7 @@ test('real downtown has deterministic source IDs, riverbed, complex roads and ma
   assert.ok(city.roads.some(r=>r.points.some((p,i)=>i>0&&Math.abs(p[0]-r.points[i-1][0])>1&&Math.abs(p[1]-r.points[i-1][1])>1)));
   for(const name of ['willis','marina','wrigley','tribune','trump'])assert.ok(city.placements.some(p=>p.templateId===`city/${name}`));
   const surfaces=new Set(city.chunks.flatMap(c=>c.meshes.map(m=>m.surface)));
-  for(const s of ['water','riverbed','bank','park-path','road','sidewalk','curb','marking'])assert.ok(surfaces.has(s));
+  for(const s of ['water','riverbed','bank','park-path','rail-ballast','rail-track','road','sidewalk','curb','marking'])assert.ok(surfaces.has(s));
   for(const chunk of city.chunks)for(const m of chunk.meshes)if(m.surface==='riverbed')for(let i=1;i<m.positions.length;i+=3)assert.ok(m.positions[i]<city.waterLevel);
   assert.throws(()=>generateCity({...city,chunks:[{...city.chunks[0],meshes:[{surface:'road',positions:[0,0,0,1,0,0,0,0,1],indices:[0,1,99]}]}]}),/triangles/);
 });

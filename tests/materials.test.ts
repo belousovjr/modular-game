@@ -50,7 +50,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 22);
+    assert.equal(api.getSnapshot().materials, 24);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
@@ -64,6 +64,13 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     }
     const curb=geometry.getSurfaceMaterial('curb'),walk=geometry.getSurfaceMaterial('sidewalk');
     assert.ok(curb instanceof StandardMaterial&&walk instanceof StandardMaterial);assert.ok(curb.diffuseColor.r>walk.diffuseColor.r+.15);
+    for (const surface of ['park-path', 'rail-ballast']) {
+      const ground=geometry.getSurfaceMaterial(surface);
+      assert.ok(ground instanceof StandardMaterial);
+      assert.equal(ground.diffuseTexture, walk.diffuseTexture);
+      assert.equal(ground.bumpTexture, walk.bumpTexture);
+      assert.ok(ground.diffuseColor.r<walk.diffuseColor.r);
+    }
     const marking=geometry.getSurfaceMaterial('marking');assert.ok(marking instanceof StandardMaterial);
     assert.equal(marking.zOffset,-1);assert.equal(marking.zOffsetUnits,-2);assert.equal(marking.disableDepthWrite,false);
     const road=geometry.getSurfaceMaterial('road');assert.ok(road instanceof StandardMaterial);assert.equal(road.zOffset,-1);assert.equal(road.zOffsetUnits,-1);

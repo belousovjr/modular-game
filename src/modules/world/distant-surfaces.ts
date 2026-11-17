@@ -1,6 +1,6 @@
 import type {CitySource} from '../world-generation/index.ts';
 
-export const distantSurfaces=new Set(['urban-ground','terrain','park-path','water','riverbed','bank']);
+export const distantSurfaces=new Set(['urban-ground','terrain','park-path','rail-ballast','rail-track','water','riverbed','bank']);
 
 // shortcut: surfaces currently use world-metre UVs; revisit batching if authored UVs are introduced.
 // Keep the canonical terrain triangles; merge their 128 m tiles to avoid distant per-tile draws.
@@ -13,9 +13,10 @@ export function groupStreetSurfaces(city:CitySource){
 function groupSurfaces(city:CitySource,streetOnly:boolean){
   const groups=new Map<string,{id:string;surface:string;positions:number[];indices:number[]}>();
   for(const chunk of city.chunks)for(const mesh of chunk.meshes){
-    const underlay=mesh.surface==='road'||mesh.surface==='sidewalk'||mesh.surface==='curb';
+    const roadBase=mesh.surface==='road'||mesh.surface==='rail-track';
+    const underlay=roadBase||mesh.surface==='sidewalk'||mesh.surface==='curb';
     if(streetOnly?mesh.surface!=='sidewalk':!distantSurfaces.has(mesh.surface)&&!underlay)continue;
-    const surface=underlay&&!streetOnly?(mesh.surface==='road'?'road-base':'urban-ground'):mesh.surface;
+    const surface=underlay&&!streetOnly?(roadBase?'road-base':'urban-ground'):mesh.surface;
     const span=streetOnly?256:1024;
     const x=Math.floor((chunk.bounds.minX+chunk.bounds.maxX)*.5/span),z=Math.floor((chunk.bounds.minZ+chunk.bounds.maxZ)*.5/span);
     const id=`${city.id}/${streetOnly?'street':'ground'}/${x}/${z}/${surface}`;

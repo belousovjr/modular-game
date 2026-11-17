@@ -95,3 +95,5 @@ Run `node scripts/prepare-downtown-collision.mjs` after updating `city.json` to 
 ## Expanded parks and building envelopes
 
 Mapped parks, woods and gardens use the existing ground material and tree batches. Explicit footways and cycleways become ground-level pavement where they cross park grass. Estimated houses and warehouses receive low default heights, and long, narrow unmeasured buildings cap their height relative to the narrow side. Roof-only and underground OSM buildings do not become above-ground solids. Near-rectangular footprints are regularized when they fit the lot. Larger recesses and courtyard contours still shape the walls and permanent collisions.
+
+Mapped `landuse=railway` polygons replace the corresponding urban ground with low-contrast ballast. Ground-level OSM rail centrelines form narrow dark strips within the ballast and share the distant road batch. Both follow the existing terrain heights and leave roads, sidewalks and parks intact.

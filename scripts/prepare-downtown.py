@@ -63,7 +63,7 @@ def polygon(refs):
     return Polygon(c).buffer(0) if len(c)>=4 and c[0]==c[-1] else Polygon()
 bounds=box(*project(BBOX[0],BBOX[1]),*project(BBOX[2],BBOX[3]))
 minx,minz,maxx,maxz=bounds.bounds
-water=[];lake_shapes=[];park_shapes=[];buildings=[];members_seen=set()
+water=[];lake_shapes=[];park_shapes=[];rail_yards=[];buildings=[];members_seen=set()
 def greenspace(t):
     return t.get('leisure') in ('park','garden','nature_reserve') or t.get('landuse') in ('grass','forest','recreation_ground') or t.get('natural')=='wood'
 
@@ -74,7 +74,8 @@ for ident,(t,members) in sorted(relations.items()):
     river=t.get('natural')=='water' and t.get('water') in ('river','harbour')
     lake=t.get('name')=='Lake Michigan' and t.get('water')=='lake'
     park=greenspace(t)
-    if not river and not lake and not park and not solid_building(t):continue
+    railway=t.get('landuse')=='railway'
+    if not river and not lake and not park and not railway and not solid_building(t):continue
     lines=[LineString(coords(ways[r][1])) for r,role in members if role!='inner' and r in ways and len(coords(ways[r][1]))>=2]
     inner_lines=[LineString(coords(ways[r][1])) for r,role in members if role=='inner' and r in ways and len(coords(ways[r][1]))>=2]
     holes=unary_union(list(polygonize(unary_union(inner_lines))))
@@ -90,10 +91,12 @@ for ident,(t,members) in sorted(relations.items()):
         p=p.difference(holes).intersection(bounds)
         if river:water.extend(polys(p))
         elif park:park_shapes.extend(polys(p))
+        elif railway:rail_yards.extend(polys(p))
         else:buildings.extend((f'osm/r{ident}/{j}',t,q) for j,q in enumerate(polys(p)));members_seen.update(r for r,_ in members)
 for ident,(t,refs) in sorted(ways.items()):
     if t.get('natural')=='water' and t.get('water') in ('river','canal','harbour','basin'):water.extend(polys(polygon(refs).intersection(bounds)))
     if greenspace(t):park_shapes.extend(polys(polygon(refs).intersection(bounds)))
+    if t.get('landuse')=='railway':rail_yards.extend(polys(polygon(refs).intersection(bounds)))
     if solid_building(t) and ident not in members_seen:
         buildings.extend((f'osm/w{ident}/{i}',t,p) for i,p in enumerate(polys(polygon(refs).intersection(bounds))))
 print('Source parsed',len(nodes),len(ways),flush=True)
@@ -194,6 +197,19 @@ park_paths=park_paths.difference(unary_union([p for _,_,p in buildings if path_c
 parks=parks.difference(park_paths)
 ground=land.difference(pavement).difference(parks).difference(plaza)
 ground=ground.difference(park_paths)
+ballast=unary_union(rail_yards).simplify(.25,preserve_topology=True).intersection(ground)
+ground=ground.difference(ballast)
+# shortcut: ground-level track strips reuse the asphalt batch; revisit if trains or rail-height collisions are added.
+track_strips=[]
+ballast_cover=prep(ballast)
+for t,refs in ways.values():
+    if t.get('railway')!='rail' or t.get('tunnel','no')!='no' or t.get('bridge','no')!='no' or t.get('location')=='underground' or number(t.get('layer'))!=0:continue
+    points=coords(refs)
+    if len(set(points))<2:continue
+    line=LineString(points).simplify(.5)
+    if ballast_cover.intersects(line):track_strips.append(line.buffer(.6,cap_style='flat',quad_segs=2))
+tracks=unary_union(track_strips).intersection(ballast)
+ballast=ballast.difference(tracks)
 curb=road.buffer(.25,join_style='round',quad_segs=3).difference(road).intersection(sidewalk)
 sidewalk=sidewalk.difference(curb)
 assert road.intersection(sidewalk).area<1e-5 and curb.intersection(sidewalk).area<1e-5,'Overlapping street surfaces'
@@ -228,7 +244,7 @@ def mesh(surface,triangles,fn,ix,iz):
 for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
  for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
     tile=box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE).intersection(bounds)
-    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('terrain',parks,terrain,32),('road',road,terrain,32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('sidewalk',plaza,lambda x,z:terrain(x,z)+SIZE,32),('park-path',park_paths,terrain,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
+    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('rail-ballast',ballast,terrain,32),('rail-track',tracks,terrain,32),('terrain',parks,terrain,32),('road',road,terrain,32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('sidewalk',plaza,lambda x,z:terrain(x,z)+SIZE,32),('park-path',park_paths,terrain,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
         patch=clip_by_rect(shape,*tile.bounds)
         if not patch.is_valid:patch=shape.intersection(tile)
         if patch.area<1e-7:continue

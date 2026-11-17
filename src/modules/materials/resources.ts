@@ -77,7 +77,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     const material = new StandardMaterial(`materials/${surface}`, scene);
     scope.onDispose(() => material.dispose());
     material.diffuseColor = Color3.FromHexString(style.color);
-    const tinted=surface.startsWith('city-')||['curb','sidewalk','water','marking','signal-body','signal-off','riverbed','facade','metal'].includes(surface);
+    const tinted=surface.startsWith('city-')||['curb','sidewalk','park-path','rail-ballast','water','marking','signal-body','signal-off','riverbed','facade','metal'].includes(surface);
     tints.set(material,tinted?material.diffuseColor.clone():Color3.White());
     material.specularColor = Color3.Black();
     // Polygon offset keeps paint above the road without changing physical geometry or occlusion.
@@ -86,11 +86,11 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     if(surface==='bank')material.backFaceCulling=false;
     if (surface==='water') { material.alpha=.88;material.specularColor=Color3.FromHexString('#a3c2c2');material.specularPower=80;material.backFaceCulling=false;new WaterSurface(material); }
     if (surface.startsWith('city-')) facades.push(new CityFacade(material));
-    if(['road','sidewalk','curb','terrain','urban-ground','marking'].includes(surface))nightFields.push(new NightField(material));
+    if(['road','sidewalk','park-path','rail-ballast','curb','terrain','urban-ground','marking'].includes(surface))nightFields.push(new NightField(material));
     if (surface==='signal-red') material.emissiveColor=Color3.FromHexString('#a3200b');
     if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
     if (style.texture) {
-      new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'));
+      new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'),surface==='terrain');
       const family = style.texture === 'building-shell' ? 'brick' : style.texture;
       useTexture(family, 512, material);
       useTexture(family, 512, material, true);

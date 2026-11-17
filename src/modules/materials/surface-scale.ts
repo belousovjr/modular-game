@@ -11,8 +11,8 @@ export class SurfaceScale extends MaterialPluginBase {
   private readonly atlas: boolean;
   private readonly material: StandardMaterial;
   private readonly readTexture: (family: string) => Texture | undefined;
-  constructor(material: StandardMaterial, atlas: boolean, readTexture: (family: string) => Texture | undefined, city=false) {
-    super(material, 'SurfaceScale', 190, { SURFACE_ATLAS: atlas||city,SURFACE_CITY:city }, true, true);
+  constructor(material: StandardMaterial, atlas: boolean, readTexture: (family: string) => Texture | undefined, city=false, grass=false) {
+    super(material, 'SurfaceScale', 190, { SURFACE_ATLAS: atlas||city,SURFACE_CITY:city,SURFACE_GRASS:grass }, true, true);
     this.atlas = atlas||city;
     this.material = material;
     this.readTexture = readTexture;
@@ -52,7 +52,10 @@ export class SurfaceScale extends MaterialPluginBase {
         attribute vec3 normal;
         #endif
         varying vec2 vSurfaceMeters;
-        varying vec2 vSurfaceAtlasUV;`,
+        varying vec2 vSurfaceAtlasUV;
+        #ifdef SURFACE_GRASS
+        varying float vGrassTone;
+        #endif`,
       CUSTOM_VERTEX_MAIN_END: `
         #if defined(DIFFUSE) || defined(BUMP)
         vec3 surfaceX = finalWorld[0].xyz / max(length(finalWorld[0].xyz), 0.000001);
@@ -62,6 +65,9 @@ export class SurfaceScale extends MaterialPluginBase {
         vec3 surfaceNormal = abs(normal);
         vSurfaceMeters = (surfaceNormal.y > 0.5 ? surfacePosition.xz : (surfaceNormal.x > 0.5 ? surfacePosition.zy : surfacePosition.xy)) / 2.0;
         vSurfaceAtlasUV = uv;
+        #ifdef SURFACE_GRASS
+        vGrassTone=1.06+.11*sin(dot(worldPos.xz,vec2(.011,.021)))+.07*sin(dot(worldPos.xz,vec2(-.032,.019)));
+        #endif
         #if defined(SURFACE_CITY) && !defined(FITTED_SURFACE_UV)
         vSurfaceAtlasUV=vec2(normal.y>.5?-2.:(normal.y<-.5?-1.:0.));
         #endif
@@ -72,6 +78,9 @@ export class SurfaceScale extends MaterialPluginBase {
       CUSTOM_FRAGMENT_DEFINITIONS: `
         varying vec2 vSurfaceMeters;
         varying vec2 vSurfaceAtlasUV;
+        #ifdef SURFACE_GRASS
+        varying float vGrassTone;
+        #endif
         #ifdef SURFACE_ATLAS
         uniform sampler2D surfaceRoofSampler;
         uniform sampler2D surfaceBaseSampler;
@@ -133,6 +142,9 @@ export class SurfaceScale extends MaterialPluginBase {
         baseColor = surfaceTile(diffuseSampler, surfaceRoofSampler, surfaceBaseSampler, surfaceMetalSampler, surfaceSourcesReady, false);
         #else
         baseColor = surfacePlainSample(diffuseSampler, vSurfaceMeters);
+        #endif
+        #ifdef SURFACE_GRASS
+        baseColor.rgb*=vGrassTone;
         #endif`,
       '!vec2 TBNUV=gl_FrontFacing \\? vBumpUV : -vBumpUV;': 'vec2 TBNUV=gl_FrontFacing ? vSurfaceMeters : -vSurfaceMeters;',
       '!TEXRD\\(bumpSampler,vBumpUV\\+uvOffset\\)': `

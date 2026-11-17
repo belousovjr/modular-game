@@ -1,5 +1,7 @@
 export const surfaces = {
   'urban-ground': {color:'#94968e',texture:'concrete'},
+  'park-path': {color:'#777568',texture:'concrete'},
+  'rail-ballast': {color:'#797063',texture:'concrete'},
   bank: {color:'#8c887b',texture:'concrete'},
   water: {color:'#3a7773',texture:'metal'},
   riverbed: {color:'#665b44',texture:'concrete'},
