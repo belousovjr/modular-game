@@ -1,6 +1,6 @@
 import type {CitySource} from '../world-generation/index.ts';
 
-export const distantSurfaces=new Set(['urban-ground','terrain','water','riverbed']);
+export const distantSurfaces=new Set(['urban-ground','terrain','water','riverbed','bank']);
 
 // shortcut: surfaces currently use world-metre UVs; revisit batching if authored UVs are introduced.
 // Keep the canonical terrain triangles; merge their 128 m tiles to avoid distant per-tile draws.

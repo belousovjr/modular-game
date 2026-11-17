@@ -161,7 +161,11 @@ test('distant ground batches preserve canonical geometry and avoid per-tile draw
   const {groupDistantSurfaces,groupStreetSurfaces,distantSurfaces}=await import('../src/modules/world/distant-surfaces.ts');
   const {citySource}=await import('../src/modules/world/city.ts');
   const groups=groupDistantSurfaces(citySource);
-  assert.ok(groups.length<=24);
+  assert.ok(groups.length<=28);
+  assert.ok(distantSurfaces.has('bank'));
+  const banks=groups.filter(g=>g.surface==='bank');
+  assert.ok(banks.length>0&&banks.length<=4);
+  assert.equal(banks.reduce((n,g)=>n+g.indices.length/3,0),2652);
   for(const surface of distantSurfaces){
     const source=citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface===surface||(surface==='urban-ground'&&m.surface==='sidewalk'))),batches=groups.filter(g=>g.surface===surface);
     const vertices=batches.reduce((n,m)=>n+m.positions.length,0),indices=batches.reduce((n,m)=>n+m.indices.length,0);
