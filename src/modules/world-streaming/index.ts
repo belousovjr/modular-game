@@ -9,7 +9,7 @@ export const worldStreamingModule = defineModule({
   id: 'world-streaming', title: 'Загрузка участков', category: 'Окружение',
   requires: { rendering: objectRenderingModule },
   setup({ core, deps, scope }) {
-    type Section = { bounds: SectionBounds; load(owner: Scope): void; loadDistance:number; unloadDistance:number; owner?: ReturnType<typeof createScope> };
+    type Section = { bounds: SectionBounds; load(owner: Scope): void; loadDistance:number; unloadDistance:number; unloadDelayMs:number; outsideMs?:number; owner?: ReturnType<typeof createScope> };
     const sections = new Map<string, Section>();
     let stopped = false;
     let loaded = 0;
@@ -32,10 +32,9 @@ export const worldStreamingModule = defineModule({
         const b = section.bounds;
         const distance = point ? Math.hypot(Math.max(b.minX - point.x, 0, point.x - b.maxX), Math.max(b.minZ - point.z, 0, point.z - b.maxZ)) : Infinity;
         if (section.owner && distance > section.unloadDistance) {
-          const owner = section.owner;
-          section.owner = undefined; loaded--; unloads++;
-          owner.dispose();
-        }
+          section.outsideMs=section.outsideMs===undefined?0:section.outsideMs+core.scene.getEngine().getDeltaTime();
+          if(!point||section.outsideMs>=section.unloadDelayMs){const owner = section.owner;section.owner = undefined; loaded--; unloads++;owner.dispose();}
+        }else section.outsideMs=undefined;
         if (!section.owner && distance <= section.loadDistance) pending.push({ section, distance });
       }
       pending.sort((a, b) => a.distance - b.distance);
@@ -52,11 +51,12 @@ export const worldStreamingModule = defineModule({
     }, -1, true);
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {
-      registerSection(id: string, bounds: SectionBounds, load: (owner: Scope) => void, owner: Scope, distances={load:192,unload:256}) {
+      registerSection(id: string, bounds: SectionBounds, load: (owner: Scope) => void, owner: Scope, distances:{load:number;unload:number;unloadDelayMs?:number}={load:192,unload:256}) {
         ensureRunning();
         if(!Number.isFinite(distances.load)||!Number.isFinite(distances.unload)||distances.load<0||distances.unload<=distances.load||distances.unload>4000)throw new Error('Invalid streaming distances');
+        const unloadDelayMs=distances.unloadDelayMs??0;if(!Number.isFinite(unloadDelayMs)||unloadDelayMs<0||unloadDelayMs>1000)throw new Error('Invalid unload delay');
         if (!id.trim() || sections.has(id) || ![bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ].every(Number.isFinite) || bounds.minX >= bounds.maxX || bounds.minZ >= bounds.maxZ) throw new Error('Некорректный участок');
-        const section: Section = { bounds: { ...bounds }, load,loadDistance:distances.load,unloadDistance:distances.unload };
+        const section: Section = { bounds: { ...bounds }, load,loadDistance:distances.load,unloadDistance:distances.unload,unloadDelayMs };
         sections.set(id, section);
         owner.onDispose(() => {
           if (!sections.delete(id)) return;

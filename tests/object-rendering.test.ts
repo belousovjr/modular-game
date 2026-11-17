@@ -49,7 +49,7 @@ function fixture(t: TestContext) {
   t.after(() => { owner.dispose(); session.dispose(); scene.dispose(); engine.dispose(); });
   assert.ok(api && templates);
   templates.register(template, owner);
-  return { api, templates, scene, camera, owner, session, frame: () => scene.onBeforeRenderObservable.notifyObservers(scene) };
+  return { api, templates, scene, camera, owner, session, frame: (ms=16) => {engine.getDeltaTime=()=>ms;scene.onBeforeRenderObservable.notifyObservers(scene);} };
 }
 
 test('rendering switches complete LODs at exact bounds distances and hides at hideDistance', t => {
@@ -420,4 +420,30 @@ test('surface batches separate materials and honor disabled roots and transforme
   a.root.scaling.x = -1;
   a.refreshTransform();
   assert.throws(frame, /масштаб/);
+});
+
+
+test('opt-in LOD fades keep complementary opaque coverage, reverse smoothly and release transitions',t=>{
+  const {api,scene,camera,owner,frame}=fixture(t);
+  const object=api.createObject(template.id,'fading',{},owner,'static',undefined,180);
+  frame(180);assert.equal(object.root.getChildMeshes().filter(m=>m.isEnabled()).length,1);
+  camera.position.x=11;frame(90);assert.equal(object.level(),1);assert.equal(api.getStats().transitions,1);
+  const visible=object.root.getChildMeshes().filter(m=>m.isEnabled());assert.equal(visible.length,2);assert.ok(visible.every(m=>m.material?.alpha===1));
+  camera.position.x=0;frame(0);assert.equal(object.root.getChildMeshes().filter(m=>m.isEnabled()).length,2);
+  frame(180);assert.equal(api.getStats().transitions,0);assert.equal(object.root.getChildMeshes().filter(m=>m.isEnabled()).length,1);
+  camera.position.x=50;frame(90);assert.equal(object.level(),null);assert.equal(object.root.getChildMeshes().filter(m=>m.isEnabled()).length,1);
+  frame(180);assert.equal(object.root.getChildMeshes().filter(m=>m.isEnabled()).length,0);assert.equal(api.getStats().transitions,0);
+  camera.position.x=0;frame(16);object.root.dispose();frame(16);assert.equal(api.getStats().transitions,0);assert.equal(scene.meshes.length,1);
+  assert.throws(()=>api.createObject(template.id,'invalid',{},owner,'static',undefined,NaN));
+});
+
+test('scoped custom-mesh visibility fades without alpha blending and cancels on disposal',async t=>{
+  const {DitheredTileFadeMaterialPlugin}=await import('@babylonjs/core/Materials/ditheredTileFadeMaterialPlugin.js');
+  const {api,owner,frame}=fixture(t);const object=api.createObject(template.id,'custom',{},owner);frame();
+  const mesh=object.root.getChildMeshes()[0];assert.ok(mesh instanceof Mesh&&mesh.material instanceof StandardMaterial);
+  const control=api.createVisibility([mesh],owner);assert.equal(mesh.isEnabled(),false);control.setVisible(true);frame(90);
+  const bounds={lowerBound:0,upperBound:1},plugin=DitheredTileFadeMaterialPlugin.GetOrCreate(mesh.material);
+  assert.ok(plugin.getFadeBoundsToRef(mesh,bounds));assert.deepEqual(bounds,{lowerBound:0,upperBound:.5});assert.equal(mesh.material.alpha,1);
+  control.setVisible(false);frame(0);assert.ok(mesh.isEnabled());frame(180);assert.equal(mesh.isEnabled(),false);assert.equal(api.getStats().transitions,0);
+  control.setVisible(true);frame(16);owner.dispose();assert.equal(api.getStats().transitions,0);assert.equal(control.isVisible(),false);assert.throws(()=>control.setVisible(true));
 });

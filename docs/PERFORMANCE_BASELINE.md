@@ -771,3 +771,32 @@ Host variation remains material: this establishes a similar observed budget, not
 
 
 Final same-street grouping/receiver/lamp-LOD check: near 85.8 FPS / P95 28.1 ms, medium 87.1 / 23.4, elevated far 100.4 / 16.4 (2.2 s each, 8 NPC/characters, vehicles/player-control disabled for camera-based lamp LOD). Two emissive heads existed in near/medium views, zero in the far view; four bloom passes remained active and a broad warm road footprint remained after lamp disappearance. The earlier cross-street/hard-centred light patches are corrected. Peak 1685757952 bytes, OOM=0, browser errors=0. Final 153 tests/check/build pass. Night lighting remains optional; no overnight soak or promise of physically exact indirect lighting.
+
+
+### Smooth world visibility and LOD transitions — 2026-11-17
+
+World now opts into 180 ms smoothstep colour transitions using Babylon's DitheredTileFadeMaterialPlugin. Template LOD intervals are complementary and retain depth writes/ordinary material alpha; normally two LODs exist only during the blend. Interruptions/reversals start from current weights; a rapid multi-threshold jump can briefly retain three city LODs. Completion leaves one selected model (none after hide). Material/texture sharing and the existing visited-model cache remain; no render targets, fade textures, alpha sorting or simulation logic are added. Individual generic createObject calls still default to transitionMs=0; legacy thin-instance batches keep their old instant path and explicitly reject nonzero model transition duration. Current downtown disappearing content uses ordinary models or custom grouped surfaces.
+
+The geometry API stores active bounds weakly, resets old-material bounds when a provider changes and reapplies them on the replacement, including correct fallback restoration. object-rendering.createVisibility controls raw world surface/detail groups; only active transitions advance in the existing observer. world-streaming optionally retains outgoing owners for 250 ms (default 0 for other consumers), so a mesh can finish its 180 ms fade before actual disposal. Returning inside the streaming range cancels retirement; null distance origin/stop/removal still disposes immediately. Configured 24/32, 24/80 and building/road distances are unchanged. Native standalone shadow/depth/picking passes do not use the colour dither: opaque shadow silhouettes remain until the geometry is disabled. No new shadow pass is added.
+
+158 tests/check/build pass: exact old default behaviour, fade weights/time at 30/60/144 Hz and long delta, interruption/reversal/complementary coverage, custom visibility and disposal, invalid duration, scoped grace/cancellation/missing origin, shared provider/fallback restoration and all existing module/authority regressions. NullEngine world fixtures now supply explicit 16 ms visual frames; authority time is not modified.
+
+GPU comparison: real RTX 3050 Laptop ANGLE/D3D12, Chromium 1280×720 DPR1 uncapped, production builds, full city/8 NPC/characters/shadows/materials/atmosphere/night-lighting; vehicles/player-control disabled through normal UI for camera-based LOD testing. The instant reference uses the same new code with durations/grace set to zero in a temporary build. Separate sequential processes, 2 GiB memory cap/no swap/timeouts. Steady views 2.2 s; continuous tower sweeps 3.2 s; facade sweeps 2.2 s. Host conditions are not controlled, so differences include sampling/host variance.
+
+| View/route | Instant FPS | Fade FPS | Instant/Fade P95 ms |
+| --- | ---: | ---: | ---: |
+| Day plaza | 62.2 | 63.8 | 34.0 / 34.3 |
+| Day skyline | 67.1 | 65.8 | 34.8 / 34.4 |
+| Night skyline | 89.8 | 87.0 | 18.6 / 20.7 |
+| Tower in, first | 67.9 | 69.3 | 34.2 / 33.8 |
+| Tower out, first | 68.5 | 69.2 | 33.5 / 34.0 |
+| Detail in, first | 60.7 | 60.6 | 30.9 / 33.2 |
+| Detail out, first | 59.4 | 56.9 | 34.7 / 33.4 |
+| Tower in, repeat | 72.8 | 70.5 | 33.0 / 34.0 |
+| Tower out, repeat | 70.6 | 69.1 | 33.4 / 33.4 |
+| Detail in, repeat | 61.8 | 60.5 | 31.6 / 33.0 |
+| Detail out, repeat | 61.7 | 58.6 | 34.8 / 31.6 |
+
+Observed differences are roughly 0–5% in these samples, not a universal bound. No claim of zero steady shader cost; two colour geometries may briefly render during a switch. GPU capture recorded 93 partial tower frames and 50 partial-detail frames out of 1800 inspected frames, maximum two enabled tower LODs, complementary bounds such as [0.032,1] and [0,0.032]. Intermediate and settled images were inspected without a new transparency/sorting anomaly. Fade-process cgroup peak 1680162816 bytes versus instant 1046183936; different process/GC peaks do not isolate retained-memory cost. Both OOM=0, browser errors=0.
+
+Separate final cleanup run traversed in/out of tower and facade LOD three times. Every settled return had exactly 559 meshes / 383 geometries / 28 materials / 26 textures / 9 skeletons / 4 lights; zero visible meshes retained partial fade bounds. This includes the normal cache of visited landmark LODs, not an empty scene. Peak 1713922048 bytes under the same cap, OOM=0, errors=0. Node world teardown separately releases all meshes/geometries and the transition registry. No overnight soak; texture-detail mip changes and standalone shadow silhouettes are not temporally blended by this change.

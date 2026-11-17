@@ -6,6 +6,8 @@ import type { Material } from '@babylonjs/core/Materials/material.js';
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
+import {PBRBaseMaterial} from '@babylonjs/core/Materials/PBR/pbrBaseMaterial.js';
+import {DitheredTileFadeMaterialPlugin} from '@babylonjs/core/Materials/ditheredTileFadeMaterialPlugin.js';
 import { defineModule } from '../../core/context.ts';
 import type { Scope } from '../../core/modules.ts';
 
@@ -65,6 +67,17 @@ export const geometryModule = defineModule({
     const borrowed = new Set<Mesh>();
     scope.onDispose(() => borrowed.clear());
     const models = new Map<TransformNode, { surfaces: ReadonlyMap<string, readonly Mesh[]>; detail: number }>();
+    const fades=new WeakMap<Mesh,{lower:number;upper:number;material:StandardMaterial|PBRBaseMaterial}>();
+    function setMeshFade(mesh:Mesh,lower:number,upper:number){
+      if(stopped||mesh.isDisposed()||mesh.getScene()!==core.scene||![lower,upper].every(v=>Number.isFinite(v)&&v>=0&&v<=1))throw new Error('Invalid mesh fade');
+      const material=mesh.material;
+      if(!(material instanceof StandardMaterial)&&!(material instanceof PBRBaseMaterial))throw new Error('Unsupported fade material');
+      const previous=fades.get(mesh);
+      if(previous&&(previous.material!==material||(lower===0&&upper===1))){DitheredTileFadeMaterialPlugin.GetOrCreate(previous.material).resetFade(mesh);fades.delete(mesh);}
+      if(lower===0&&upper===1)return;
+      let bounds=fades.get(mesh);if(!bounds){bounds={lower,upper,material};fades.set(mesh,bounds);}else{bounds.lower=lower;bounds.upper=upper;}
+      DitheredTileFadeMaterialPlugin.GetOrCreate(material).setFadeBounds(mesh,lower,upper);
+    }
     let surfaceMaterials: ReadonlyMap<string, readonly Material[]> | undefined;
     function getSurfaceMaterial(surface: string, detail = 0): Material {
       if (stopped) throw new Error('Модуль геометрии остановлен');
@@ -76,7 +89,7 @@ export const geometryModule = defineModule({
       for (const { surfaces, detail } of models.values()) for (const [surface, meshes] of surfaces) {
         const levels = previous?.get(surface);
         const expected = levels?.[Math.min(detail, levels.length - 1)] ?? fallback;
-        for (const mesh of meshes) if (mesh.material === expected) mesh.material = getSurfaceMaterial(surface, detail);
+        for (const mesh of meshes) if (mesh.material === expected) {mesh.material = getSurfaceMaterial(surface, detail);const fade=fades.get(mesh);if(fade)setMeshFade(mesh,fade.lower,fade.upper);}
       }
     }
     function registerSurfaceMaterials(materials: ReadonlyMap<string, readonly Material[]>, owner: Scope) {
@@ -160,7 +173,7 @@ export const geometryModule = defineModule({
       for (const mesh of list) borrowed.add(mesh);
       owner.onDispose(() => { for (const mesh of list) borrowed.delete(mesh); });
     }
-    return { createModel, createSurfaceMesh, validateParts, getSurfaceMaterial, registerSurfaceMaterials, registerMeshes,
+    return { createModel, createSurfaceMesh, validateParts, getSurfaceMaterial, registerSurfaceMaterials, registerMeshes,setMeshFade,
       *getMeshes() {
         if (stopped) throw new Error('Модуль геометрии остановлен');
         for (const { surfaces } of models.values()) for (const meshes of surfaces.values()) yield* meshes;

@@ -24,7 +24,7 @@ function fixture(t: { after(cleanup: () => void): void }) {
   const owner = createScope(); t.after(() => owner.dispose());
   let point: DistancePoint | null = { x: 0, y: 0, z: 0 };
   api.rendering.setDistanceSource(() => point, owner);
-  return { ...api, owner, session, frame: () => scene.onBeforeRenderObservable.notifyObservers(scene), move: (next: DistancePoint | null) => { point = next; } };
+  return { ...api, owner, session,engine, frame: () => scene.onBeforeRenderObservable.notifyObservers(scene), move: (next: DistancePoint | null) => { point = next; } };
 }
 
 test('streaming bounds work across negative coordinates, budget loads, hysteresis, teleports and a missing origin', t => {
@@ -69,4 +69,14 @@ test('skyline sections can stream farther while street sections retain their nor
   f.frame();assert.equal(streets,0);assert.equal(skyline,1);
   f.move({x:-500,y:0,z:0});f.frame();assert.equal(skyline,0);
   assert.throws(()=>f.streaming.registerSection('bad',bounds,()=>{},f.owner,{load:1200,unload:1000}),/distances/);
+});
+
+
+test('optional unload grace retains a fading section, cancels on return and clears immediately without an origin',t=>{
+  const f=fixture(t);f.engine.getDeltaTime=()=>25;let active=0;
+  f.streaming.registerSection('fade',{minX:0,maxX:10,minZ:0,maxZ:10},owner=>{active++;owner.onDispose(()=>active--);},f.owner,{load:10,unload:20,unloadDelayMs:100});
+  f.frame();assert.equal(active,1);f.move({x:50,y:0,z:0});f.frame();f.frame();assert.equal(active,1);
+  f.move({x:0,y:0,z:0});f.frame();f.move({x:50,y:0,z:0});f.frame();for(let i=0;i<3;i++)f.frame();assert.equal(active,1);f.frame();assert.equal(active,0);
+  f.move({x:0,y:0,z:0});f.frame();f.move(null);f.frame();assert.equal(active,0);
+  assert.throws(()=>f.streaming.registerSection('invalid',{minX:0,maxX:10,minZ:0,maxZ:10},()=>{},f.owner,{load:10,unload:20,unloadDelayMs:Infinity}));
 });

@@ -209,3 +209,18 @@ test('radial parts share capped geometry, retain a closed window seam and valida
   assert.ok(u.every(v=>Math.abs(v-Math.round(v))<1e-5));
   for(const radialSegments of [0,3,16.5,33,NaN])assert.throws(()=>api.createModel('invalid',[{surface:'wall',size:[1,1,1],radialSegments}],owner),/радиальная/);
 });
+
+
+test('opaque fade bounds survive provider changes without leaking stale coverage to the fallback',async t=>{
+  const {DitheredTileFadeMaterialPlugin}=await import('@babylonjs/core/Materials/ditheredTileFadeMaterialPlugin.js');
+  const {api,scene,owner}=fixture(t);const model=api.createModel('fade',[{surface:'body',size:[1,1,1]}],owner),mesh=model.surfaces.get('body')?.[0];assert.ok(mesh);
+  const fallback=mesh.material;assert.ok(fallback instanceof StandardMaterial);
+  api.setMeshFade(mesh,.2,.7);const old=DitheredTileFadeMaterialPlugin.GetOrCreate(fallback),bounds={lowerBound:0,upperBound:1};assert.ok(old.getFadeBoundsToRef(mesh,bounds));
+  const material=new StandardMaterial('new-provider',scene),cleanup:(()=>void)[]=[];
+  api.registerSurfaceMaterials(new Map([['body',[material]]]),{onDispose:f=>cleanup.push(f)});
+  assert.equal(old.getFadeBoundsToRef(mesh,bounds),false);assert.deepEqual(bounds,{lowerBound:0,upperBound:1});
+  const current=DitheredTileFadeMaterialPlugin.GetOrCreate(material);assert.ok(current.getFadeBoundsToRef(mesh,bounds));assert.deepEqual(bounds,{lowerBound:.2,upperBound:.7});
+  assert.equal(material.alpha,1);assert.equal(material.disableDepthWrite,false);api.setMeshFade(mesh,0,1);
+  for(const release of cleanup.reverse())release();assert.equal(mesh.material,fallback);assert.equal(old.getFadeBoundsToRef(mesh,bounds),false);
+  assert.throws(()=>api.setMeshFade(mesh,NaN,1));material.dispose();
+});

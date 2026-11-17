@@ -9,6 +9,8 @@ import { objectTemplatesModule, type ResolvedTemplate } from '../object-template
 import type { Material } from '@babylonjs/core/Materials/material.js';
 import { createSurfaceBatches } from './surface-batches.ts';
 import { SpatialGrid } from './spatial-grid.ts';
+import {LodBlend} from './lod-blend.ts';
+import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 
 export interface DistancePoint { readonly x: number; readonly y: number; readonly z: number }
 interface RenderObject {
@@ -37,6 +39,17 @@ export const objectRenderingModule = defineModule({
   id: 'object-rendering', title: 'Отрисовка объектов', category: 'Рендеринг',
   requires: { geometry: geometryModule, templates: objectTemplatesModule },
   setup({ core, deps, scope }) {
+    const transitions=new Set<(delta:number)=>void>();scope.onDispose(()=>transitions.clear());
+    function createVisibility(meshes:readonly Mesh[],owner:Scope,durationMs=180){
+      ensureRunning();
+      if(!meshes.length||meshes.some(m=>m.getScene()!==core.scene||m.isDisposed()))throw new Error('Invalid fade meshes');
+      const blend=new LodBlend(durationMs);let disposed=false;
+      const apply=()=>{const coverage=blend.weights.get(0)??0;for(const mesh of meshes){mesh.setEnabled(coverage>0);deps.geometry.setMeshFade(mesh,0,coverage||1);}if(!blend.running)transitions.delete(step);};
+      const step=(delta:number)=>{blend.advance(delta);apply();};
+      for(const mesh of meshes)mesh.setEnabled(false);
+      owner.onDispose(()=>{disposed=true;transitions.delete(step);for(const mesh of meshes)if(!mesh.isDisposed()){deps.geometry.setMeshFade(mesh,0,1);mesh.setEnabled(false);}});
+      return {isVisible:()=>!stopped&&!disposed&&blend.target!==null,setVisible(visible:boolean,immediate=false){ensureRunning();if(disposed)throw new Error('Fade disposed');const next=visible?0:null;if(next===blend.target&&!immediate)return;blend.select(next,immediate);apply();if(blend.running)transitions.add(step);}};
+    }
     const batches = createSurfaceBatches(deps.geometry.createModel, scope);
     const objects = new Set<RenderObject>();
     const dynamic = new Set<RenderObject>();
@@ -78,11 +91,13 @@ export const objectRenderingModule = defineModule({
       source = connection;
       owner.onDispose(() => { if (source === connection) source = undefined; });
     }
-    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, mobility: 'static' | 'dynamic' = 'dynamic', batchMaterial?: Material | string) {
+    function createObject(templateId: string, name: string, parameters: Readonly<Record<string, number>>, owner: Scope, mobility: 'static' | 'dynamic' = 'dynamic', batchMaterial?: Material | string,transitionMs=0) {
       ensureRunning();
       if (!name.trim()) throw new Error('Нужно имя объекта');
       if (typeof batchMaterial === 'string' && !batchMaterial.trim()) throw new Error('Нужно имя пакетной поверхности');
       const template = deps.templates.resolve(templateId, parameters);
+      const blend=new LodBlend(transitionMs);
+      if(batchMaterial&&transitionMs>0)throw new Error('Thin batches do not support model crossfades');
       if (batchMaterial && (mobility !== 'static' || template.levels.some(level => level.parts.length !== 1 || level.parts[0].faceUV !== undefined))) throw new Error('Пакетная отрисовка требует static и одну деталь без faceUV на LOD');
       if (batchMaterial && typeof batchMaterial !== 'string' && (batchMaterial.getScene() !== core.scene || batchMaterial.needAlphaBlending())) throw new Error('Нужен материал текущей сцены без alpha blending');
       const bounds = templateBounds(template);
@@ -95,6 +110,16 @@ export const objectRenderingModule = defineModule({
       const levelScope: Scope = { onDispose: cleanup => { root.onDisposeObservable.addOnce(cleanup); } };
       const models = new Map<number, GeometryModel>();
       let current: number | null = null;
+      const applyFade=()=>{
+        let lower=0;
+        for(const [index,model]of [...models].sort(([a],[b])=>a-b)){
+          const weight=blend.weights.get(index)??0;model.root.setEnabled(weight>0);
+          for(const meshes of model.surfaces.values())for(const mesh of meshes)deps.geometry.setMeshFade(mesh,weight>0?Math.min(1,lower):0,weight>0?Math.min(1,lower+weight):1);
+          lower+=weight;
+        }
+        if(!blend.running){transitions.delete(stepFade);if(current===null)active.delete(object);}
+      };
+      const stepFade=(delta:number)=>{blend.advance(delta);applyFade();};
       let batchKey: string | null = null;
       let batchDirty = true;
       let currentBatchMaterial: Material | undefined;
@@ -148,6 +173,7 @@ export const objectRenderingModule = defineModule({
             if (next === null) active.delete(object); else active.add(object);
             return;
           }
+          if(transitionMs>0&&(!point||!root.isEnabled())){blend.select(null,true);current=null;applyFade();active.delete(object);return;}
           if (next === current) return;
           if (next !== null && !models.has(next)) {
             // shortcut: visited LODs stay cached until disposal, revisit if memory profiling requires eviction.
@@ -158,6 +184,7 @@ export const objectRenderingModule = defineModule({
             try { onModelCreated.notifyObservers(model); } catch (error) { root.dispose(); throw error; }
             if (root.isDisposed()) return;
           }
+          if(transitionMs>0){current=next;blend.select(next);applyFade();if(blend.running)transitions.add(stepFade);if(next!==null||blend.running)active.add(object);return;}
           if (current !== null) models.get(current)?.root.setEnabled(false);
           if (next !== null) models.get(next)?.root.setEnabled(true);
           current = next;
@@ -168,6 +195,7 @@ export const objectRenderingModule = defineModule({
       pending.add(object);
       if (mobility === 'dynamic') dynamic.add(object);
       root.onDisposeObservable.addOnce(() => {
+        transitions.delete(stepFade);
         if (batchKey !== null) batches.remove(batchKey, object);
         grid.remove(object); dynamic.delete(object); pending.delete(object); active.delete(object);
         objects.delete(object); current = null; models.clear();
@@ -182,7 +210,6 @@ export const objectRenderingModule = defineModule({
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {
       candidates = 0; boundsUpdates = 0; frame++;
-      if (!objects.size) return;
       const point = getDistanceOrigin();
       if (point) {
         for (const object of pending) object.sync(true);
@@ -194,12 +221,13 @@ export const objectRenderingModule = defineModule({
           object.update(point);
         }
       }
-      for (const object of active) if (object.seen !== frame) object.update(null);
+      for (const object of active) if (object.seen !== frame) object.update(point);
+      for(const transition of transitions)transition(core.scene.getEngine().getDeltaTime());
       batches.flush();
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
-    return { createObject, setDistanceSource, getDistanceOrigin,
-      getStats() { ensureRunning(); return { objects: objects.size, cells: grid.size, candidates, boundsUpdates, dynamic: dynamic.size, ...batches.stats() }; },
+    return { createObject, setDistanceSource, getDistanceOrigin,createVisibility,
+      getStats() { ensureRunning(); return { objects: objects.size, cells: grid.size, candidates, boundsUpdates, dynamic: dynamic.size,transitions:transitions.size, ...batches.stats() }; },
     };
   },
 });

@@ -54,15 +54,17 @@ export const worldModule = defineModule({
         for (const placement of section.placements) {
           const surface = placement.templateId.slice('world/'.length);
           const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
-          const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial);
+          const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial,batchMaterial?0:180);
           object.root.position.copyFromFloats(...placement.position);
           object.root.rotation.copyFromFloats(...placement.rotation);
           const list = placement.templateId === 'city/signal' || placement.templateId === 'world/lamp' ? lamps : placement.key.startsWith('authored/daley/') ? undefined : buildings;
           if (list) { list.add(object); owner.onDispose(() => list.delete(object)); }
         }
-      }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp'&&!p.key.startsWith('authored/daley/'))?{load:1200,unload:1400}:{load:192,unload:256});
+      }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp'&&!p.key.startsWith('authored/daley/'))?{load:1200,unload:1400,unloadDelayMs:250}:{load:192,unload:256,unloadDelayMs:250});
     }
-    const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number}>();
+    type Visibility=ReturnType<typeof deps.rendering.createVisibility>;
+    const surfaceViews=new Set<{bounds:SectionBounds;load:number;unload:number;visibility:Visibility}>();
+    const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number;visibility?:Visibility}>();
     const heights=new Map(city.placements.map(p=>[p.key,p.parameters.height]));
     for(const band of [{meshes:groupDistantSurfaces(city),load:1200,unload:1400},{meshes:groupStreetSurfaces(city),load:192,unload:256}])for(const surface of band.meshes){
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
@@ -71,7 +73,8 @@ export const worldModule = defineModule({
         const material=surface.surface==='road-base'?'road':surface.surface;
         const mesh=deps.geometry.createSurfaceMesh(surface.id,material,surface.positions,surface.indices,owner);
         mesh.metadata={...mesh.metadata,citySurface:material,distantGround:band.load===1200,shadowCaster:false};mesh.freezeWorldMatrix();
-      },scope,{load:band.load,unload:band.unload});
+        const view={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility([mesh],owner)};surfaceViews.add(view);owner.onDispose(()=>surfaceViews.delete(view));
+      },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
     const bands=[{id:'surfaces',minHeight:0,maxHeight:0,load:192,unload:256},...district.buildingLod];
     for(const chunk of city.chunks)for(const band of bands) {
@@ -84,20 +87,22 @@ export const worldModule = defineModule({
       const count=distant?chunk.buildingIds.filter(id=>{const h=heights.get(id);return h!==undefined&&h>=band.minHeight&&h<band.maxHeight;}).length:0;
       deps.streaming.registerSection(`${chunk.id}/${distant?'buildings-':''}${band.id}`,bounds,owner=>{
         const meshes:Mesh[]=[];
-        const view={meshes,bounds,minY,maxY,count,load:band.load,unload:band.unload};
+        const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number;visibility?:Visibility}={meshes,bounds,minY,maxY,count,load:band.load,unload:band.unload};
         if(distant){bandViews.add(view);owner.onDispose(()=>bandViews.delete(view));}
         for(const surface of surfaces) {
           const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
           mesh.metadata={...mesh.metadata,citySurface:material,buildingBand:distant?band.id:undefined,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(material)};mesh.freezeWorldMatrix();view.meshes.push(mesh);
         }
-      },scope,{load:band.load,unload:band.unload});
+        if(distant)view.visibility=deps.rendering.createVisibility(meshes,owner);
+        else {const surfaceView={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility(meshes,owner)};surfaceViews.add(surfaceView);owner.onDispose(()=>surfaceViews.delete(surfaceView));}
+      },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
-    const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number}>();
+    const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
     for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
       deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
         const meshes:Mesh[]=[];
-        const view={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
+        const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
         detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
         for(const surface of detail.meshes){
           const material=surface.surface.replace(/-detail$/,'');
@@ -106,20 +111,25 @@ export const worldModule = defineModule({
           view.meshes.push(mesh);
           for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
         }
-      },scope,{load:24,unload:32});
+        view.visibility=deps.rendering.createVisibility(meshes,owner);
+      },scope,{load:24,unload:32,unloadDelayMs:250});
     }
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
       const point=deps.rendering.getDistanceOrigin();
+      for(const view of surfaceViews){
+        const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
+        view.visibility.setVisible(distance<=(view.visibility.isVisible()?view.unload:view.load),!point);
+      }
       for(const view of bandViews){
         const b=view.bounds;
         const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
-        const limit=view.meshes[0]?.isEnabled()?view.unload:view.load;
-        for(const mesh of view.meshes)mesh.setEnabled(distance<=limit);
+        const limit=view.visibility?.isVisible()?view.unload:view.load;
+        view.visibility?.setVisible(distance<=limit,!point);
       }
       for(const view of detailViews){
         const b=view.bounds;
         const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
-        for(const mesh of view.meshes)mesh.setEnabled(distance<=32);
+        view.visibility?.setVisible(distance<=32,!point);
       }
     });
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));

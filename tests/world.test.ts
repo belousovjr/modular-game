@@ -22,7 +22,7 @@ import { worldStreamingModule } from '../src/modules/world-streaming/index.ts';
 import { worldModule } from '../src/modules/world/index.ts';
 
 test('world places persistent generated content, keeps fallback styling without materials and releases all resources on restart', t => {
-  const engine = new NullEngine();
+  const engine = new NullEngine();engine.getDeltaTime=()=>16;
   const scene = new Scene(engine);
   t.after(() => { scene.dispose(); engine.dispose(); });
   const camera = new ArcRotateCamera('camera', -Math.PI / 2, 0.9, 25, Vector3.Zero(), scene);
