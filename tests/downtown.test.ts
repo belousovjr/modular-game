@@ -308,25 +308,27 @@ test('ordinary skyline omits all trim and near detail is separately bounded and 
   assert.throws(()=>generateCity({...citySource,chunks:[{...base,details:[{...detail,meshes:[{surface:'city-stone-detail',positions:[0,0,0],indices:[0,1,2]}]}]}]}),/triangles/);
 });
 
-test('landmark LODs shed street details and preserve the windowed silhouettes of Willis and Trump',async()=>{
+test('stepped landmark LODs preserve all windowed tiers and roof parts',async()=>{
   const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
-  for(const name of ['marina','willis','trump','wrigley','tribune']){
-    const template=cityTemplates.find(t=>t.id==='city/'+name);assert.ok(template);
-    const model=toCityGrid(template).build({width:32,depth:32,height:179,foundation:2});
-    assert.equal(model.levels[1].distance,24);
-    if(name==='willis'||name==='trump'){
+  const expectedParts=new Map([['city/willis',12],['city/trump',5],['city/wrigley',5],['city/tribune',8]]);
+  for(const [id,count] of expectedParts){
+    const template=cityTemplates.find(t=>t.id===id);assert.ok(template);
+    const placements=citySource.placements.filter(p=>p.templateId===id);
+    assert.ok(placements.length>0);
+    for(const placement of placements){
+      const model=toCityGrid(template).build(placement.parameters);
       assert.equal(model.hideDistance,1200);
       assert.deepEqual(model.levels.map(level=>level.distance),[0,24]);
-      assert.equal(model.levels[1].parts.length,name==='willis'?12:5);
-      assert.equal(model.levels[0].parts.length,model.levels[1].parts.length+2);
-      assert.deepEqual(model.levels[1].parts,model.levels[0].parts.slice(0,-2));
-      continue;
+      assert.equal(model.levels[1].parts.length,count);
+      assert.equal(model.levels[0].parts.length,count+2);
+      assert.deepEqual(model.levels[1].parts,model.levels[0].parts.slice(0,count));
     }
-    assert.equal(model.levels[2].distance,80);
-    if(name==='marina')assert.ok((model.levels[2].parts[0].radialSegments??0)<(model.levels[1].parts[0].radialSegments??0));
-    else assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
-    assert.ok(model.levels[2].parts.length<=6);
   }
+  const marina=cityTemplates.find(t=>t.id==='city/marina');assert.ok(marina);
+  const model=toCityGrid(marina).build({width:32,depth:32,height:179,foundation:2});
+  assert.deepEqual(model.levels.map(level=>level.distance),[0,24,80]);
+  assert.equal(model.levels[2].parts[0].radialSegments,8);
+  assert.equal(model.levels[2].parts.length,2);
 });
 
 

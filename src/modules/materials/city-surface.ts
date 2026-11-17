@@ -43,8 +43,14 @@ export class CityFacade extends MaterialPluginBase {
         #elif defined(FITTED_SURFACE_UV)
         vCityUV=uv;
         #else
-        // Shared world-metre projection keeps landmark windows in phase when boxes change LOD.
-        vCityUV=vec2(vSurfaceMeters.x*(2./2.8)+1024.,vSurfaceMeters.y*(2./3.5));
+        // Map whole window cells onto each box wall so corners and crowns end in masonry.
+        bool sideWall=abs(normal.x)>.5;
+        float span=sideWall?length(finalWorld[2].xyz):length(finalWorld[0].xyz);
+        float height=length(finalWorld[1].xyz);
+        vec2 grid=max(vec2(1.),floor(vec2(span/2.8,height/3.5)+.5));
+        vCityUV=(vec2(sideWall?positionUpdated.z:positionUpdated.x,positionUpdated.y)+.5)*grid;
+        // A whole-cell offset keeps the night pattern distinct between tiers.
+        vCityUV.y+=floor(max(0.,finalWorld[3].y-height*.5)/3.5);
         #endif
       `,
     };
@@ -62,8 +68,16 @@ export class CityFacade extends MaterialPluginBase {
           vec2 uv=abs(fract(cell)-.5);
           vec2 edge=max(fwidth(cell),vec2(.002));
           float groundFloor=1.-step(1.,cell.y);
+          #if !defined(FITTED_SURFACE_UV) && !defined(RADIAL_FACADE_UV)
+          groundFloor=1.-step(1.,vSurfaceMeters.y*(2./3.5));
+          float windowResolution=1.-smoothstep(.30,1.0,max(edge.x,edge.y));
+          edge=min(edge,vec2(.095));
+          #endif
           vec2 opening=mix(vec2(.32,.34),vec2(.40,.39),groundFloor);
           float window=step(0.,cell.y)*(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
+          #if !defined(FITTED_SURFACE_UV) && !defined(RADIAL_FACADE_UV)
+          window*=windowResolution;
+          #endif
           float detail=(1.-smoothstep(.04,.16,max(edge.x,edge.y)))*(1.-smoothstep(12.,32.,length(vEyePosition.xyz-vPositionW)));
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
           vec3 glazing=baseColor.rgb*vec3(.20,.29,.34)+vec3(.035,.055,.065);
