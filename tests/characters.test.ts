@@ -10,6 +10,39 @@ const world: CollisionWorld = { bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},b
   blockers:[{id:'wall',minX:2,maxX:3,minZ:-5,maxZ:5,minY:-2,maxY:10}],floors:[{minX:-10,maxX:1,minZ:1,maxZ:5,elevation:0.2}] };
 const command = (sequence=1,x=0,z=1,run=false): MoveCommand => ({type:'move',characterId:'local-player',sequence,tick:sequence-1,x,z,run,jump:false});
 
+test('crouch and crawl use posture speeds and clearance, and prone turns only when moving',()=>{
+  const flat={...world,slopeX:0,floors:[],blockers:[{id:'low-ceiling',minX:.6,maxX:3,minZ:-1,maxZ:1,minY:.96,maxY:2.4}]};
+  const a=createCharacterAuthority(flat);
+  assert.equal(a.receive({...command(),stance:'invalid'},'local').reason,'invalid');
+  function move(tick:number,input:Partial<MoveCommand>){
+    assert.equal(a.receive({...command(tick,0,0),...input},'local').accepted,true);
+    a.step(tick);
+  }
+  move(1,{stance:'crouching',z:1,run:true});
+  assert.equal(a.snapshot().stance,'crouching');
+  assert.equal(a.snapshot().z,1.05/60);
+  assert.equal(a.snapshot().running,false);
+  move(2,{stance:'prone',facing:Math.PI/2,jump:true});
+  assert.equal(a.snapshot().stance,'prone');
+  assert.equal(a.snapshot().yaw,0);
+  assert.equal(a.snapshot().y,0);
+  assert.ok(a.snapshot().grounded);
+  for(let tick=3;tick<=86;tick++)move(tick,{x:1,facing:-Math.PI/2,run:true,locomotion:{boost:true,lift:0,flight:null}});
+  assert.ok(Math.abs(a.snapshot().x-84*.65/60)<1e-9);
+  assert.equal(a.snapshot().yaw,Math.PI/2);
+  assert.equal(a.snapshot().boosted,false);
+  move(87,{stance:'standing',facing:0,locomotion:{boost:false,lift:0,flight:true}});
+  assert.equal(a.snapshot().stance,'prone');
+  assert.equal(a.snapshot().mode,'walk');
+  assert.equal(a.snapshot().yaw,Math.PI/2);
+  move(88,{stance:'crouching'});
+  assert.equal(a.snapshot().stance,'prone');
+  for(let tick=89;tick<=225;tick++)move(tick,{x:-1});
+  move(226,{stance:'standing',facing:.4});
+  assert.equal(a.snapshot().stance,'standing');
+  assert.equal(a.snapshot().yaw,.4);
+});
+
 test('character ticks and clocks produce the same collision result at different render FPS and retain long-break debt', () => {
   function run(fps: number, pause=false) {
     const clock=createLocalAuthority(), a=createCharacterAuthority(world);

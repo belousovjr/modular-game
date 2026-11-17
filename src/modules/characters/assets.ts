@@ -169,6 +169,8 @@ export function selectAnimation(s: CharacterSnapshot) {
   if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='crawling'?'Crawl_Loop':s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
   if(s.mode==='fly')return !s.moving?'Fly_Idle_Loop':s.boosted?'Fly_Boost_Loop':'Fly_Loop';
   if(s.mode==='swim')return s.moving?'Swim_Fwd_Loop':'Swim_Idle_Loop';
+  if(s.stance==='crouching')return s.moving?'Crouch_Fwd_Loop':'Crouch_Idle_Loop';
+  if(s.stance==='prone')return s.moving?'Crawl_Fwd_Loop':'Crawl_Idle_Loop';
   return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.boosted?'Sprint_Loop':s.running?'Jog_Fwd_Loop':'Walk_Loop';
 }
 

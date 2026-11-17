@@ -10,7 +10,7 @@ import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
 import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
-export type { MoveCommand, CharacterSnapshot, Receipt } from './headless.ts';
+export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
   id: 'characters', title: 'Персонаж', category: 'Игра',

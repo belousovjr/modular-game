@@ -6,7 +6,7 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
 import { defineModule } from '../../core/context.ts';
-import { charactersModule } from '../characters/index.ts';
+import { charactersModule,type CharacterStance } from '../characters/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
 import { worldModule } from '../world/index.ts';
 
@@ -39,13 +39,14 @@ export const playerControlModule = defineModule({
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
     const arm=Vector3.Zero();
-    let desiredRadius = 6, appliedRadius = 6;
+    let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();
     let jump = false, leftHeld = false, rightHeld = false, freeLookAlpha = camera.alpha;
     let sequence = 0, lastTick = -6, lastInput = '', wasActive = false;
     let flightIntent:boolean|null=null;
+    let stanceIntent:CharacterStance|undefined;
     const clearPointer = () => { leftHeld=false; rightHeld=false; };
-    const clear = () => { keys.clear(); jump=false; flightIntent=null; clearPointer(); lastInput = ''; };
+    const clear = () => { keys.clear(); jump=false; flightIntent=null; stanceIntent=undefined; clearPointer(); lastInput = ''; };
     if (canvas) {
       const down=(event:PointerEvent)=>{
         if(core.scene.activeCamera!==camera||document.hidden||event.ctrlKey||event.altKey||event.metaKey)return;
@@ -78,13 +79,20 @@ export const playerControlModule = defineModule({
         e.preventDefault();
         if(info.type===KeyboardEventTypes.KEYDOWN&&!e.repeat){
           const state=deps.characters.snapshot();
-          if(!state.vehicleId)flightIntent=!(flightIntent??state.mode==='fly');
+          if(!state.vehicleId){flightIntent=!(flightIntent??state.mode==='fly');stanceIntent=undefined;}
         }
         return;
       }
-      if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyC','ShiftLeft','ShiftRight','Space'].includes(e.code)) {
+      if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyC','KeyZ','ShiftLeft','ShiftRight','Space'].includes(e.code)) {
         e.preventDefault();
         if (info.type === KeyboardEventTypes.KEYDOWN) { keys.add(e.code); if(e.code==='Space' && !e.repeat) jump=true; }
+      }
+      if(info.type===KeyboardEventTypes.KEYDOWN&&!e.repeat&&(e.code==='KeyC'||e.code==='KeyZ')){
+        const state=deps.characters.snapshot();
+        if(state.mode==='walk'&&flightIntent!==true&&state.grounded&&!state.vehicleId){
+          const selected=e.code==='KeyC'?'crouching':'prone';
+          stanceIntent=(stanceIntent??state.stance)===selected?'standing':selected;
+        }
       }
     });
     scope.onDispose(() => core.scene.onKeyboardObservable.remove(keyboard));
@@ -99,12 +107,14 @@ export const playerControlModule = defineModule({
       const s = deps.characters.snapshot();
       const active = core.scene.activeCamera === camera && !document.hidden && document.activeElement === canvas;
       if (!active) clear();
-      if(s.vehicleId){jump=false;flightIntent=null;}
+      if(s.vehicleId){jump=false;flightIntent=null;stanceIntent=undefined;}
       if(flightIntent!==null&&flightIntent===(s.mode==='fly'))flightIntent=null;
-      const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
-      const right = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
+      if(stanceIntent===s.stance||s.mode!=='walk')stanceIntent=undefined;
       const alpha=leftHeld&&!rightHeld?freeLookAlpha:camera.alpha;
       const free=s.mode!=='walk'||flightIntent===true;
+      const prone=!free&&(s.stance==='prone'||stanceIntent==='prone');
+      const forward = Number(keys.has('KeyW')) - Number(!prone&&keys.has('KeyS'));
+      const right = prone&&forward===0?0:Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
       const manualLift=free?Number(keys.has('Space'))-Number(keys.has('KeyC')):0;
       const pitch=free&&rightHeld&&manualLift===0?camera.beta-Math.PI/2:0;
       const pitchedForward=forward*Math.cos(pitch);
@@ -112,21 +122,24 @@ export const playerControlModule = defineModule({
       const lift=manualLift||(Math.abs(aimLift)>1e-5?aimLift:0);
       const x = -Math.cos(alpha)*pitchedForward - Math.sin(alpha)*right;
       const z = -Math.sin(alpha)*pitchedForward + Math.cos(alpha)*right;
-      const facing=active&&rightHeld?Math.atan2(forward||right?x:-Math.cos(camera.alpha),forward||right?z:-Math.sin(camera.alpha)):null;
+      const facing=active&&rightHeld&&!prone?Math.atan2(forward||right?x:-Math.cos(camera.alpha),forward||right?z:-Math.sin(camera.alpha)):null;
       const length = Math.max(1,Math.hypot(x,lift,z));
       const run=keys.has('ShiftLeft')||keys.has('ShiftRight');
       const boost=keys.has('KeyQ');
-      const input = `${x}/${z}/${run}/${facing}/${boost}/${lift}/${flightIntent}`;
+      const input = `${x}/${z}/${run}/${facing}/${boost}/${lift}/${flightIntent}/${stanceIntent}`;
       if (!s.vehicleId && ((jump && s.tick > lastTick) || s.tick-lastTick >= 6 || (input !== lastInput && s.tick > lastTick) || (wasActive && !active))) {
         void deps.characters.send({type:'move',characterId:s.id,sequence:++sequence,tick:s.tick,x:x/length,z:z/length,
-          run,jump:jump&&!free,facing,locomotion:{boost,lift:lift/length,flight:flightIntent}});
+          run,jump:jump&&!free,facing,locomotion:{boost,lift:lift/length,flight:flightIntent},...(stanceIntent?{stance:stanceIntent}:{})});
         jump=false; lastTick = s.tick; lastInput = input;
       }
       wasActive = active;
       if (Math.abs(camera.radius-appliedRadius) > 1e-5) desiredRadius = Math.max(1.5,Math.min(10,desiredRadius+camera.radius-appliedRadius));
       if(s.vehicleId)desiredRadius=Math.max(6,desiredRadius);
       if (core.scene.activeCamera !== camera) return;
-      const target=new Vector3(s.x,s.y+(s.mode==='swim'?.95:1.2),s.z);
+      const targetHeight=s.mode==='swim'?.95:s.stance==='prone'?.48:s.stance==='crouching'?.86:1.2;
+      const deltaMs=core.scene.getEngine().getDeltaTime();
+      cameraHeight+=(targetHeight-cameraHeight)*(1-Math.exp(-deltaMs/60));
+      const target=new Vector3(s.x,s.y+cameraHeight,s.z);
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));
@@ -134,7 +147,7 @@ export const playerControlModule = defineModule({
       // Reconstructing the orbit from a near-zero position can reset alpha and beta.
       const safeRadius=Math.max(.05,desiredRadius*fraction);
       const previousRadius=Math.max(.05,camera.radius);
-      camera.radius=appliedRadius=recoverCameraRadius(previousRadius,safeRadius,core.scene.getEngine().getDeltaTime());
+      camera.radius=appliedRadius=recoverCameraRadius(previousRadius,safeRadius,deltaMs);
       camera.getViewMatrix();
     };
     update();

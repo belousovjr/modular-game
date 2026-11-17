@@ -4,19 +4,23 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {Accessor,NodeIO} from '@gltf-transform/core';
 import {ALL_EXTENSIONS} from '@gltf-transform/extensions';
 import {dedup,prune,resample} from '@gltf-transform/functions';
+import sharp from 'sharp';
 import {Matrix,Quaternion,Vector3} from '@babylonjs/core/Maths/math.vector.js';
 import {retargetClips} from './retarget-character.mjs';
 
 const source=process.argv[2];
-if(!source)throw new Error('Usage: node scripts/prepare-locomotion-animations.mjs <Quaternius UAL1_Standard.glb>');
+const postureSource=process.argv[3];
+if(!source||!postureSource)throw new Error('Usage: node scripts/prepare-locomotion-animations.mjs <Quaternius UAL1_Standard.glb> <Quaternius UAL1.glb>');
 const file='public/models/human/character.glb';
 const io=new NodeIO().registerExtensions(ALL_EXTENSIONS);
-const [model,library]=await Promise.all([io.read(file),io.read(source)]);
+const [model,library,postureLibrary]=await Promise.all([io.read(file),io.read(source),io.read(postureSource)]);
 const root=model.getRoot(),buffer=root.listBuffers()[0],skin=root.listSkins()[0];
 const swim=['Swim_Fwd_Loop','Swim_Idle_Loop'];
 const flight=['Fly_Idle_Loop','Fly_Loop','Fly_Boost_Loop'];
-for(const clip of root.listAnimations())if([...swim,...flight].includes(clip.getName()))clip.dispose();
+const posture=['Crouch_Fwd_Loop','Crouch_Idle_Loop','Crawl_Fwd_Loop','Crawl_Idle_Loop'];
+for(const clip of root.listAnimations())if([...swim,...flight,...posture].includes(clip.getName()))clip.dispose();
 retargetClips(model,library,swim);
+retargetClips(model,postureLibrary,posture);
 
 const joints=skin.listJoints();
 const idle=root.listAnimations().find(clip=>clip.getName()==='Idle_Loop');
@@ -68,12 +72,24 @@ for(const clip of root.listAnimations()){
   for(const [key,{node,path}] of properties)if(!present.has(key))track(clip,node,path,zero,path==='rotation'?node.getRotation():node.getTranslation());
 }
 await model.transform(resample(),prune(),dedup());
+// Keep the new clips within the existing GLB budget without changing the atlas pixels.
+const normal=root.listTextures().find(t=>t.getName()==='human-normal');
+if(normal?.getMimeType()==='image/png'){
+  const original=normal.getImage();
+  const webp=await sharp(original).webp({lossless:true,effort:6}).toBuffer();
+  const decoded=await Promise.all([original,webp].map(data=>sharp(data).ensureAlpha().raw().toBuffer()));
+  assert.ok(decoded[0].equals(decoded[1]));
+  normal.setImage(webp).setMimeType('image/webp');
+}
 await io.write(file,model);
 const manifestFile='public/models/human/manifest.json';
 const manifest=JSON.parse(await readFile(manifestFile,'utf8'));
 manifest.runtimeClips=root.listAnimations().map(a=>a.getName());
-manifest.locomotionAnimations={swim,flight,swimLibrary:'https://quaternius.com/packs/universalanimationlibrary.html',
+manifest.textures=root.listTextures().map(t=>({name:t.getName(),mime:t.getMimeType(),size:t.getSize()}));
+manifest.locomotionAnimations={swim,flight,posture,swimLibrary:'https://quaternius.com/packs/universalanimationlibrary.html',
   swimArchive:'https://github.com/Barbatos6669/elderforge/tree/main/assets/animations/universal_animation_library_1',
-  swimSourceSha256:createHash('sha256').update(await readFile(source)).digest('hex'),flightSource:'Original poses authored on the project rig'};
+  swimSourceSha256:createHash('sha256').update(await readFile(source)).digest('hex'),flightSource:'Original poses authored on the project rig',
+  postureArchive:'https://github.com/tilakpatell/tilakverse-assets/tree/main/quaternius/universal-animation-library',
+  postureSourceSha256:createHash('sha256').update(await readFile(postureSource)).digest('hex')};
 manifest.sha256=createHash('sha256').update(await readFile(file)).digest('hex');
 await writeFile(manifestFile,JSON.stringify(manifest,null,2)+'\n');

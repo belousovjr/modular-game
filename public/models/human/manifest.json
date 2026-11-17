@@ -15,7 +15,7 @@
     },
     {
       "name": "human-normal",
-      "mime": "image/png",
+      "mime": "image/webp",
       "size": [
         512,
         512
@@ -36,6 +36,10 @@
     "Crawl_Loop",
     "Swim_Fwd_Loop",
     "Swim_Idle_Loop",
+    "Crouch_Fwd_Loop",
+    "Crouch_Idle_Loop",
+    "Crawl_Fwd_Loop",
+    "Crawl_Idle_Loop",
     "Fly_Idle_Loop",
     "Fly_Loop",
     "Fly_Boost_Loop"
@@ -142,7 +146,7 @@
       ]
     }
   ],
-  "sha256": "66e65d5c46e6613aebe0aa87d9f3f50cd37b4938c049d13085438ca79cf5f005",
+  "sha256": "ee94644af9d215f2b5dae77d1cc12f58fb7acee649e19cfbe0871388be5672c2",
   "vehicleAnimations": [
     {
       "clip": "Car_Enter",
@@ -182,9 +186,17 @@
       "Fly_Loop",
       "Fly_Boost_Loop"
     ],
+    "posture": [
+      "Crouch_Fwd_Loop",
+      "Crouch_Idle_Loop",
+      "Crawl_Fwd_Loop",
+      "Crawl_Idle_Loop"
+    ],
     "swimLibrary": "https://quaternius.com/packs/universalanimationlibrary.html",
     "swimArchive": "https://github.com/Barbatos6669/elderforge/tree/main/assets/animations/universal_animation_library_1",
     "swimSourceSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
-    "flightSource": "Original poses authored on the project rig"
+    "flightSource": "Original poses authored on the project rig",
+    "postureArchive": "https://github.com/tilakpatell/tilakverse-assets/tree/main/quaternius/universal-animation-library",
+    "postureSourceSha256": "d1cb4537efa4c06a953ca951e5935062f88c2580ac68e45045592d587bddb43d"
   }
 }

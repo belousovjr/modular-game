@@ -1,9 +1,10 @@
 import type { CollisionWorld, CollisionBox } from '../world/headless.ts';
 
 export type LocomotionMode = 'walk' | 'fly' | 'swim';
+export type CharacterStance = 'standing' | 'crouching' | 'prone';
 interface LocomotionInput {readonly boost:boolean;readonly lift:number;readonly flight:boolean|null}
-export const LOCOMOTION_SPEEDS = Object.freeze({walk:1.8,run:7,sprint:22,fly:25,fastFly:70,swim:3.1,fastSwim:5.2});
-export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null; readonly locomotion?:LocomotionInput }
+export const LOCOMOTION_SPEEDS = Object.freeze({walk:1.8,crouch:1.05,crawl:.65,run:7,sprint:22,fly:25,fastFly:70,swim:3.1,fastSwim:5.2});
+export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null; readonly locomotion?:LocomotionInput; readonly stance?:CharacterStance }
 export interface VehicleCharacterFrame {
   readonly blocker: CollisionBox;
   readonly approach?: {readonly x:number;readonly z:number;readonly yaw:number;readonly vehicleId:string;readonly run:boolean;readonly align:boolean};
@@ -15,7 +16,7 @@ export interface CharacterSnapshot {
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
   readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting'|'crawling';
   readonly grounded: boolean; readonly verticalSpeed: number; readonly airborneTicks: number; readonly landedTick: number;
-  readonly mode: LocomotionMode; readonly boosted:boolean;
+  readonly mode: LocomotionMode; readonly stance:CharacterStance; readonly boosted:boolean;
   readonly moving: boolean; readonly running: boolean; readonly lastSequence: number;
 }
 function validLocomotion(value:unknown):value is LocomotionInput{
@@ -26,7 +27,7 @@ function validLocomotion(value:unknown):value is LocomotionInput{
 }
 export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
-const HEIGHT = 1.8;
+const HEIGHT = {standing:1.8,crouching:1.3,prone:.65};
 const CELL = 32;
 
 export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
@@ -103,6 +104,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
   let lastSequence = 0, acceptedTick = -1, expiry = startTick, dx = 0, dz = 0, run = false, facing:number|null = null;
   let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
+  let stance:CharacterStance='standing',stanceRequest:CharacterStance|undefined;
   let vx=0,vy=0,vz=0;
   function support(px: number,pz: number) {
     let height=ground(px,pz);
@@ -123,9 +125,9 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     }
     return inside;
   }
-  function blocked(px: number, pz: number, py: number, checkStep=true) {
+  function blocked(px: number, pz: number, py: number, checkStep=true,height=HEIGHT[stance]) {
     if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || (checkStep&&py-y>.3)) return true;
-    return obstacles(px,pz).some(b => py < b.maxY && py + HEIGHT > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS && touches(b,px,pz));
+    return obstacles(px,pz).some(b => py < b.maxY && py + height > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS && touches(b,px,pz));
   }
   function freeBlocked(px:number,pz:number,py:number){
     if(blocked(px,pz,py,false))return true;
@@ -133,7 +135,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     if(top<=py+1e-7)return false;
     // Bridge decks are ceilings below their deck, while dry terrain is solid beneath its surface.
     if(!overWater(px,pz))return true;
-    return ground(px,pz,py+HEIGHT-1e-7)>py+1e-7;
+    return ground(px,pz,py+HEIGHT[stance]-1e-7)>py+1e-7;
   }
   function resetMotion(){
     mode='walk';vx=vy=vz=0;boost=false;lift=0;flightRequest=null;
@@ -184,21 +186,28 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         if(![frame.blocker.minX,frame.blocker.maxX,frame.blocker.minZ,frame.blocker.maxZ,frame.blocker.minY,frame.blocker.maxY].every(Number.isFinite)||frame.blocker.minX>=frame.blocker.maxX||frame.blocker.minZ>=frame.blocker.maxZ||frame.blocker.minY>=frame.blocker.maxY)throw new Error('Invalid vehicle frame');
         for(const pose of [frame.pose,frame.release])if(pose&&![pose.x,pose.y,pose.z,pose.yaw].every(Number.isFinite))throw new Error('Invalid vehicle pose');
         const pose=frame.pose??frame.release;
-        if(pose){x=pose.x;y=pose.y;z=pose.z;yaw=pose.yaw;verticalSpeed=0;grounded=true;jump=false;dx=dz=0;resetMotion();}
+        if(pose){x=pose.x;y=pose.y;z=pose.z;yaw=pose.yaw;verticalSpeed=0;grounded=true;jump=false;dx=dz=0;stance='standing';stanceRequest=undefined;resetMotion();}
       }
       if(vehicleFrame?.approach&&!frame?.approach&&!frame?.pose){dx=dz=0;run=false;facing=null;expiry=tick;}
       vehicleFrame=frame;
     },
     receive(input: unknown, ownerId: string): Receipt {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== (8+Number('facing' in input)+Number('locomotion' in input)) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== (8+Number('facing' in input)+Number('locomotion' in input)+Number('stance' in input)) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
       const locomotion='locomotion' in input?input.locomotion:undefined;
       if('locomotion' in input&&!validLocomotion(locomotion))return {accepted:false,reason:'invalid'};
+      let requestedStance:CharacterStance|undefined;
+      if('stance' in input){
+        const value=input.stance;
+        if(value!=='standing'&&value!=='crouching'&&value!=='prone')return {accepted:false,reason:'invalid'};
+        requestedStance=value;
+      }
       if (vehicleFrame?.pose||vehicleFrame?.approach) return {accepted:false,reason:'vehicle'};
       if (ownerId !== 'local') return { accepted: false, reason: 'owner' };
       if (input.sequence <= lastSequence) return { accepted: false, reason: 'sequence' };
       if (input.tick > tick || tick-input.tick > 30) return { accepted: false, reason: 'stale' };
       if (acceptedTick === tick) return { accepted: false, reason: 'rate' };
       lastSequence = input.sequence; acceptedTick = tick; expiry = tick + 12;
+      stanceRequest=requestedStance;
       const length = Math.max(1, Math.hypot(input.x,input.z));
       dx = input.x / length; dz = input.z / length; run = input.run; jump = input.jump && grounded; facing='facing' in input && typeof input.facing==='number'?input.facing:null;
       if(validLocomotion(locomotion)){
@@ -212,20 +221,22 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       tick = nextTick;
       moving = false;
       if(vehicleFrame?.pose)return;
-      if(vehicleFrame?.approach){resetMotion();const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
+      if(vehicleFrame?.approach){resetMotion();stanceRequest='standing';const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
+      if(stanceRequest&&stanceRequest!==stance&&grounded&&mode==='walk'&&!blocked(x,z,y,false,HEIGHT[stanceRequest]))stance=stanceRequest;
+      stanceRequest=undefined;
       if(flightRequest!==null){
-        if(flightRequest&&mode!=='fly'){
+        if(flightRequest&&mode!=='fly'&&(stance==='standing'||!blocked(x,z,y,false,HEIGHT.standing))){
           const takeoff=grounded&&lift>=0;
-          mode='fly';vx=vz=0;vy=takeoff?8:0;verticalSpeed=0;grounded=false;airborneTicks=12;
+          mode='fly';stance='standing';vx=vz=0;vy=takeoff?8:0;verticalSpeed=0;grounded=false;airborneTicks=12;
         }
         else if(!flightRequest&&mode==='fly'){resetMotion();verticalSpeed=0;airborneTicks=12;}
         flightRequest=null;
       }
-      if(mode==='walk'&&y<=swimY&&deepWater(x,z)){mode='swim';grounded=false;vx=vy=vz=0;}
+      if(mode==='walk'&&y<=swimY&&deepWater(x,z)){mode='swim';stance='standing';grounded=false;vx=vy=vz=0;}
       if(mode!=='walk'){jump=false;freeStep(tick<=expiry);return;}
-      if (jump && grounded) { verticalSpeed = 5.5; grounded = false; airborneTicks = 0; }
+      if (jump && grounded && stance==='standing') { verticalSpeed = 5.5; grounded = false; airborneTicks = 0; }
       jump = false;
-      const speed=boost?LOCOMOTION_SPEEDS.sprint:run?LOCOMOTION_SPEEDS.run:LOCOMOTION_SPEEDS.walk;
+      const speed=stance==='prone'?LOCOMOTION_SPEEDS.crawl:stance==='crouching'?LOCOMOTION_SPEEDS.crouch:boost?LOCOMOTION_SPEEDS.sprint:run?LOCOMOTION_SPEEDS.run:LOCOMOTION_SPEEDS.walk;
       if (tick <= expiry) {
         // Swept movement is subdivided below the radius, then slides along each axis.
         const steps = Math.max(1, Math.ceil(Math.hypot(dx,dz)*speed / 60 / 0.1));
@@ -238,8 +249,8 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
           if (grounded) { const floor=support(x,z); if(y-floor>.3) grounded=false; else y=floor; }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
-        if (facing!==null) yaw=facing;
-        else if (moving) yaw = Math.atan2(dx,dz);
+        if (stance!=='prone'&&facing!==null) yaw=facing;
+        else if (moving) yaw = stance==='prone'?Math.atan2(x-beforeX,z-beforeZ):Math.atan2(dx,dz);
       }
       if (!grounded) {
         airborneTicks++;
@@ -249,13 +260,14 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         for (const b of query(cells,x,z)) {
           if (x <= b.minX-RADIUS || x >= b.maxX+RADIUS || z <= b.minZ-RADIUS || z >= b.maxZ+RADIUS || !touches(b,x,z)) continue;
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
-          if (verticalSpeed > 0 && y+HEIGHT <= b.minY && nextY+HEIGHT >= b.minY) { nextY=b.minY-HEIGHT;verticalSpeed=0; }
+          const height=HEIGHT[stance];
+          if (verticalSpeed > 0 && y+height <= b.minY && nextY+height >= b.minY) { nextY=b.minY-height;verticalSpeed=0; }
         }
         if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;landedTick=tick; }
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,boosted:moving&&boost&&tick<=expiry,moving,running: moving&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
   };
   };
 }
