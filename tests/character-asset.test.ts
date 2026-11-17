@@ -91,13 +91,16 @@ test('car-specific Mixamo clips keep feet below the head and meet the driving se
       if(c.getTargetPath()==='rotation')c.getTargetNode()!.setRotation(Quaternion.Slerp(Quaternion.FromArray(a),Quaternion.FromArray(b),alpha).asArray());
       if(c.getTargetPath()==='translation')c.getTargetNode()!.setTranslation([a[0]+(b[0]-a[0])*alpha,a[1]+(b[1]-a[1])*alpha,a[2]+(b[2]-a[2])*alpha]);
     }
-    return {hip:node('pelvis').getWorldTranslation()[1],head:node('Head').getWorldTranslation()[1],feet:['foot_l','foot_r'].map(n=>node(n).getWorldTranslation()[1])};
+    return {hip:node('pelvis').getWorldTranslation()[1],head:node('Head').getWorldTranslation()[1],feet:['foot_l','foot_r'].map(n=>node(n).getWorldTranslation()[1]),rotations:nodes.map(n=>n.getRotation())};
   };
   const seated=pose('Driving_Loop',0),standing=pose('Idle_Loop',0);
   for(const clip of ['Car_Enter','Car_Exit'])for(const t of [0,.25,.5,.75,1]){
     const p=pose(clip,t);assert.ok(p.head>Math.max(...p.feet)+.35,'Retargeted legs flipped above the torso');assert.ok(p.head<2&&p.hip>.3&&p.hip<1.1);
   }
-  assert.ok(Math.abs(pose('Car_Enter',1).hip-seated.hip)<.02);
+  const entryEnd=pose('Car_Enter',1);
+  assert.ok(Math.abs(entryEnd.hip-seated.hip)<.02);
+  for(let i=0;i<entryEnd.rotations.length;i++)assert.ok(Math.abs(Quaternion.Dot(Quaternion.FromArray(entryEnd.rotations[i]),Quaternion.FromArray(seated.rotations[i])))>.99999,'Entry end must match the driving pose: '+nodes[i].getName());
+  for(const t of [.88,.92,.96,1])assert.ok(pose('Car_Enter',t).head<seated.head+.03,'Late entry raised the head above the driving pose');
   assert.ok(Math.abs(pose('Car_Exit',0).hip-seated.hip)<.02);
   assert.ok(Math.abs(pose('Car_Enter',0).hip-standing.hip)<.05);
   assert.ok(Math.abs(pose('Car_Exit',1).hip-standing.hip)<.05);

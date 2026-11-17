@@ -13,7 +13,7 @@ export interface VehicleSnapshot {
 }
 // Interaction guides belong to this vehicle model; ticks match its retargeted car clips.
 export const CAR_GUIDES={
-  id:'compact-suv',height:2.2,stand:{x:-1.7,z:-.35},seat:{x:-.46,y:.35,z:-.12},
+  id:'compact-suv',height:2.3,stand:{x:-1.7,z:-.35},seat:{x:-.46,y:.47,z:-.12},
   enter:{duration:110,open:[18,36],close:[80,104],move:[39,75],lift:[53,60]},
   exit:{duration:117,movingDuration:59,movingMove:[15,55],open:[3,21],close:[72,90],move:[30,71],drop:[38,45]},
 } as const;

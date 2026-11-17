@@ -32,6 +32,7 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
       const node=nodes.find(n=>n.name===`wheel/${axle}/${side}`);if(!node)throw new Error('Missing wheel');
       node.computeWorldMatrix(true);node.setParent(null);wheels.push({node,rotation:(root.rotationQuaternion??Quaternion.Identity()).conjugate().multiply(node.rotationQuaternion??Quaternion.FromEulerVector(node.rotation)),scale:node.scaling.clone()});
     }
+    root.scaling.y=1.04; // Extra cabin clearance; detached wheels retain their authored shape.
     const meshes=container.meshes.filter((m):m is Mesh=>m instanceof Mesh&&m.getTotalVertices()>0);
     for(const mesh of meshes){mesh.isPickable=false;mesh.metadata={...mesh.metadata,shadowNearOnly:true,shadowCaster:mesh.material?.name!=='car/glass'};}
     geometry.registerMeshes(meshes,scope);status='ready';root.metadata={assetStatus:status,triangles:manifest.triangles};

@@ -17,6 +17,7 @@ for(const [i,n] of joints.entries()){
 function reset(){for(const[n,b]of bind)n.setTranslation(b.t).setRotation(b.q).setScale(b.s);}
 reset();const driving=r.listAnimations().find(a=>a.getName()==='Driving_Loop');assert.ok(driving);
 for(const c of driving.listChannels()){const n=c.getTargetNode(),v=c.getSampler().getOutput().getElement(0,[]);if(c.getTargetPath()==='rotation')n.setRotation(v);if(c.getTargetPath()==='translation')n.setTranslation(v);}
+const seatRotations=new Map(joints.map(n=>[n,Quaternion.FromArray(n.getRotation())]));
 const pelvis=target.get('pelvis'),seatPosition=[...pelvis.getTranslation()],driveYaw=Quaternion.FromArray(pelvis.getWorldRotation()).toEulerAngles().y;reset();
 for(const a of r.listAnimations())if(['Sitting_Enter','Sitting_Exit','Car_Enter','Car_Exit'].includes(a.getName()))a.dispose();
 const mapping={Hips:'pelvis',Spine:'spine_01',Spine1:'spine_02',Spine2:'spine_03',Neck:'neck_01',Head:'Head'};
@@ -44,12 +45,15 @@ for(const [input,name,enter]of[['Entering_Car','Car_Enter',true],['Exiting_Car',
     const t=end*frame/count,progress=frame/count;apply(t);const desired=new Map();
     for(const n of joints){const parent=n.getParentNode(),b=bind.get(n),link=links.find(p=>p.dst===n),parentQ=desired.get(parent)??Quaternion.FromArray(parent?.getWorldRotation()??[0,0,0,1]);
       const global=link?alignment.multiply(Quaternion.FromArray(link.src.getWorldRotation()).multiply(sourceBind.get(link.src).conjugate()).multiply(b.gq)):parentQ.multiply(Quaternion.FromArray(b.q));
-      const q=parentQ.conjugate().multiply(global).normalize(),values=tracks.get(n);if(values.length&&Quaternion.Dot(Quaternion.FromArray(values,values.length-4),q)<0)q.scaleInPlace(-1);values.push(...q.asArray());desired.set(n,global);
+      let q=parentQ.conjugate().multiply(global).normalize();
+      if(enter){const u=Math.max(0,Math.min(1,(progress-.88)/.12));q=Quaternion.Slerp(q,seatRotations.get(n),u*u*(3-2*u));}
+      const values=tracks.get(n);if(values.length&&Quaternion.Dot(Quaternion.FromArray(values,values.length-4),q)<0)q.scaleInPlace(-1);values.push(...q.asArray());desired.set(n,global);
     }
     const standing=bind.get(pelvis).t,from=enter?standing:seatPosition,to=enter?seatPosition:standing,rawY=(hips.getTranslation()[1]-startY)*.01,rawEnd=(lastY-startY)*.01,blend=progress*progress*(3-2*progress);
     // This outfit's skeletal parent is Z-up locally although the glTF world is Y-up.
     const parent=pelvis.getParentNode().getWorldMatrix(),up=[parent[1],parent[5],parent[9]],axis=up.map(Math.abs).indexOf(Math.max(...up.map(Math.abs)));
     const translation=from.map((v,j)=>v+(to[j]-v)*blend);translation[axis]=from[axis]+rawY/up[axis]+(to[axis]-from[axis]-rawEnd/up[axis])*blend;
+    if(enter){const u=Math.max(0,Math.min(1,(progress-.88)/.12)),w=u*u*(3-2*u);for(let j=0;j<3;j++)translation[j]+=(seatPosition[j]-translation[j])*w;}
     positions.push(...translation);
   }
   const clip=model.createAnimation(name),time=model.createAccessor().setBuffer(buffer).setType(Accessor.Type.SCALAR).setArray(times);

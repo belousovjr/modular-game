@@ -13,3 +13,5 @@ node --max-old-space-size=512 scripts/prepare-car.mjs /path/to/Especial\ Car_5NL
 ```
 
 The original ZIP/GLB is not republished as a standalone asset pack. These checked-in derivatives are runtime assets of this game project. No paid asset was purchased.
+
+Runtime cabin fit: the body/doors/interior root is 4% taller (Y only), applied after wheel detachment so the tyres keep their shape and physics anchors. Driver guide height is raised by 0.12 m; source mesh/texture budgets are unchanged.
