@@ -10,6 +10,7 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { Scope } from '../../core/modules.ts';
 import type { DistancePoint } from '../object-rendering/index.ts';
+import {installShadowFeather} from './feather.ts';
 
 const MAP_SIZE = 1024;
 const CASCADE_MAP_SIZE = 1024;
@@ -33,6 +34,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
     ? new CascadedShadowGenerator(CASCADE_MAP_SIZE, sun)
     : new ShadowGenerator(MAP_SIZE, sun);
   scope.onDispose(() => generator.dispose());
+  installShadowFeather(generator,scope);
   const cascaded = generator instanceof CascadedShadowGenerator ? generator : undefined;
   let cascadePlanesReady = false;
   if (cascaded) {
@@ -98,7 +100,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
   const zero = Vector3.Zero();
   function casterRevision(mesh: Mesh) {
     const material = mesh.material;
-    return [mesh.visibility, ...mesh.getWorldMatrix().m, material, material?.backFaceCulling, material?.cullBackFaces, material?.fillMode];
+    return [mesh.visibility, mesh.metadata?.shadowFeather, ...mesh.getWorldMatrix().m, material, material?.backFaceCulling, material?.cullBackFaces, material?.fillMode];
   }
   let previousCasters: Mesh[] = [];
   let previousRevisions: ReturnType<typeof casterRevision>[] = [];

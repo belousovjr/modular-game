@@ -91,7 +91,7 @@ export function createTreeShadowBatch(name:string,trees:readonly WorldPlacement[
   mesh.material=material;
   mesh.isPickable=false;
   mesh.layerMask=0;
-  mesh.metadata={treeShadow:true,shadowNearOnly:true,shadowReceiver:false};
+  mesh.metadata={treeShadow:true,shadowNearOnly:true,shadowReceiver:false,shadowFeather:.80};
   mesh.freezeWorldMatrix();
   return mesh;
 }

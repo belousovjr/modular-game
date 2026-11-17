@@ -133,7 +133,7 @@ test('world places persistent generated content, keeps fallback styling without 
     const treeProxies=scene.meshes.filter(mesh=>mesh.metadata?.treeShadow&&mesh.isEnabled());
     const treeCasters=light.getSunLight().getShadowGenerator()?.getShadowMap()?.renderList??[];
     assert.ok(treeProxies.length>0);
-    assert.ok(treeProxies.every(mesh=>mesh.layerMask===0&&!mesh.receiveShadows&&treeCasters.includes(mesh)));
+    assert.ok(treeProxies.every(mesh=>mesh.layerMask===0&&!mesh.receiveShadows&&mesh.metadata?.shadowFeather===.80&&treeCasters.includes(mesh)));
     assert.ok(treeCasters.every(mesh=>!mesh.metadata?.vegetation));
     point = null; settle();
     point = { x:0, y:10, z:0 }; settle();
