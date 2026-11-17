@@ -1,5 +1,6 @@
 import {createElement} from 'react';
 import {ControlPanel} from './panel.tsx';
+import {cameraObstacleFraction,recoverCameraRadius} from './camera-obstacles.ts';
 import {createCameraGroundSweep} from './camera-ground.ts';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
@@ -37,6 +38,7 @@ export const playerControlModule = defineModule({
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
+    const arm=Vector3.Zero();
     let desiredRadius = 6, appliedRadius = 6;
     const keys = new Set<string>();
     let jump = false, leftHeld = false, rightHeld = false, freeLookAlpha = camera.alpha;
@@ -104,26 +106,17 @@ export const playerControlModule = defineModule({
       wasActive = active;
       if (Math.abs(camera.radius-appliedRadius) > 1e-5) desiredRadius = Math.max(1.5,Math.min(10,desiredRadius+camera.radius-appliedRadius));
       if(s.vehicleId)desiredRadius=Math.max(6,desiredRadius);
-      camera.radius = desiredRadius;
-      camera.setTarget(new Vector3(s.x,s.y+1.2,s.z), false, false, true);
       if (core.scene.activeCamera !== camera) return;
-      // Camera sphere/box sweep uses static world data, including unloaded buildings.
-      camera.getViewMatrix(true);
-      const target = camera.target, delta = camera.position.subtract(target);
-      let fraction = groundSweep(target,delta);
-      const minX=Math.min(target.x,camera.position.x)-.2,maxX=Math.max(target.x,camera.position.x)+.2;
-      const minZ=Math.min(target.z,camera.position.z)-.2,maxZ=Math.max(target.z,camera.position.z)+.2;
-      for (const b of deps.world.collision.blockers) {
-        if(b.maxX<minX||b.minX>maxX||b.maxZ<minZ||b.minZ>maxZ)continue;
-        let enter = 0, exit = 1;
-        for (const [origin,direction,min,max] of [[target.x,delta.x,b.minX-.2,b.maxX+.2],[target.y,delta.y,b.minY-.2,b.maxY+.2],[target.z,delta.z,b.minZ-.2,b.maxZ+.2]]) {
-          if (Math.abs(direction) < 1e-9) { if (origin < min || origin > max) { enter=2; break; } }
-          else { const a=(min-origin)/direction,c=(max-origin)/direction; enter=Math.max(enter,Math.min(a,c)); exit=Math.min(exit,Math.max(a,c)); }
-        }
-        if (enter <= exit && enter >= 0 && enter <= 1) fraction = Math.min(fraction,Math.max(0,enter-.02/Math.max(delta.length(),.001)));
-      }
-      if (fraction < 1) camera.setPosition(target.add(delta.scale(fraction)));
-      appliedRadius = camera.radius;
+      const target=new Vector3(s.x,s.y+1.2,s.z);
+      camera.setTarget(target,false,false,true);
+      const horizontal=desiredRadius*Math.sin(camera.beta);
+      arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));
+      const fraction=Math.min(groundSweep(target,arm),cameraObstacleFraction(target,arm,desiredRadius,deps.world.collision.blockers));
+      // Reconstructing the orbit from a near-zero position can reset alpha and beta.
+      const safeRadius=Math.max(.05,desiredRadius*fraction);
+      const previousRadius=Math.max(.05,camera.radius);
+      camera.radius=appliedRadius=recoverCameraRadius(previousRadius,safeRadius,core.scene.getEngine().getDeltaTime());
+      camera.getViewMatrix();
     };
     update();
     const observer = core.scene.onBeforeRenderObservable.add(update, -1, true);
