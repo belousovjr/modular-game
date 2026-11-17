@@ -232,7 +232,7 @@ export function generateCity(source: CitySource): CitySource {
   const ids=new Set<string>();let vertices=0,detailCount=0;
   for(const base of source.chunks) {
     detailCount+=base.details?.length??0;
-    if(detailCount>2048||(base.details?.length??0)>1024)throw new Error('Invalid city details');
+    if(detailCount>3072||(base.details?.length??0)>1024)throw new Error('Invalid city details');
     for(const chunk of [base,...base.details??[]]) {
     if(ids.has(chunk.id)||!chunk.id.trim()||!validRectangle(chunk.bounds)||chunk.meshes.length>32)throw new Error('Invalid city chunk');ids.add(chunk.id);
     for(const mesh of chunk.meshes) {

@@ -35,7 +35,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
 }
 
 export function createCharacterAuthorityFactory(world: CollisionWorld) {
-  if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 10000 || world.floors.length > 10000) throw new Error('Invalid character world');
+  if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
   type Triangle={minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[];denominator:number};
   const triangles=new Map<string,Triangle[]>(),waterTriangles=new Map<string,Triangle[]>();
@@ -62,7 +62,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     index(floors, Object.freeze({ ...f }));
   }
   function indexTriangles(source:readonly (readonly number[])[],map:Map<string,Triangle[]>) {
-    if(source.length>200000)throw new Error('Too many terrain triangles');
+    if(source.length>350000)throw new Error('Too many terrain triangles');
     for(const p of source){
       if(p.length!==9||!p.every(Number.isFinite))throw new Error('Invalid terrain triangle');
       const denominator=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);

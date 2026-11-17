@@ -12,8 +12,8 @@ export function groupBuildingSurfaces(city:CitySource) {
   for(const chunk of city.chunks){
     const sources=chunk.meshes.filter(mesh=>mesh.surface.startsWith('city-'));
     if(!sources.length)continue;
-    const x=Math.floor(chunk.bounds.minX/256);
-    const z=Math.floor(chunk.bounds.minZ/256);
+    const x=Math.floor(chunk.bounds.minX/512);
+    const z=Math.floor(chunk.bounds.minZ/512);
     const id=`${city.id}/skyline/${x}/${z}`;
     let group=groups.get(id);
     if(!group){

@@ -6,11 +6,12 @@ import gzip,hashlib,json,math,re,xml.etree.ElementTree as ET
 from statistics import median
 from pathlib import Path
 from collections import defaultdict,Counter
+from functools import cache
 from shapely.geometry import Polygon,LineString,Point,box
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union,polygonize
 from shapely.prepared import prep
-from shapely import constrained_delaunay_triangles
+from shapely import STRtree,clip_by_rect,constrained_delaunay_triangles
 from shapely.affinity import rotate,translate,scale
 def normalize_marina(result):
     # Shared conservative envelope avoids shrinking the twin towers independently into OSM rectangles.
@@ -62,28 +63,49 @@ def polygon(refs):
     return Polygon(c).buffer(0) if len(c)>=4 and c[0]==c[-1] else Polygon()
 bounds=box(*project(BBOX[0],BBOX[1]),*project(BBOX[2],BBOX[3]))
 minx,minz,maxx,maxz=bounds.bounds
-water=[];buildings=[];members_seen=set()
+water=[];lake_shapes=[];park_shapes=[];buildings=[];members_seen=set()
+def greenspace(t):
+    return t.get('leisure') in ('park','garden','nature_reserve') or t.get('landuse') in ('grass','forest','recreation_ground') or t.get('natural')=='wood'
+
+def solid_building(t):
+    return bool(t.get('building')) and t['building'] not in ('roof','construction','shed','service','no') and t.get('location')!='underground' and number(t.get('layer'))>=0
+
 for ident,(t,members) in sorted(relations.items()):
-    river=t.get('natural')=='water' and t.get('water')=='river'
-    if not river and not t.get('building'):continue
+    river=t.get('natural')=='water' and t.get('water') in ('river','harbour')
+    lake=t.get('name')=='Lake Michigan' and t.get('water')=='lake'
+    park=greenspace(t)
+    if not river and not lake and not park and not solid_building(t):continue
     lines=[LineString(coords(ways[r][1])) for r,role in members if role!='inner' and r in ways and len(coords(ways[r][1]))>=2]
-    inners=[polygon(ways[r][1]) for r,role in members if role=='inner' and r in ways]
-    for p in polygonize(unary_union(lines)):
-        p=p.difference(unary_union(inners)).intersection(bounds)
+    inner_lines=[LineString(coords(ways[r][1])) for r,role in members if role=='inner' and r in ways and len(coords(ways[r][1]))>=2]
+    holes=unary_union(list(polygonize(unary_union(inner_lines))))
+    if lake:
+        # The snapshot contains the local shoreline, not the other side of Lake Michigan.
+        east_edge=LineString([(maxx,minz),(maxx,maxz)])
+        mainland=Point(0,0)
+        for face in polygonize(unary_union([bounds.boundary,*(line.intersection(bounds) for line in lines)])):
+            if not face.covers(mainland) and face.boundary.intersection(east_edge).length>1:
+                lake_shapes.extend(polys(face.difference(holes)))
+        continue
+    for i,p in enumerate(polygonize(unary_union(lines))):
+        p=p.difference(holes).intersection(bounds)
         if river:water.extend(polys(p))
-        else:buildings.extend((f'osm/r{ident}/{i}',t,q) for i,q in enumerate(polys(p)));members_seen.update(r for r,_ in members)
+        elif park:park_shapes.extend(polys(p))
+        else:buildings.extend((f'osm/r{ident}/{j}',t,q) for j,q in enumerate(polys(p)));members_seen.update(r for r,_ in members)
 for ident,(t,refs) in sorted(ways.items()):
-    if t.get('natural')=='water' and t.get('water')=='river':water.extend(polys(polygon(refs).intersection(bounds)))
-    if t.get('building') and ident not in members_seen and t['building'] not in ['roof','construction','shed','service']:
+    if t.get('natural')=='water' and t.get('water') in ('river','canal','harbour','basin'):water.extend(polys(polygon(refs).intersection(bounds)))
+    if greenspace(t):park_shapes.extend(polys(polygon(refs).intersection(bounds)))
+    if solid_building(t) and ident not in members_seen:
         buildings.extend((f'osm/w{ident}/{i}',t,p) for i,p in enumerate(polys(polygon(refs).intersection(bounds))))
 print('Source parsed',len(nodes),len(ways),flush=True)
-water=unary_union(water)
+water=unary_union([*water,*lake_shapes])
 # Small river exclusions are not surveyed terrain islands; extruding them invents tall concrete pillars.
 filled_river_holes=[Polygon(ring) for p in polys(water) for ring in p.interiors if Polygon(ring).area<=64]
 water=unary_union([Polygon(p.exterior,[ring.coords for ring in p.interiors if Polygon(ring).area>64]) for p in polys(water)]).simplify(.25,preserve_topology=True).buffer(0)
 assert all(water.covers(h.representative_point()) for h in filled_river_holes),'Unfilled river exclusion'
 assert water.area>10000,'Missing river'
+assert water.covers(Point(maxx-5,maxz-250)),'Missing Lake Michigan shoreline'
 elevation=json.loads((DATA/'elevation.json').read_text());assert elevation['bounds']==BBOX,'Refresh elevation after changing district bounds';N=elevation['size'];heights=[snap(s['height']-elevation['datumOffset'],SIZE) for s in elevation['samples']]
+@cache
 def terrain_raw(x,z):
     u=max(0,min(N-1,(x-minx)/(maxx-minx)*(N-1)));v=max(0,min(N-1,(z-minz)/(maxz-minz)*(N-1)))
     ix=min(N-2,int(u));iz=min(N-2,int(v));a=u-ix;b=v-iz
@@ -114,10 +136,14 @@ def terrain_faces(shape):
 
 # River level and bathymetry are artistic reference parameters, not surveyed soundings.
 WATER=config['waterLevel']
-shore=water.boundary
+shore=water.boundary.difference(bounds.boundary)
+@cache
 def bed(x,z):
-    d=shore.distance(Point(x,z));depth=d if d<=12 else 12+6*(1-math.exp(-(d-12)/6))
-    return WATER-1-depth+(.12*math.sin(x/42)+.1*math.cos(z/37))*(1-math.exp(-d/12))
+    d=shore.distance(Point(x,z))
+    if d>=24:return WATER-19
+    depth=d if d<=12 else 12+6*(1-math.exp(-(d-12)/6))/(1-math.exp(-2))
+    sediment=(.12*math.sin(x/42)+.1*math.cos(z/37))*(1-math.exp(-d/12))*min(1,(24-d)/4)
+    return WATER-1-depth+sediment
 roads=[];road_shapes=[];pavements=[];node_roads=defaultdict(list)
 classes={'trunk','primary','secondary','tertiary','residential','unclassified','trunk_link','primary_link','secondary_link','tertiary_link'}
 for ident,(t,refs) in sorted(ways.items()):
@@ -150,11 +176,24 @@ pavement=road.buffer(3.25,join_style='round',quad_segs=3).intersection(bounds).s
 # One clean pavement outline produces consistent sidewalk widths and intersection corners.
 sidewalk=pavement.difference(road).difference(water.difference(road.buffer(3.3)))
 land=bounds.difference(water)
-parks=unary_union([polygon(refs) for t,refs in ways.values() if t.get('leisure') in ['park','garden'] or t.get('landuse')=='grass']).intersection(land).difference(pavement)
+parks=unary_union(park_shapes).intersection(land).difference(pavement)
 # Small authored plaza patch follows the same ground facets; no coplanar overlay.
 plaza=box(3,-76,89,-42).intersection(land).difference(pavement)
 parks=parks.difference(plaza)
+park_paths=[]
+park_cover=prep(parks)
+for t,refs in ways.values():
+    if t.get('highway') not in ('footway','cycleway','path') or t.get('footway') in ('sidewalk','crossing') or t.get('bridge')=='yes' or t.get('tunnel')=='yes':continue
+    points=coords(refs)
+    if len(set(points))<2:continue
+    line=LineString(points).simplify(.35)
+    if park_cover.intersects(line):park_paths.append(line.buffer(1.25,quad_segs=2))
+park_paths=unary_union(park_paths).intersection(parks)
+path_cover=prep(park_paths)
+park_paths=park_paths.difference(unary_union([p for _,_,p in buildings if path_cover.intersects(p)]))
+parks=parks.difference(park_paths)
 ground=land.difference(pavement).difference(parks).difference(plaza)
+ground=ground.difference(park_paths)
 curb=road.buffer(.25,join_style='round',quad_segs=3).difference(road).intersection(sidewalk)
 sidewalk=sidewalk.difference(curb)
 assert road.intersection(sidewalk).area<1e-5 and curb.intersection(sidewalk).area<1e-5,'Overlapping street surfaces'
@@ -189,14 +228,17 @@ def mesh(surface,triangles,fn,ix,iz):
 for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
  for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
     tile=box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE).intersection(bounds)
-    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('terrain',parks,terrain,32),('road',road,lambda x,z:terrain(x,z),32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('sidewalk',plaza,lambda x,z:terrain(x,z)+SIZE,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
-        patch=shape.intersection(tile)
+    for surface,shape,fn,step in [('urban-ground',ground,terrain,32),('terrain',parks,terrain,32),('road',road,terrain,32),('sidewalk',sidewalk,lambda x,z:terrain(x,z)+SIZE,32),('curb',curb,lambda x,z:terrain(x,z)+SIZE,32),('sidewalk',plaza,lambda x,z:terrain(x,z)+SIZE,32),('park-path',park_paths,terrain,32),('water',water,lambda x,z:WATER,128),('riverbed',water,bed,8)]:
+        patch=clip_by_rect(shape,*tile.bounds)
+        if not patch.is_valid:patch=shape.intersection(tile)
         if patch.area<1e-7:continue
         triangles=[]
         if surface=='water':
             triangles=triangulate(patch)
         elif surface!='riverbed':
             triangles=terrain_faces(patch)
+        elif patch.distance(shore)>=24:
+            triangles=triangulate(patch)
         else:
             x0,z0,x1,z1=patch.bounds
             for x in range(math.floor(x0/step)*step,math.ceil(x1/step)*step,step):
@@ -216,13 +258,14 @@ def edge_points(ring):
         result.extend((a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t) for t in sorted(cuts)[:-1])
     result.append(points[-1]);return result
 
-def edge_mesh(shape,surface,top,bottom):
+def edge_mesh(shape,surface,top,bottom,skip_map_edge=False):
     batches={}
     for p in polys(shape):
       p=orient(p,sign=-1)
       for ring in [p.exterior,*p.interiors]:
         c=edge_points(ring)
         for a,b in zip(c,c[1:]):
+            if skip_map_edge and (a[0]==b[0] in (minx,maxx) or a[1]==b[1] in (minz,maxz)):continue
             ix=math.floor((a[0]+b[0])/2/TILE);iz=math.floor((a[1]+b[1])/2/TILE)
             target=batches.setdefault((ix,iz),{'surface':surface,'positions':[],'indices':[]})
             n=len(target['positions'])//3
@@ -237,9 +280,10 @@ def edge_mesh(shape,surface,top,bottom):
 edge_mesh(curb,'curb',lambda x,z:terrain(x,z)+SIZE,lambda x,z:terrain(x,z))
 edge_mesh(pavement.difference(water.difference(road.buffer(3.3))),'sidewalk',lambda x,z:terrain(x,z)+SIZE,terrain)
 edge_mesh(plaza,'sidewalk',lambda x,z:terrain(x,z)+SIZE,terrain)
-edge_mesh(water,'bank',terrain,bed)
+edge_mesh(water,'bank',terrain,bed,skip_map_edge=True)
 edge_mesh(road.intersection(water.buffer(2)),'bank',lambda x,z:terrain(x,z),lambda x,z:terrain(x,z)-.7)
 buildable=land.difference(pavement.buffer(.25)).difference(plaza)
+buildable_exact=prep(buildable)
 buildable_cover=prep(buildable.buffer(.03))
 print('Tiled surfaces prepared',dict(counts),flush=True)
 # Buildings retain original footprints. No invented buildings in road/river gaps.
@@ -247,18 +291,37 @@ occupied=defaultdict(list);unique_ids=Counter()
 landmarks={'willis tower':('willis',442),'trump international':('trump',423),'marina city':('marina',179),'wrigley building':('wrigley',134),'tribune tower':('tribune',141)}
 for ident,t,p in sorted(buildings,key=lambda r:r[0]):
     if p.area<70:continue
-    footprint=p.intersection(buildable)
+    if buildable_exact.covers(p):footprint=p
+    else:
+        local=clip_by_rect(buildable,*p.bounds)
+        footprint=p.intersection(local if local.is_valid else buildable)
     if footprint.area<70 or footprint.area<p.area*.45:continue
     h=number(t.get('height'));method='osm-height'
     if 'ft' in t.get('height','') or "'" in t.get('height',''):h*=.3048
     if not h:h=number(t.get('building:levels'))*3.5;method='osm-levels'
-    if not h:h=24 if p.area<600 else 55;method='estimated'
+    if not h:
+        use=t.get('building')
+        if use in ('house','detached','terrace','semidetached_house','bungalow'):h=8
+        elif use in ('industrial','warehouse','retail','garage'):h=10
+        else:h=24 if p.area<600 else 55
+        method='estimated'
     profile='stone' if h<65 else 'glass'
     for name,(family,height) in landmarks.items():
         if name in t.get('name','').lower():profile=family;h=height;method='landmark-reference'
-    for n,p in enumerate(polys(footprint)):
+    source_height=h
+    pieces=polys(footprint)
+    if method=='landmark-reference':pieces=[max(pieces,key=lambda piece:piece.area)]
+    for n,p in enumerate(pieces):
+        if profile in ('stone','glass') and not p.interiors and len(p.exterior.coords)>16:
+            regular=p.buffer(1.1,join_style='mitre').buffer(-1.1,join_style='mitre')
+            if regular.geom_type=='Polygon' and len(regular.interiors)==len(p.interiors) and regular.symmetric_difference(p).area<p.area*.04:
+                p=regular.simplify(.22,preserve_topology=True)
         clean=p.simplify(.12,preserve_topology=True).intersection(p)
         p=orient(clean if clean.geom_type=='Polygon' and not clean.is_empty else p,sign=-1)
+        if profile in ('stone','glass') and not p.interiors:
+            boxy=p.minimum_rotated_rectangle
+            if p.area>=boxy.area*.95 and boxy.hausdorff_distance(p)<1.1 and buildable_exact.covers(boxy):
+                p=orient(boxy,sign=-1)
         rect=p.minimum_rotated_rectangle;cs=list(rect.exterior.coords);width=math.dist(cs[0],cs[1]);depth=math.dist(cs[1],cs[2]);center=rect.centroid
         if min(width,depth)<3:continue
         yaw=-math.atan2(cs[1][1]-cs[0][1],cs[1][0]-cs[0][0])
@@ -288,7 +351,10 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
             if found:break
         if found is None:continue
         fitted,target_x,target_z=found
-        fit=fitted;p=orient(fit,sign=-1);width=snap(width*ratio_x,SIZE);depth=snap(depth*ratio_z,SIZE);h=max(3,snap(h,SIZE));yaw=target_yaw
+        fit=fitted;p=orient(fit,sign=-1);width=snap(width*ratio_x,SIZE);depth=snap(depth*ratio_z,SIZE);yaw=target_yaw
+        h=source_height
+        if method=='estimated' and max(width,depth)>4*min(width,depth):h=min(h,1.6*min(width,depth))
+        h=max(3,snap(h,SIZE))
         bx,bz=target_x,target_z;by=math.ceil(max(terrain(x,z) for x,z in list(fit.exterior.coords))/SIZE)*SIZE
         outline=[[round(x,4),round(z,4)] for x,z in list(fit.exterior.coords)[:-1]]
         unique_ids[ident]+=1
@@ -410,7 +476,7 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
                 quad((ax,low,az),(ax,bottom,az),(bx1,bottom,bz1),(bx1,low,bz1),[(-1,-1)]*4)
                 quad((ax,top,az),(ax,by+h,az),(bx1,by+h,bz1),(bx1,top,bz1),[(-3,-3)]*4)
             # Trim the recessed wall edge at both ends; keep the belt attached and inside the footprint.
-            if rows>=5:
+            if rows>=5 and len(p.exterior.coords)<=13:
              wall=max(polys(inset),key=lambda w:w.area);wall=orient(wall,sign=-1)
              edges=list(zip(list(wall.exterior.coords),list(wall.exterior.coords)[1:]));a,b=max(edges,key=lambda e:math.dist(*e))
              length=math.dist(a,b);dx=(b[0]-a[0])/length;dz=(b[1]-a[1])/length;nx,nz=-dz,dx
@@ -432,6 +498,7 @@ for ident,t,p in sorted(buildings,key=lambda r:r[0]):
         building_data.append({'id':oid,'name':t.get('name',''),'profile':profile,'height':h,'heightSource':method,'sourceFootprint':[[round(x,3),round(z,3)] for x,z in list(p.exterior.coords)]})
 # Neighbouring footprints are known only after placement; omit portals with blocked approaches.
 closed_portals=0
+building_index=STRtree([Polygon(b['outline']) for b in colliders])
 for ch in chunks.values():
     for detail in ch.get('details',[]):
         panel=next((m for m in detail['meshes'] if m['surface']=='facade'),None)
@@ -439,7 +506,7 @@ for ch in chunks.values():
         v=panel['positions'];cx,cz=(v[0]+v[9])/2,(v[2]+v[11])/2;tx,tz=(v[9]-v[0])/2.5,(v[11]-v[2])/2.5;nx,nz=-tz,tx
         approach=Polygon([(cx+tx*u+nx*d,cz+tz*u+nz*d) for u,d in [(-1.75,.15),(1.75,.15),(1.75,2),(-1.75,2)]])
         own=detail['id'].split('/detail/')[1]
-        if any(b['id']!=own and approach.intersects(Polygon(b['outline'])) for b in colliders):
+        if any(colliders[i]['id']!=own for i in building_index.query(approach,predicate='intersects')):
             detail['meshes']=[m for m in detail['meshes'] if m['surface'] not in ['facade','metal']]
         else:closed_portals+=1
 print('Unobstructed closed portals',closed_portals,flush=True)
@@ -483,6 +550,8 @@ junction_mask=unary_union([j['shape'].buffer(4) for j in junctions])
 sidewalk_near=prep(sidewalk.buffer(.6));road_expanded=prep(road.buffer(.02));water_near=prep(water.buffer(2));inner_bounds=prep(bounds.buffer(-12))
 walk_support=prep(sidewalk);road_interior=prep(road.buffer(-.35));crossing_layout=[];signal_layout=[];signals=[];crossings=[];stop_lines=[];crossing_zones=[];pole_points=[]
 road_lines=[(r,LineString(r['points'])) for r in roads]
+road_index=STRtree([line for _,line in road_lines])
+junction_index=STRtree([j['shape'].buffer(1) for j in junctions])
 
 def line_parts(g):return [g] if g.geom_type=='LineString' else [p for p in getattr(g,'geoms',[]) if p.geom_type=='LineString']
 def local_rectangle(cx,cz,tx,tz,u0,u1,v0,v1):
@@ -496,8 +565,10 @@ def support_height(x,z):
 
 for junction in junctions:
     hull=junction['shape'];arms=[]
-    for r,line in road_lines:
-        if not line.intersects(hull):continue
+    local_road=clip_by_rect(road,*hull.buffer(64).bounds)
+    if not local_road.is_valid:local_road=road
+    for index in sorted(road_index.query(hull,predicate='intersects')):
+        r,line=road_lines[index]
         for piece in line_parts(line.difference(hull)):
             if piece.length<9:continue
             points=list(piece.coords)
@@ -515,15 +586,17 @@ for junction in junctions:
         chosen=None;nx,nz=-tz,tx
         for station in [3,5,7,9]:
             sample=path.interpolate(station);cx,cz=snap(sample.x,POSITION),snap(sample.y,POSITION)
-            if any(other['id']!=junction['id'] and other['shape'].buffer(1).contains(Point(cx,cz)) for other in junctions):continue
+            if any(junctions[i]['id']!=junction['id'] for i in junction_index.query(Point(cx,cz),predicate='within')):continue
             across=LineString([(cx-nx*40,cz-nz*40),(cx+nx*40,cz+nz*40)])
-            spans=[s for s in line_parts(road.intersection(across)) if s.distance(Point(cx,cz))<.1]
+            spans=[s for s in line_parts(local_road.intersection(across)) if s.distance(Point(cx,cz))<.1]
             if not spans:continue
             span=max(spans,key=lambda s:s.length)
             if span.length<5 or span.length>max(12,r['width']*1.65):continue
             uv=[(x-cx)*nx+(z-cz)*nz for x,z in span.coords];left,right=min(uv)+.3,max(uv)-.3
             band=local_rectangle(cx,cz,tx,tz,left,right,-1.5,1.5)
-            if not road_expanded.covers(band) or any(band.buffer(.75).intersects(zone) for zone in crossing_zones):continue
+            if not road_expanded.covers(band):continue
+            clearance_band=band.buffer(.75)
+            if any(clearance_band.intersects(zone) for zone in crossing_zones):continue
             ends=[Point(cx+nx*u,cz+nz*u) for u in [left-.3,right+.3]]
             if any(sidewalk.distance(p)>1 for p in ends):continue
             count=math.floor((right-left)/1.0)
@@ -554,7 +627,7 @@ for junction in junctions:
           for ox,oz in offsets:
             sx,sz=snap(px,POSITION)+ox,snap(pz,POSITION)+oz;point=Point(sx,sz)
             if not walk_support.covers(point.buffer(.25)) or water_near.contains(point):continue
-            clearance=road.distance(point)
+            clearance=local_road.distance(point)
             if not .75<=clearance<=1.75 or any(point.distance(p)<2 for p in pole_points):continue
             nominal=snap(max(2,min(12,r['width']/4+1)),SIZE)
             for reach in [nominal,nominal+.5,nominal+1,nominal-.5]:
@@ -582,7 +655,9 @@ for r in roads:
 for surface,shape in [('marking',unary_union(crossings+stop_lines+markings))]:
  for ix in range(math.floor(minx/TILE),math.ceil(maxx/TILE)):
   for iz in range(math.floor(minz/TILE),math.ceil(maxz/TILE)):
-    patch=shape.intersection(box(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE))
+    tile=(ix*TILE,iz*TILE,(ix+1)*TILE,(iz+1)*TILE)
+    patch=clip_by_rect(shape,*tile)
+    if not patch.is_valid:patch=shape.intersection(box(*tile))
     mesh(surface,terrain_faces(patch),lambda x,z:terrain(x,z)+.015,ix,iz)
 lamp_junction_mask=unary_union([Point(nodes[n]).buffer(20) for n in intersection_ids])
 lamps=[];lamp_cells=defaultdict(list)
@@ -630,7 +705,7 @@ counts=Counter()
 for ch in chunks.values():
     for target in [ch,*ch.get('details',[])]:
       for m in target['meshes']:counts[m['surface']]+=len(m['indices'])//3
-result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':'USGS 3DEP; bilinear 9x9 samples; NAVD88 datum offset 180 m','bathymetry':'procedural reference profile, not survey data'},'trafficLayout':{'junctions':[{'id':j['id'],'nodes':j['nodes'],'outline':outline(j['shape'])} for j in junctions],'crosswalks':crossing_layout,'signals':signal_layout},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(junctions),'crossingStripes':len(crossings),'riverArea':round(water.area,2),'triangles':dict(counts),'chunks':len(chunks)}}
+result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':f'USGS 3DEP; bilinear {N}x{N} samples; NAVD88 datum offset {elevation["datumOffset"]} m','bathymetry':'procedural reference profile, not survey data'},'trafficLayout':{'junctions':[{'id':j['id'],'nodes':j['nodes'],'outline':outline(j['shape'])} for j in junctions],'crosswalks':crossing_layout,'signals':signal_layout},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(junctions),'crossingStripes':len(crossings),'waterArea':round(water.area,2),'lakeArea':round(sum(p.area for p in lake_shapes),2),'triangles':dict(counts),'chunks':len(chunks)}}
 normalize_marina(result)
 (DATA/'city.json').write_text(json.dumps(result,separators=(',',':'),ensure_ascii=False)+'\n')
 print(json.dumps(result['report']));print('spawn',result['spawn']);print('bytes',(DATA/'city.json').stat().st_size)

@@ -1,6 +1,6 @@
 import type {CitySource} from '../world-generation/index.ts';
 
-export const distantSurfaces=new Set(['urban-ground','terrain','water','riverbed','bank']);
+export const distantSurfaces=new Set(['urban-ground','terrain','park-path','water','riverbed','bank']);
 
 // shortcut: surfaces currently use world-metre UVs; revisit batching if authored UVs are introduced.
 // Keep the canonical terrain triangles; merge their 128 m tiles to avoid distant per-tile draws.
@@ -22,10 +22,19 @@ function groupSurfaces(city:CitySource,streetOnly:boolean){
     let group=groups.get(id);
     if(!group){group={id,surface,positions:[],indices:[]};groups.set(id,group);}
     if(mesh.surface==='curb'){
+      const p=mesh.positions,remap=new Map<number,number>();
       for(let i=0;i<mesh.indices.length;i+=3){
-        const [a,b,c]=mesh.indices.slice(i,i+3).map(v=>v*3),p=mesh.positions;
+        const a=mesh.indices[i]*3,b=mesh.indices[i+1]*3,c=mesh.indices[i+2]*3;
         if(Math.abs((p[b]-p[a])*(p[c+2]-p[a+2])-(p[c]-p[a])*(p[b+2]-p[a+2]))<1e-8)continue;
-        for(const vertex of [a,b,c]){group.indices.push(group.positions.length/3);group.positions.push(p[vertex],p[vertex+1]-.25,p[vertex+2]);}
+        for(const vertex of [a,b,c]){
+          let index=remap.get(vertex);
+          if(index===undefined){
+            index=group.positions.length/3;
+            group.positions.push(p[vertex],p[vertex+1]-.25,p[vertex+2]);
+            remap.set(vertex,index);
+          }
+          group.indices.push(index);
+        }
       }
       continue;
     }

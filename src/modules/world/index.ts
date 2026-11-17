@@ -29,7 +29,12 @@ export const worldModule = defineModule({
   setup({ core, deps, scope }) {
     const city=deps.generator.generateCity(citySource);
     scope.onDispose(core.panels.register('world','Центр Чикаго',createElement(Link,{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noreferrer'},'© OpenStreetMap contributors · ODbL · Рельеф USGS 3DEP')));
-    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+city.placements.filter(p=>p.position[0]>=c.bounds.minX&&p.position[0]<c.bounds.maxX&&p.position[2]>=c.bounds.minZ&&p.position[2]<c.bounds.maxZ).length}));
+    const placementCounts=new Map<string,number>();
+    for(const {position:[x,,z]} of city.placements){
+      const id=`${city.id}/${Math.floor(x/district.tileSize)}/${Math.floor(z/district.tileSize)}`;
+      placementCounts.set(id,(placementCounts.get(id)??0)+1);
+    }
+    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+(placementCounts.get(c.id)??0)}));
     for(const template of cityTemplates)deps.templates.register(toCityGrid(template),scope);
     for (const template of worldTemplates) deps.templates.register(template.id==='world/lamp'?toCityGrid(template):template, scope);
     const aviationLights=aviationLightPositions(city,p=>deps.templates.resolve(p.templateId,p.parameters).levels[0].parts);
@@ -120,7 +125,7 @@ export const worldModule = defineModule({
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
       for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
       deps.streaming.registerSection(surface.id,bounds,owner=>{
-        const material=surface.surface==='road-base'?'road':surface.surface;
+        const material=surface.surface==='road-base'?'road':surface.surface==='park-path'?'sidewalk':surface.surface;
         const mesh=deps.geometry.createSurfaceMesh(surface.id,material,surface.positions,surface.indices,owner);
         mesh.metadata={...mesh.metadata,citySurface:material,distantGround:band.load===1200,shadowCaster:false};mesh.freezeWorldMatrix();
         const view={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility([mesh],owner)};surfaceViews.add(view);owner.onDispose(()=>surfaceViews.delete(view));

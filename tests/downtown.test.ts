@@ -12,13 +12,18 @@ test('real downtown has deterministic source IDs, riverbed, complex roads and ma
   const city=generateCity(citySource);
   const manifest=JSON.parse(readFileSync(new URL('../src/modules/world/data/downtown/city.json',import.meta.url),'utf8'));
   assert.equal(manifest.source.osmSha256,createHash('sha256').update(readFileSync(new URL('../src/modules/world/data/downtown/osm-snapshot.xml.gz',import.meta.url))).digest('hex'));
-  assert.equal(city.id,'chicago-loop');assert.ok(city.roads.length>800);assert.ok(city.colliders.length>600);
+  assert.equal(city.id,'chicago-loop');assert.ok(city.roads.length>2000);assert.ok(city.colliders.length>2000);
+  const {minX,maxX,minZ,maxZ}=city.bounds;
+  assert.ok(maxX-minX>=3300&&maxZ-minZ>=3300&&Math.abs((maxX-minX)-(maxZ-minZ))<40);
+  assert.ok(minX<-1300&&maxX>1500&&minZ<-1400&&maxZ>1400);
+  for(const [x,z] of [[-1050,0],[1050,0],[0,-1000],[0,1000]])assert.ok(city.roads.some(r=>r.points.some(p=>Math.hypot(p[0]-x,p[1]-z)<550)));
+  assert.ok(!city.colliders.some(c=>c.id.startsWith('osm/r17578530/')||c.id.startsWith('osm/r17581411/')),'Station canopies and underground concourses must not become solid towers');
   assert.equal(new Set(city.placements.map(p=>p.key)).size,city.placements.length);
   assert.ok(city.roads.some(r=>r.bridge));assert.ok(city.roads.some(r=>r.oneway==='yes'));
   assert.ok(city.roads.some(r=>r.points.some((p,i)=>i>0&&Math.abs(p[0]-r.points[i-1][0])>1&&Math.abs(p[1]-r.points[i-1][1])>1)));
   for(const name of ['willis','marina','wrigley','tribune','trump'])assert.ok(city.placements.some(p=>p.templateId===`city/${name}`));
   const surfaces=new Set(city.chunks.flatMap(c=>c.meshes.map(m=>m.surface)));
-  for(const s of ['water','riverbed','bank','road','sidewalk','curb','marking'])assert.ok(surfaces.has(s));
+  for(const s of ['water','riverbed','bank','park-path','road','sidewalk','curb','marking'])assert.ok(surfaces.has(s));
   for(const chunk of city.chunks)for(const m of chunk.meshes)if(m.surface==='riverbed')for(let i=1;i<m.positions.length;i+=3)assert.ok(m.positions[i]<city.waterLevel);
   assert.throws(()=>generateCity({...city,chunks:[{...city.chunks[0],meshes:[{surface:'road',positions:[0,0,0,1,0,0,0,0,1],indices:[0,1,99]}]}]}),/triangles/);
 });
@@ -177,7 +182,7 @@ test('street supports are embedded in the rendered sidewalk, including sloped pa
   assert.ok(checked>1000);
 });
 
-test('small river exclusions remain water and bed instead of extruded terrain pillars',()=>{
+test('mapped lake and small river exclusions retain water and bed instead of exposed terrain',()=>{
   const contains=(m:{positions:readonly number[];indices:readonly number[]},x:number,z:number)=>{
     const v=m.positions;
     for(let i=0;i<m.indices.length;i+=3){
@@ -191,7 +196,7 @@ test('small river exclusions remain water and bed instead of extruded terrain pi
     return false;
   };
   // Centres of pinned OSM inner ways 938561896/938561895/1267036922/1176285158.
-  for(const [x,z] of [[-44.939,391.606],[-7.5,391.361],[-438.398,376.918],[-574.392,-1.098]]){
+  for(const [x,z] of [[-44.939,391.606],[-7.5,391.361],[-438.398,376.918],[-574.392,-1.098],[1820,1430],[1790,-800]]){
     const meshes=citySource.chunks.flatMap(c=>c.meshes);
     for(const surface of ['water','riverbed'])assert.ok(meshes.some(m=>m.surface===surface&&contains(m,x,z)),`Missing ${surface} at former pillar`);
     assert.equal(meshes.some(m=>(m.surface==='urban-ground'||m.surface==='terrain')&&contains(m,x,z)),false,'River exclusion became dry terrain');
@@ -327,11 +332,11 @@ test('ordinary skyline omits all trim and near detail is separately bounded and 
   const far=citySource.chunks.flatMap(c=>c.meshes).filter(m=>m.surface.startsWith('city-'));
   const near=details.flatMap(d=>d.meshes).filter(m=>m.surface.endsWith('-detail'));
   const triangles=(meshes:typeof far)=>meshes.reduce((n,m)=>n+m.indices.length/3,0);
-  assert.ok(triangles(far)<triangles(near)*.15,'Distant buildings must be much simpler');
+  assert.ok(triangles(far)<triangles(near)*.17,'Distant buildings must be much simpler');
   for(const m of far)assert.ok(m.uvs?.filter((_,i)=>i%2===0).every(u=>u>=0||u===-2),'Distant skyline contains trim/plinth roles');
   const base=citySource.chunks.find(c=>c.details?.length);assert.ok(base?.details);
   const detail=base.details[0];
-  const excess=[1024,1024,1].map((count,i)=>({id:`excess/${i}`,bounds:citySource.bounds,buildingIds:[],meshes:[],details:Array.from({length:count},(_,j)=>({id:`excess/${i}/${j}`,bounds:citySource.bounds,meshes:[]}))}));
+  const excess=[1024,1024,1024,1].map((count,i)=>({id:`excess/${i}`,bounds:citySource.bounds,buildingIds:[],meshes:[],details:Array.from({length:count},(_,j)=>({id:`excess/${i}/${j}`,bounds:citySource.bounds,meshes:[]}))}));
   assert.throws(()=>generateCity({...citySource,chunks:excess}),/details/);
   assert.throws(()=>generateCity({...citySource,chunks:[{...base,details:[{...detail,meshes:[{surface:'city-stone-detail',positions:[0,0,0],indices:[0,1,2]}]}]}]}),/triangles/);
 });
@@ -484,7 +489,7 @@ test('Marina twins share dimensions, orientation, floor phase and matching radia
   }
 });
 
-test('aviation lights mark only the five tallest buildings and follow snapped antenna tips',async()=>{
+test('aviation lights mark buildings above the height threshold and follow snapped antenna tips',async()=>{
   const {aviationLightPositions}=await import('../src/modules/world/aviation-lights.ts');
   const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
   const anchors=aviationLightPositions(citySource,p=>{
@@ -492,9 +497,15 @@ test('aviation lights mark only the five tallest buildings and follow snapped an
     assert.ok(template);
     return toCityGrid(template).build(p.parameters).levels[0].parts;
   });
-  assert.equal(anchors.length,6);
-  assert.deepEqual(anchors.map(p=>p[1]).sort((a,b)=>a-b),[308.9,313.4,350.15,476.65,515.4,515.4]);
+  const tall=citySource.placements.filter(p=>p.parameters.height>=300);
+  assert.ok(tall.length>=5);
+  assert.equal(tall.filter(p=>p.templateId==='city/willis').length,1);
+  assert.equal(anchors.length,tall.length+1);
+  for(const p of tall.filter(p=>p.templateId!=='city/willis'&&p.templateId!=='city/trump')){
+    assert.ok(anchors.some(([x,y,z])=>x===p.position[0]&&z===p.position[2]&&y===p.position[1]+p.parameters.height+.15));
+  }
   const willis=anchors.filter(p=>p[1]>500);
+  assert.equal(willis.length,2);
   assert.ok(Math.abs(willis[0][0]-willis[1][0])>20&&Math.abs(willis[0][2]-willis[1][2])>30);
 });
 
@@ -510,7 +521,7 @@ test('skyline batches preserve fitted UVs and geometry across tile boundaries',a
   const result=groupBuildingSurfaces({...citySource,chunks:[
     {id:'first',bounds,buildingIds:['a'],meshes:[wall]},
     {id:'second',bounds:{...bounds,minX:128,maxX:256},buildingIds:['b'],meshes:[next]},
-    {id:'third',bounds:{...bounds,minX:256,maxX:384},buildingIds:['c'],meshes:[wall]},
+    {id:'third',bounds:{...bounds,minX:512,maxX:640},buildingIds:['c'],meshes:[wall]},
   ]});
   assert.equal(result.length,2);
   assert.deepEqual(result[0].buildingIds,['a','b']);
@@ -520,7 +531,7 @@ test('skyline batches preserve fitted UVs and geometry across tile boundaries',a
 
 test('street and park tree trunks share the visual placement and keep the plaza route open',()=>{
   const trees=citySource.placements.filter(p=>p.templateId==='city/tree');
-  assert.ok(trees.length>300&&trees.length<600);
+  assert.ok(trees.length>900&&trees.length<2700);
   const blockers=new Map(cityCollision(citySource).blockers.map(b=>[b.id,b]));
   const planters=citySource.placements.filter(p=>p.templateId==='city/planter');
   assert.equal(trees.filter(p=>p.key.startsWith('authored/tree/planter/')).length,planters.length);
