@@ -9,6 +9,7 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
+import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
 import district from './data/downtown/district.json' with {type:'json'};
@@ -79,12 +80,16 @@ export const worldModule = defineModule({
         const view={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility([mesh],owner)};surfaceViews.add(view);owner.onDispose(()=>surfaceViews.delete(view));
       },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
-    const bands=[{id:'surfaces',minHeight:0,maxHeight:0,load:192,unload:256},...district.buildingLod];
-    for(const chunk of city.chunks)for(const band of bands) {
-      const distant=band.id!=='surfaces';
-      const surfaces=chunk.meshes.filter(m=>distant?m.surface.startsWith('city-')&&m.surface.endsWith('-'+band.id):!m.surface.startsWith('city-')&&!distantSurfaces.has(m.surface)&&m.surface!=='road'&&m.surface!=='sidewalk');
+    const nearby={id:'surfaces',minHeight:0,maxHeight:0,load:192,unload:256};
+    const skyline=groupBuildingSurfaces(city);
+    const surfaceSections=[
+      ...city.chunks.map(chunk=>({chunk,band:nearby,distant:false,bounds:{...chunk.bounds},
+        surfaces:chunk.meshes.filter(m=>!m.surface.startsWith('city-')&&!distantSurfaces.has(m.surface)&&m.surface!=='road'&&m.surface!=='sidewalk')})),
+      ...skyline.flatMap(chunk=>district.buildingLod.map(band=>({chunk,band,distant:true,bounds:{minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity},
+        surfaces:chunk.meshes.filter(m=>m.surface.endsWith('-'+band.id))}))),
+    ];
+    for(const {chunk,band,distant,bounds,surfaces} of surfaceSections) {
       if(!surfaces.length)continue;
-      const bounds=distant?{minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity}:{...chunk.bounds};
       let minY=Infinity,maxY=-Infinity;
       for(const surface of surfaces)for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);minY=Math.min(minY,surface.positions[i+1]);maxY=Math.max(maxY,surface.positions[i+1]);}
       const count=distant?chunk.buildingIds.filter(id=>{const h=heights.get(id);return h!==undefined&&h>=band.minHeight&&h<band.maxHeight;}).length:0;

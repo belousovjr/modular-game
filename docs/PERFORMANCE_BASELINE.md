@@ -800,3 +800,18 @@ GPU comparison: real RTX 3050 Laptop ANGLE/D3D12, Chromium 1280×720 DPR1 uncapp
 Observed differences are roughly 0–5% in these samples, not a universal bound. No claim of zero steady shader cost; two colour geometries may briefly render during a switch. GPU capture recorded 93 partial tower frames and 50 partial-detail frames out of 1800 inspected frames, maximum two enabled tower LODs, complementary bounds such as [0.032,1] and [0,0.032]. Intermediate and settled images were inspected without a new transparency/sorting anomaly. Fade-process cgroup peak 1680162816 bytes versus instant 1046183936; different process/GC peaks do not isolate retained-memory cost. Both OOM=0, browser errors=0.
 
 Separate final cleanup run traversed in/out of tower and facade LOD three times. Every settled return had exactly 559 meshes / 383 geometries / 28 materials / 26 textures / 9 skeletons / 4 lights; zero visible meshes retained partial fade bounds. This includes the normal cache of visited landmark LODs, not an empty scene. Peak 1713922048 bytes under the same cap, OOM=0, errors=0. Node world teardown separately releases all meshes/geometries and the transition registry. No overnight soak; texture-detail mip changes and standalone shadow silhouettes are not temporally blended by this change.
+
+### Larger skyline batches — 2026-11-17
+
+The client merges coarse city shells from 128 m source tiles into 256 m squares by height band, material and UV format. This reduces the prepared skyline from 347 to 168 meshes. Source vertices, triangles and fitted window UVs are copied verbatim. Height-based visibility thresholds, close detail sections, shadow settings and collision data retain their existing values. Culling at the edge of a square is coarser because the batch shares one bounding box.
+
+Matched production builds ran sequentially on an RTX 3050 Laptop GPU via ANGLE/D3D12, uncapped at 1280×720. The full demo had 8 NPCs, vehicles, atmosphere and night lighting enabled. Each fixed view had two 3 s samples after warm-up. FPS, per-sample P95 frame time and draw calls are averaged across the two samples.
+
+| View | FPS before → after | P95 frame time, ms | Draw calls/frame |
+| --- | ---: | ---: | ---: |
+| Day street | 65.1 → 76.1 | 23.0 → 19.4 | 619 → 441 |
+| Day river | 78.2 → 89.6 | 19.3 → 17.2 | 434 → 285 |
+| Day skyline | 74.0 → 83.5 | 20.5 → 18.3 | 426 → 248 |
+| Night street | 76.6 → 85.6 | 20.0 → 18.5 | 164 → 139 |
+
+Camera position → target in metres: street and night street (24, 3.5, −82) → (24, 5, −42); river (132, 17, 318) → (132, 20, 418); skyline (410, 350, −610) → (80, 120, 80). The 12–17% observed FPS gain and reduction in draw calls apply to these fixed views. A separate diagnostic found lower render CPU time with shadows disabled. Shadows were enabled for the matched comparison. In the four screenshot pairs, at most 0.02% of pixels below the UI strip differed by more than 24/255 in any channel. Both matched runs used the same 2 GiB cgroup cap without swap, with peaks of 998 MB before and 987 MB after, and zero OOMs or browser errors. Short samples do not establish moving-camera or long-session performance.

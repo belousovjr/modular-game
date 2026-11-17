@@ -466,3 +466,23 @@ test('aviation lights mark only the five tallest buildings and follow snapped an
   const willis=anchors.filter(p=>p[1]>500);
   assert.ok(Math.abs(willis[0][0]-willis[1][0])>20&&Math.abs(willis[0][2]-willis[1][2])>30);
 });
+
+test('skyline batches preserve fitted UVs and geometry across tile boundaries',async()=>{
+  const {groupBuildingSurfaces}=await import('../src/modules/world/building-batches.ts');
+  const {chunks}=citySource;
+  const oldCount=chunks.flatMap(c=>c.meshes.filter(m=>m.surface.startsWith('city-'))).length;
+  const groups=groupBuildingSurfaces(citySource);
+  assert.ok(groups.flatMap(g=>g.meshes).length<oldCount/2);
+  const bounds={minX:0,maxX:128,minZ:0,maxZ:128};
+  const wall={surface:'city-glass-tall',positions:[0,0,0,0,10,0,4,0,0],indices:[0,1,2],uvs:[128,0,128,3,129,0]};
+  const next={...wall,positions:wall.positions.map((v,i)=>i%3===0?v+128:v),uvs:[129,0,129,3,130,0]};
+  const result=groupBuildingSurfaces({...citySource,chunks:[
+    {id:'first',bounds,buildingIds:['a'],meshes:[wall]},
+    {id:'second',bounds:{...bounds,minX:128,maxX:256},buildingIds:['b'],meshes:[next]},
+    {id:'third',bounds:{...bounds,minX:256,maxX:384},buildingIds:['c'],meshes:[wall]},
+  ]});
+  assert.equal(result.length,2);
+  assert.deepEqual(result[0].buildingIds,['a','b']);
+  assert.deepEqual(result[0].meshes,[{surface:wall.surface,positions:[...wall.positions,...next.positions],
+    indices:[0,1,2,3,4,5],uvs:[...wall.uvs,...next.uvs]}]);
+});
