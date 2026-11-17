@@ -1,5 +1,6 @@
 import {createElement} from 'react';
 import {ControlPanel} from './panel.tsx';
+import {createCameraGroundSweep} from './camera-ground.ts';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
@@ -23,7 +24,7 @@ export const playerControlModule = defineModule({
     });
     camera.minZ = 0.1; camera.maxZ = 30000;
     camera.lowerRadiusLimit = 0.05; camera.upperRadiusLimit = 10;
-    camera.lowerBetaLimit = 0.25; camera.upperBetaLimit = 1.48;
+    camera.lowerBetaLimit = 0.25; camera.upperBetaLimit = 2.65;
     camera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
     const pointers = camera.inputs.attached.pointers;
     if (pointers && 'buttons' in pointers) pointers.buttons = [0,2];
@@ -35,6 +36,7 @@ export const playerControlModule = defineModule({
       {source:'pointer',button:2,interaction:'rotate'},
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
+    const groundSweep=createCameraGroundSweep(deps.world.collision);
     let desiredRadius = 6, appliedRadius = 6;
     const keys = new Set<string>();
     let jump = false, leftHeld = false, rightHeld = false, freeLookAlpha = camera.alpha;
@@ -108,7 +110,7 @@ export const playerControlModule = defineModule({
       // Camera sphere/box sweep uses static world data, including unloaded buildings.
       camera.getViewMatrix(true);
       const target = camera.target, delta = camera.position.subtract(target);
-      let fraction = 1;
+      let fraction = groundSweep(target,delta);
       const minX=Math.min(target.x,camera.position.x)-.2,maxX=Math.max(target.x,camera.position.x)+.2;
       const minZ=Math.min(target.z,camera.position.z)-.2,maxZ=Math.max(target.z,camera.position.z)+.2;
       for (const b of deps.world.collision.blockers) {
