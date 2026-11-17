@@ -1,6 +1,6 @@
 # Optimized humanoid — provenance and animation coverage
 
-All model and animation inputs were downloaded separately from the author's official free Standard archives on **2026-11-16**. No model, animation, texture, license file or build script from the neighboring chicago-test project was used as an input.
+The original Quaternius model and animation inputs were downloaded separately from the author's official free Standard archives on **2026-11-16**. No model, animation, texture, license file or build script from the neighboring chicago-test project was used as an input.
 
 ## Author sources (Quaternius, CC0 1.0)
 
@@ -17,7 +17,7 @@ The author advertises **120+** and **130+** animations for the full libraries. *
 
 Verified free categories include locomotion, crouching, swimming, sitting/talking, death/hit reactions, melee/sword/shield attacks, pistols, simple spellcasting, interaction/pickup, crafting/fixing, planting/harvesting/watering, tree chopping, climbing/sliding and emotes. This is a substantial MMORPG foundation, not a claim to cover every future mount, profession or class-specific skill. More specialized actions still require selecting and integrating the relevant clips/mechanics.
 
-Seven clips ship in character.glb: **Idle_Loop, Walk_Loop, Jog_Fwd_Loop, Sprint_Loop, Jump_Start, Jump_Loop, Jump_Land**. Other clips are catalogued and ready for the same offline retargeting process; they are not eagerly loaded in the browser. The locomotion rig is a single 65-joint Humanoid skeleton. Animations are retargeted with bind-pose correction rather than assuming that matching bone names imply matching bind transforms. In-place animation never drives authority position.
+The original seven locomotion/jump clips in character.glb are: **Idle_Loop, Walk_Loop, Jog_Fwd_Loop, Sprint_Loop, Jump_Start, Jump_Loop, Jump_Land**. Other clips are catalogued and ready for the same offline retargeting process; they are not eagerly loaded in the browser. The locomotion rig is a single 65-joint Humanoid skeleton. Animations are retargeted with bind-pose correction rather than assuming that matching bone names imply matching bind transforms. In-place animation never drives authority position.
 
 ## Render budget and derivative changes
 
@@ -40,3 +40,20 @@ Use the Standard archives named above. The extraction helper copies only the req
 Runtime also includes Jump_Start, Jump_Loop and Jump_Land from the same freshly downloaded official UAL1 Standard archive. All seven clips use the same 65-joint rig.
 
 476 of 910 bone tracks are removed because the same bone/property stays at bind pose in every runtime clip. Tracks are retained across every clip whenever any clip changes that property, preserving crossfade resets. This reduces per-avatar animation evaluation without changing the mesh or poses.
+
+
+## Vehicle interaction extension (2026-11-17)
+
+Runtime now also contains **Driving_Loop** from the same CC0 Quaternius UAL1 Standard archive, and **Car_Enter / Car_Exit**, retargeted from the actual **Mixamo Entering Car / Exiting Car** clips. The latter are governed by **Adobe Mixamo terms, not CC0**; [Adobe's FAQ](https://helpx.adobe.com/creative-cloud/faq/mixamo-faq.html) permits use in video games. This combined runtime asset must not be treated as an all-CC0 animation library or redistributed as a standalone Mixamo animation pack.
+
+The two input FBXs were obtained from the public [Linzhan/Mixamo-Animations-Characters dataset](https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters), whose card labels them `adobe-mixamo-terms`. Exact URLs/SHA-256 values are in manifest.vehicleAnimations. Original FBXs remain outside the repository; only the retargeted game runtime clips are embedded. No Mixamo character mesh is included.
+
+Prepare the Quaternius base with prepare-character.mjs, then:
+
+```sh
+node --max-old-space-size=512 scripts/prepare-car-animations.mjs /path/to/mixamo-fbx-directory
+```
+
+The directory contains Entering_Car.fbx and Exiting_Car.fbx. Assimp (development-only) converts FBX to glTF. The pipeline maps Mixamo humanoid joints to the outfit rig with bind-pose correction, removes duplicated Assimp FBX pivot helper transforms for animation evaluation, retains limb proportions and bakes at 30 Hz. Input playback is 1.5×; durations are approximately 3.644/3.867 seconds. Source horizontal root travel is replaced by authority-owned boarding/exiting movement; vertical pelvis motion is fitted between the correct standing/driving positions in the outfit's **local Z-up skeletal parent**, not assumed local Y. Car driving itself never depends on animation root motion.
+
+These are actual car-specific entry/exit motions, not the generic Sitting_Enter/Sitting_Exit clips used during the first unfinished attempt. Constant reset tracks across all ten runtime clips prevent stale hand poses. Geometry/materials/textures/65 joints remain shared; exact runtime GLB hash is in manifest.json.

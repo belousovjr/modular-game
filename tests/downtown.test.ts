@@ -410,3 +410,20 @@ test('Daley street furniture stays sparse, matches permanent blockers and simpli
     assert.ok(actor.snapshot().grounded&&Math.abs(actor.snapshot().x-44)<.01);
   }
 });
+
+test('walking authority enters a real downtown facade recess inside building bounds and stops at its actual wall',()=>{
+  const world=cityCollision(citySource),create=createCharacterAuthorityFactory(world);
+  const inside=(x:number,z:number,ring:readonly (readonly number[])[])=>{let result=false;for(let i=0,j=ring.length-1;i<ring.length;j=i++)if((ring[i][1]>z)!==(ring[j][1]>z)&&x<(ring[j][0]-ring[i][0])*(z-ring[i][1])/(ring[j][1]-ring[i][1])+ring[i][0])result=!result;return result;};
+  for(const b of citySource.colliders)for(const vertex of b.outline)for(const dx of [-2,-1,1,2])for(const dz of [-2,-1,1,2]){
+    const x=vertex[0]+dx,z=vertex[1]+dz;if(x<=b.minX+.5||x>=b.maxX-.5||z<=b.minZ+.5||z>=b.maxZ-.5||inside(x,z,b.outline))continue;
+    let distance=Infinity,wall={x,z};
+    for(let i=0;i<b.outline.length;i++){const a=b.outline[i],c=b.outline[(i+1)%b.outline.length],ux=c[0]-a[0],uz=c[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*ux+(z-a[1])*uz)/(ux*ux+uz*uz||1))),p={x:a[0]+ux*t,z:a[1]+uz*t},d=Math.hypot(p.x-x,p.z-z);if(d<distance){distance=d;wall=p;}}
+    if(distance<1||distance>2.5)continue;
+    let actor;try{actor=create(0,{x,z});}catch{continue;}if(actor.snapshot().y<0)continue;
+    for(let tick=1;tick<=150;tick++){if(tick%6===1)actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:(wall.x-x)/distance,z:(wall.z-z)/distance,run:false,jump:false},'local');actor.step(tick);}
+    const end=actor.snapshot();assert.ok(Math.hypot(end.x-x,end.z-z)>.5,'Bounding box prevented walking into the real recess');
+    assert.equal(inside(end.x,end.z,b.outline),false,'Pedestrian passed through the actual facade');
+    assert.ok(Math.hypot(end.x-wall.x,end.z-wall.z)<.6,'Pedestrian stopped before reaching the actual wall');return;
+  }
+  assert.fail('No real facade recess exercised');
+});

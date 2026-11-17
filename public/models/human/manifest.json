@@ -1,6 +1,6 @@
 {
   "source": "Quaternius: Modular Character Outfits – Fantasy + Universal Base Characters",
-  "license": "CC0-1.0",
+  "license": "CC0-1.0 model/Quaternius clips; Adobe Mixamo terms for Car_Enter/Car_Exit",
   "triangles": 5970,
   "primitives": 1,
   "joints": 65,
@@ -29,7 +29,10 @@
     "Sprint_Loop",
     "Jump_Start",
     "Jump_Loop",
-    "Jump_Land"
+    "Jump_Land",
+    "Driving_Loop",
+    "Car_Enter",
+    "Car_Exit"
   ],
   "animationLibraries": [
     {
@@ -133,5 +136,25 @@
       ]
     }
   ],
-  "sha256": "d4d290f8a5d47b4f9ee4b8a704ad8bc6f9daaeb413c88eb1b3369834d4b5bd5a"
+  "sha256": "aee81b9abf19f718dae6f0182794a48f39cc95479e8762aecab87d0b375aa333",
+  "vehicleAnimations": [
+    {
+      "clip": "Car_Enter",
+      "sourceClip": "Entering Car",
+      "url": "https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters/resolve/main/animation/Entering_Car.fbx",
+      "license": "Adobe Mixamo terms; game use, not CC0",
+      "sha256": "f61e5f450c6fe695251c5b2a7d142d030fc892a790f84106b8bec1a5cce6edbe",
+      "duration": 3.644444465637207,
+      "playbackSourceRate": 1.5
+    },
+    {
+      "clip": "Car_Exit",
+      "sourceClip": "Exiting Car",
+      "url": "https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters/resolve/main/animation/Exiting_Car.fbx",
+      "license": "Adobe Mixamo terms; game use, not CC0",
+      "sha256": "c6e3d2c80233b0ce3cb00084643aee6b5710aa524671be171bca002d3969f67d",
+      "duration": 3.866666793823242,
+      "playbackSourceRate": 1.5
+    }
+  ]
 }

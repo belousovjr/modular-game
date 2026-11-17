@@ -598,3 +598,37 @@ Headed Chromium 1280×720, ANGLE D3D12 NVIDIA RTX 3050 Laptop, 2 GiB/no swap/120
 | 0 NPC, overhead after module disable | 75.8 | 31.7 |
 
 Eight remains the default; 24 is a stress case and is not recommended as the current density budget. Different cameras/content and host variation prevent treating these samples as isolated AI cost or guaranteed FPS; the no-NPC overhead result also differs from earlier city-route baselines. No 100+ FPS claim. All three scenario cleanups return identically to 380 meshes/229 geometries/24 textures/9 skeletons; disabling NPC returns to 1 skeleton/16 textures. Each additional skeleton has one native bone texture; color/normal atlases are not duplicated. Cgroup peak 1489612800 bytes, OOM=0, browser errors=0. Artifacts npc-{clark,plaza,overview,density-24}.png and npc-report.json. Long soak and mutual human avoidance are not tested/implemented by this delivery.
+
+### Arcade vehicle handling — 2026-11-17
+
+Same 60 Hz authority, one Cannon RaycastVehicle. Chamfered underside overhangs, longer softer suspension, four driven wheels (1900 force each), reduced body drag on contacts, separate terrain/obstacle restitution, and no automatic brake on a brief backwards velocity. Forward speed cap remains 40 m/s. No GTA handling data or code was imported.
+
+Deterministic straight-line headless comparison, 600 driven ticks after boarding, flat start followed by triangular terrain sampled every 2 m: waves from 0 to 0.7 m with an 8 m period. Previous profile travelled 36.7 m (final 5.6 m/s); accepted profile 97.9 m (final 10.1 m/s). Flat comparison: 251.2 → 276.8 m, both reaching ~40 m/s. Solid wall at z=22: backward impact velocity ~2.1 → 3.6 m/s while still holding throttle. Regression asserts rough progress >85 m and wall rebound >2.5 m/s. These are synthetic tests, not a claim that every city curb is traversable.
+
+GPU smoke: RTX 3050 Laptop, Chromium ANGLE D3D12, 1280×720, uncapped, city/materials/shadows/player/vehicle, no NPC. Real entry/drive/steer/brake/exit passed: moving 101.4 FPS / P95 14.7 ms (2 s), parked 98.6 FPS / P95 16.2 ms (3 s). These short samples are not a controlled before/after FPS comparison. MemoryMax=2 GiB, swap disabled, cgroup peak 1507655680 bytes, OOM=0, browser errors=0. 137 tests/check/build passed. No long soak or exhaustive crash/rollover course was performed.
+
+### Building contour collisions — 2026-11-17
+
+Vehicle static bodies now use compound convex prisms from canonical building outlines instead of solid bounding boxes. Convex outlines take one shape; concave outlines are ear-clipped then greedily merged into convex neighbours. Collinear vertices are removed; every part is centred locally with a Body shape offset. One static Body per blocker retains AABB broad phase. Only the existing 3×3 terrain working set creates and retains these shapes; render LOD/streaming never changes authority collision.
+
+Offline diagnostic over all 734 current building outlines: 3172 convex parts (mean 4.32, maximum 42), ~85 ms to prepare the entire set in Node; runtime prepares only nearby buildings. Regression checks driving into a wide U-shaped facade recess and stopping at its rear wall, in both polygon windings; pedestrian collision uses the same source outline. 138 tests/check/build passed.
+
+Same short GPU city/vehicle smoke as the arcade profile, RTX 3050 Laptop, 1280×720 uncapped, no NPC: moving 98.2 FPS / P95 16.7 ms (2 s), parked 107.3 FPS / P95 14.8 ms (3 s). Earlier short moving sample was 101.4 FPS / P95 14.7 ms; host variation and these sample lengths do not establish an isolated collision cost. Cgroup peak 1526931456 bytes under MemoryMax=2 GiB/no swap, OOM=0, browser errors=0. Full interior holes and overhead arch clearance are not encoded by the existing single exterior outline.
+
+### Steering response — 2026-11-17
+
+Steering target .55/(1+(|forwardVelocity|/11)^3) radians, rate limit 2.4 rad/s. Same 60 Hz headless flat-ground comparison with one second of full steering after reaching the target speed, then coasting: at 12 m/s yaw changes 0.497 → 1.022 rad; at 30 m/s 0.259 → 0.292 rad. Both directions tested; chassis up-vector y stays >0.9. 139 tests/check/build passed. No added physics iterations, resources or per-frame systems. No new GPU FPS measurement or long driving course for this configuration-only change.
+
+### Moving exit and coasting — 2026-11-17
+
+Moving exits now display the first 59 ticks of the 2× Car_Exit clip, reach the current door-side ground point before release and leave the driver door open. Stationary exits retain the full 117 ticks and close the door. A short GPU side-camera run verified Car_Exit during motion followed by release/open door, without browser errors or OOM (2 GiB cap, no swap). This visual run uses a different moving camera and is not an FPS baseline comparison.
+
+Zero throttle now applies horizontal rolling/aerodynamic resistance .9+.002*v² m/s² through Cannon force, capped to prevent reversal in one tick. Abandoned cars engage existing brakes below 0.5 m/s, then sleep. Flat-ground tests verify gradual slowdown and coming to rest with/without driver, moving exit continuity and persistent open door. 140 tests/check/build pass. No dedicated jump-out/ragdoll animation or exhaustive steep-slope parking test.
+
+### Character transition continuity and pedestrian recess regression — 2026-11-17
+
+All loaded avatar orientations use quaternion shortest-arc smoothing, including the entry clip's orientation compensation and transitions into/out of the full vehicle rotation. A temporary local rotation offset blends entry to the moving chassis without permanent driver lag. Non-loop actions hold their final pose using Babylon's constant loop mode until their weight fades through the ordinary crossfade; they do not visually repeat or vanish when their animation reaches its endpoint.
+
+143 tests/check/build pass: quaternion interpolation/interruptibility, held final action pose, existing animation weights, and pedestrian authority walking inside the AABB of a real downtown concave facade before stopping at its polygon wall. The latter verifies walking separately from vehicle compounds; character collision already uses canonical outlines and requires no additional render geometry.
+
+GPU keyboard smoke near the driver door, including an opposite-facing walking input before entry: Walk→Car_Enter→Driving_Loop→Car_Exit→Idle observed; 1144 bounded orientation samples, maximum change 0.349 rad between frames separated by <=50 ms, no instantaneous half-turn. 1280×720 RTX 3050 Laptop, short parked sample 100.7 FPS / P95 15.1 ms; camera/path differ from prior driving benchmarks. Memory cap 2 GiB, no swap, peak 1510797312 bytes, OOM=0, browser errors=0. Long stress/soak not performed.

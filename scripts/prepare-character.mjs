@@ -85,7 +85,7 @@ function addMeshes(document) {
 addMeshes(base);addMeshes(hair);
 assert.ok(faceMaterial);
 for(const m of root.listMeshes())for(const p of m.listPrimitives())if(p.getMaterial()?.getName()==='MI_Regular_Male')p.setMaterial(faceMaterial);
-const clips=['Idle_Loop','Walk_Loop','Jog_Fwd_Loop','Sprint_Loop','Jump_Start','Jump_Loop','Jump_Land'];
+const clips=['Idle_Loop','Walk_Loop','Jog_Fwd_Loop','Sprint_Loop','Jump_Start','Jump_Loop','Jump_Land','Driving_Loop'];
 retargetClips(model,library1,clips);
 for(const lib of [library1,library2])for(const joint of lib.getRoot().listSkins()[0].listJoints())assert.ok(names.has(joint.getName()));
 await MeshoptSimplifier.ready;

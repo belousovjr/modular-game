@@ -5,9 +5,10 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
-import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { AssetContainer, InstantiatedEntries } from '@babylonjs/core/assetContainer.js';
+import { Animation } from '@babylonjs/core/Animations/animation.js';
 import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup.js';
 import type { Scope } from '../../core/modules.ts';
 import { createScope } from '../../core/scope.ts';
@@ -52,7 +53,8 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
 
 export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope) {
   let disposed = false, entries: InstantiatedEntries | null = null, active: AnimationGroup | undefined;
-  const root = new TransformNode('character/local-player',scene);
+  const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
+  const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
   root.metadata = { assetStatus:'loading' };
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null; root.dispose(); });
   const shadow=assets.createShadowProxy(root,scope);
@@ -78,7 +80,9 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       for(const node of entries.rootNodes) { node.parent=visual;node.setEnabled(true); }
       visual.scaling.setAll(1.8/height);visual.position.y=-minimum.y*1.8/height;visual.parent=root;
       geometry.registerMeshes(meshes,scope);
-      for(const group of entries.animationGroups) { group.stop();group.enableBlending=false; }
+      for(const group of entries.animationGroups) { group.stop();group.enableBlending=false;
+        if(!group.name.endsWith('_Loop'))for(const track of group.targetedAnimations)track.animation.loopMode=Animation.ANIMATIONLOOPMODE_CONSTANT;
+      }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
       if(idle) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);idle.enableBlending=false;active=idle; }
       loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
@@ -92,10 +96,10 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     if (disposed) return;
     root.name=`character/${s.id}`;
     root.position.set(s.x,s.y,s.z);
-    root.rotation.y=previous?smoothYaw(root.rotation.y,s.yaw,scene.getEngine().getDeltaTime()):s.yaw;
+    const before=previous,deltaMs=scene.getEngine().getDeltaTime();
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
-    if (!entries) return;
+    if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
     const name=selectAnimation(s);
     const next=entries.animationGroups.find(group=>group.name.endsWith('/'+name));
     if (!next) return;
@@ -103,13 +107,24 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       if(!next.isPlaying) {
         next.start(true);next.weight=0;
         const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
-        if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));
+        if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_')&&name.endsWith('_Loop'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));
       }
       active=next;
     }
     blendAnimations(entries.animationGroups,active,scene.getEngine().getDeltaTime());
+    const yaw=s.yaw+(s.vehicleAnimation==='entering'?(1-active.weight)*Math.PI/2:0);
+    const target=s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,yaw,0);
+    const current=root.rotationQuaternion;
+    if(current){
+      if(!before)current.copyFrom(target);
+      else if(s.vehicleRotation){
+        if(!before.vehicleRotation)target.conjugate().multiplyToRef(current,vehicleTurnOffset);
+        smoothCharacterRotation(vehicleTurnOffset,identity,deltaMs,vehicleTurnOffset);
+        target.multiplyToRef(vehicleTurnOffset,current);
+      }else smoothCharacterRotation(current,target,deltaMs,current);
+    }
     root.metadata.animation=name;
-    active.speedRatio=!name.startsWith('Jump_') && s.moving?Math.max(.65,Math.min(s.running?1.4:1.2,speed/(s.running?7:1.6))):1;
+    active.speedRatio=(name==='Car_Enter'||name==='Car_Exit')?2:!name.startsWith('Jump_') && s.moving?Math.max(.65,Math.min(s.running?1.4:1.2,speed/(s.running?7:1.6))):1;
   };
 }
 
@@ -124,10 +139,16 @@ export function blendAnimations(groups: readonly AnimationGroup[], active: Anima
 }
 
 export function selectAnimation(s: CharacterSnapshot) {
+  if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
   return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.running?'Sprint_Loop':'Walk_Loop';
 }
 
 export function smoothYaw(current: number, target: number, deltaMs: number) {
   const difference=Math.atan2(Math.sin(target-current),Math.cos(target-current));
   return current+difference*(1-Math.exp(-Math.max(0,deltaMs)/60));
+}
+
+
+export function smoothCharacterRotation(current:Quaternion,target:Quaternion,deltaMs:number,result:Quaternion){
+  Quaternion.SlerpToRef(current,target,1-Math.exp(-Math.max(0,deltaMs)/60),result);
 }

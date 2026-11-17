@@ -1,0 +1,51 @@
+import '@babylonjs/loaders/glTF/index.js';
+import {LoadAssetContainerAsync} from '@babylonjs/core/Loading/sceneLoader.js';
+import {TransformNode} from '@babylonjs/core/Meshes/transformNode.js';
+import {PBRMaterial} from '@babylonjs/core/Materials/PBR/pbrMaterial.js';
+import {Texture} from '@babylonjs/core/Materials/Textures/texture.js';
+import manifest from '../../../public/models/car/manifest.json' with {type:'json'};
+import {Mesh} from '@babylonjs/core/Meshes/mesh.js';
+import {Quaternion,Vector3} from '@babylonjs/core/Maths/math.vector.js';
+import type {Scene} from '@babylonjs/core/scene.js';
+import type {Scope} from '../../core/modules.ts';
+import type {geometryModule} from '../geometry/index.ts';
+import type {VehicleSnapshot} from './headless.ts';
+
+export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryModule.setup>,scope:Scope){
+  const root=new TransformNode('vehicle/car/0',scene);root.rotationQuaternion=Quaternion.Identity();scope.onDispose(()=>root.dispose());
+  const controller=new AbortController();let stopped=false,status='loading',error='';
+  scope.onDispose(()=>{stopped=true;controller.abort();});
+  let left:TransformNode|undefined,right:TransformNode|undefined,steering:TransformNode|undefined;
+  const wheels:{node:TransformNode;rotation:Quaternion;scale:Vector3}[]=[];
+  const ready=(async()=>{
+    const response=await fetch(`${import.meta.env.BASE_URL}models/car/car.glb`,{signal:controller.signal});if(!response.ok)throw new Error(`Car HTTP ${response.status}`);
+    const bytes=new Uint8Array(await response.arrayBuffer());if(stopped)return;
+    const container=await LoadAssetContainerAsync(bytes,scene,{pluginExtension:'.glb'});if(stopped){container.dispose();return;}
+    scope.onDispose(()=>container.dispose());container.addAllToScene();
+    const detail=new Texture(`${import.meta.env.BASE_URL}models/car/detail.png`,scene,false,false);scope.onDispose(()=>detail.dispose());detail.coordinatesIndex=1;
+    for(const material of container.materials)if(material instanceof PBRMaterial&&material.name==='car/textured'){material.detailMap.texture=detail;material.detailMap.isEnabled=true;material.detailMap.diffuseBlendLevel=.65;material.detailMap.bumpLevel=0;material.detailMap.roughnessBlendLevel=.35;}
+    for(const node of container.rootNodes)node.parent=root;
+    const nodes=root.getDescendants().filter((n):n is TransformNode=>n instanceof TransformNode);
+    left=nodes.find(n=>n.name==='door/left');right=nodes.find(n=>n.name==='door/right');steering=nodes.find(n=>n.name==='steering');
+    if(!left||!right||!steering)throw new Error('Car has no functional door/steering nodes');
+    for(const axle of ['front','rear'])for(const side of ['left','right']){
+      const node=nodes.find(n=>n.name===`wheel/${axle}/${side}`);if(!node)throw new Error('Missing wheel');
+      node.computeWorldMatrix(true);node.setParent(null);wheels.push({node,rotation:(root.rotationQuaternion??Quaternion.Identity()).conjugate().multiply(node.rotationQuaternion??Quaternion.FromEulerVector(node.rotation)),scale:node.scaling.clone()});
+    }
+    const meshes=container.meshes.filter((m):m is Mesh=>m instanceof Mesh&&m.getTotalVertices()>0);
+    for(const mesh of meshes){mesh.isPickable=false;mesh.metadata={...mesh.metadata,shadowNearOnly:true,shadowCaster:mesh.material?.name!=='car/glass'};}
+    geometry.registerMeshes(meshes,scope);status='ready';root.metadata={assetStatus:status,triangles:manifest.triangles};
+  })().catch((e:unknown)=>{if(!stopped){status='error';error=e instanceof Error?e.message:String(e);root.metadata={assetStatus:status,error};}});
+  return {ready,status:()=>({state:status,error}),render(s:VehicleSnapshot){
+    if(stopped)return;
+    const camera=scene.activeCamera;const visible=!camera||Math.hypot(camera.globalPosition.x-s.position[0],camera.globalPosition.y-s.position[1],camera.globalPosition.z-s.position[2])<180;root.setEnabled(visible);for(const w of wheels)w.node.setEnabled(visible);
+    root.position.copyFromFloats(...[s.position[0],s.position[1],s.position[2]]);root.rotationQuaternion?.copyFromFloats(s.rotation[0],s.rotation[1],s.rotation[2],s.rotation[3]);
+    if(left)left.rotationQuaternion=Quaternion.RotationAxis(Vector3.Up(),-s.leftDoor);
+    if(right)right.rotationQuaternion=Quaternion.RotationAxis(Vector3.Up(),s.rightDoor);
+    if(steering)steering.rotationQuaternion=Quaternion.RotationAxis(Vector3.Forward(),s.steering*2.5);
+    for(const [i,w]of wheels.entries()){
+      const p=s.wheels[i];w.node.position.set(p.position[0],p.position[1],p.position[2]);w.node.rotationQuaternion=Quaternion.FromArray(p.rotation).multiply(w.rotation);w.node.scaling.copyFrom(w.scale);
+    }
+    root.metadata={assetStatus:status,phase:s.phase,speed:s.speed,leftDoor:s.leftDoor,rightDoor:s.rightDoor};
+  }};
+}

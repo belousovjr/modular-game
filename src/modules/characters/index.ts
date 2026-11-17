@@ -8,6 +8,7 @@ import { defineModule } from '../../core/context.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
+import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
 import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export type { MoveCommand, CharacterSnapshot, Receipt } from './headless.ts';
 
@@ -19,7 +20,8 @@ export const charactersModule = defineModule({
     const authority = createCharacterAuthority(deps.world.collision, deps.simulation.snapshot().tick);
     const connection = createLocalConnection(authority);
     scope.onDispose(connection.close);
-    deps.simulation.registerSystem(connection.step, scope);
+    let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
+    deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
     const createView=(owner: Scope)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner);};
@@ -29,7 +31,11 @@ export const charactersModule = defineModule({
     const observer = core.scene.onBeforeRenderObservable.add(update, -1, true);
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{stopped=true;});
-    return { send: connection.send, snapshot: connection.snapshot, createView, getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe };
+    return { registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope){
+      if(stopped)throw new Error('Персонаж остановлен');
+      if(vehicleStep)throw new Error('Vehicle authority already connected');
+      vehicleStep=step;owner.onDispose(()=>{vehicleStep=null;authority.setVehicleFrame(null);});
+    }, send: connection.send, snapshot: connection.snapshot, createView, getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe };
   },
   test: {
     durationSeconds: 6,

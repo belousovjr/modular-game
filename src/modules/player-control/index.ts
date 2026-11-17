@@ -83,6 +83,7 @@ export const playerControlModule = defineModule({
       const s = deps.characters.snapshot();
       const active = core.scene.activeCamera === camera && !document.hidden && document.activeElement === canvas;
       if (!active) clear();
+      if(s.vehicleId)jump=false;
       const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
       const right = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
       const alpha=leftHeld&&!rightHeld?freeLookAlpha:camera.alpha;
@@ -91,12 +92,13 @@ export const playerControlModule = defineModule({
       const facing=active&&rightHeld?Math.atan2(forward||right?x:-Math.cos(camera.alpha),forward||right?z:-Math.sin(camera.alpha)):null;
       const length = Math.max(1,Math.hypot(x,z));
       const input = `${forward}/${right}/${keys.has('ShiftLeft') || keys.has('ShiftRight')}/${alpha}/${facing}`;
-      if ((jump && s.tick > lastTick) || s.tick-lastTick >= 6 || (input !== lastInput && s.tick > lastTick) || (wasActive && !active)) {
+      if (!s.vehicleId && ((jump && s.tick > lastTick) || s.tick-lastTick >= 6 || (input !== lastInput && s.tick > lastTick) || (wasActive && !active))) {
         void deps.characters.send({ type:'move', characterId:s.id, sequence:++sequence, tick:s.tick, x:x/length, z:z/length, run:keys.has('ShiftLeft') || keys.has('ShiftRight'), jump, facing });
         jump=false; lastTick = s.tick; lastInput = input;
       }
       wasActive = active;
       if (Math.abs(camera.radius-appliedRadius) > 1e-5) desiredRadius = Math.max(1.5,Math.min(10,desiredRadius+camera.radius-appliedRadius));
+      if(s.vehicleId)desiredRadius=Math.max(6,desiredRadius);
       camera.radius = desiredRadius;
       camera.setTarget(new Vector3(s.x,s.y+1.2,s.z), false, false, true);
       if (core.scene.activeCamera !== camera) return;
