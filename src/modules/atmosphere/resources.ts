@@ -54,8 +54,8 @@ export function createAtmosphere(scene:Scene,lighting:ReturnType<typeof lighting
   const changed=new Observable<void>();let stopped=false,playing=true,elapsed=0,loaded=0;const errors:string[]=[];
   scope.onDispose(()=>{stopped=true;changed.clear();});
   const sunDirection=Vector3.Up();
-  let snapshot:Readonly<{playing:boolean;hour:number;loaded:number;errors:readonly string[]}>=Object.freeze({playing,hour:lighting.getSettings().hour,loaded,errors:[] as readonly string[]});
-  function publish(){if(stopped)return;snapshot=Object.freeze({playing,hour:lighting.getSettings().hour,loaded,errors:Object.freeze([...errors])});changed.notifyObservers();}
+  let snapshot:Readonly<{playing:boolean;hour:number;night:number;loaded:number;errors:readonly string[]}>=Object.freeze({playing,hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:[] as readonly string[]});
+  function publish(){if(stopped)return;snapshot=Object.freeze({playing,hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:Object.freeze([...errors])});changed.notifyObservers();}
   for(const [name,file]of [['moon','moon.webp']]){
     const texture=new Texture(`${import.meta.env?.BASE_URL??'/'}textures/atmosphere/${file}`,scene,false,true,Texture.TRILINEAR_SAMPLINGMODE,()=>{loaded++;publish();},()=>{errors.push(`Не загрузилась текстура ${file}`);publish();});
     scope.onDispose(()=>texture.dispose());texture.wrapU=texture.wrapV=Texture.CLAMP_ADDRESSMODE;shader.setTexture(name,texture);

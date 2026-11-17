@@ -1,4 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';
+import {RawTexture} from '@babylonjs/core/Materials/Textures/rawTexture.js';
+import {NightField} from '../src/modules/materials/night-field.ts';
 import {NullEngine} from '@babylonjs/core/Engines/nullEngine.js';import {Scene} from '@babylonjs/core/scene.js';import {Observable} from '@babylonjs/core/Misc/observable.js';import {StandardMaterial} from '@babylonjs/core/Materials/standardMaterial.js';
 import {defineModule} from '../src/core/context.ts';import {startModules} from '../src/core/modules.ts';import {createPanels} from '../src/core/panels.ts';import {createScope} from '../src/core/scope.ts';import {geometryModule} from '../src/modules/geometry/index.ts';import {createLighting} from '../src/modules/lighting/light.ts';import {createMaterials} from '../src/modules/materials/resources.ts';import {CityFacade} from '../src/modules/materials/city-surface.ts';import {atmosphereColors,createAtmosphere} from '../src/modules/atmosphere/resources.ts';
 
@@ -8,6 +10,12 @@ test('atmosphere cycles locally, changes shared night materials and restores res
   const lighting=createLighting(scene,scope),materials=createMaterials(scene,deps.geometry,scope);
   const original={mode:scene.fogMode,density:scene.fogDensity,color:scene.fogColor.clone(),clear:scene.clearColor.clone()},counts={meshes:scene.meshes.length,materials:scene.materials.length,textures:scene.textures.length};
   const city=deps.geometry.getSurfaceMaterial('city-stone');assert.ok(city instanceof StandardMaterial);const facade=city.pluginManager?.getPlugin('CityFacade');assert.ok(facade instanceof CityFacade);
+  const map=RawTexture.CreateRGBATexture(new Uint8Array([255,0,0,255]),1,1,scene,false);scope.onDispose(()=>map.dispose());
+  const ownerField=createScope(),field=materials.registerNightField(map,{minX:-1,minZ:-1,maxX:1,maxZ:1},ownerField);
+  const road=deps.geometry.getSurfaceMaterial('road');assert.ok(road instanceof StandardMaterial);assert.ok(road.pluginManager?.getPlugin('NightField') instanceof NightField);
+  const foundation=deps.geometry.getSurfaceMaterial('foundation');assert.ok(!(foundation.pluginManager?.getPlugin('NightField') instanceof NightField));
+  field.setNight(1);assert.ok(road.getActiveTextures().includes(map));assert.throws(()=>field.setNight(NaN));assert.throws(()=>materials.registerNightField(map,{minX:-1,minZ:-1,maxX:1,maxZ:1},ownerField));
+  ownerField.dispose();assert.ok(!road.getActiveTextures().includes(map));assert.throws(()=>field.setNight(1));map.dispose();
   for(let repeat=0;repeat<3;repeat++){
    const owner=createScope(),api=createAtmosphere(scene,lighting,materials,onFrame,owner);assert.equal(scene.meshes.length,counts.meshes+1);assert.equal(scene.lights.length,2);assert.equal(scene.textures.length,counts.textures+1);
    api.setPlaying(false);lighting.setSettings({hour:0});assert.equal(facade.night,1);const nightFog=scene.fogColor.clone();lighting.setSettings({hour:12});assert.equal(facade.night,0);assert.ok(Math.hypot(...scene.fogColor.subtract(nightFog).asArray())>.1);

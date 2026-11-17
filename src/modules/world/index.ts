@@ -17,6 +17,7 @@ import {distantSurfaces,groupDistantSurfaces,groupStreetSurfaces} from './distan
 import {createElement} from 'react';
 import {Link} from '@radix-ui/themes';
 export type { CollisionWorld, CollisionBox } from './headless.ts';
+export interface StreetLightAnchor {readonly id:string;readonly street:string;readonly x:number;readonly y:number;readonly z:number}
 
 export const worldModule = defineModule({
   id: 'world', title: 'Центр Чикаго', category: 'Окружение',
@@ -123,8 +124,10 @@ export const worldModule = defineModule({
     });
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
     const collision=cityCollision(city);
+    const streetNames=new Map(city.roads.map(r=>[r.id,r.name||r.id]));
+    const streetLights=Object.freeze(city.placements.filter(p=>p.templateId==='world/lamp').map(p=>Object.freeze({id:p.key,street:streetNames.get(p.key.split('/').slice(2,-2).join('/'))??p.key,x:p.position[0]+1.5*Math.cos(p.rotation[1]),y:p.position[1]+4.125,z:p.position[2]-1.5*Math.sin(p.rotation[1])})));
     return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
-      collision,
+      collision,streetLights,
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,
       visibility() {

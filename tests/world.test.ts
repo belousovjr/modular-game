@@ -35,7 +35,7 @@ test('world places persistent generated content, keeps fallback styling without 
     api = deps.world; rendering = deps.rendering; geometry = deps.geometry;
     const lamp = deps.templates.resolve('world/lamp');
     assert.equal(lamp.hideDistance, 40);
-    assert.deepEqual(lamp.levels.map(level => [level.distance, level.parts.length]), [[0, 4], [8, 1]]);
+    assert.deepEqual(lamp.levels.map(level => [level.distance, level.parts.length]), [[0, 4], [8, 3]]);
     for (const height of [8, 27]) {
       const building = deps.templates.resolve('world/building', { height });
       assert.deepEqual(building.levels.map(level => level.parts.length), [5, 3, 1]);
@@ -85,6 +85,8 @@ test('world places persistent generated content, keeps fallback styling without 
     const update = scenario.setup({ onDispose: cleanup => cleanups.push(cleanup) }, values => diagnostics.push(values));
     assert.ok(api);
     assert.equal(api.regions.length, 224);
+    assert.ok(Object.isFrozen(api.streetLights)&&api.streetLights.length>100);
+    assert.ok(api.streetLights.every(l=>Object.isFrozen(l)&&l.street.length>0&&[l.x,l.y,l.z].every(Number.isFinite)));
     assert.equal(new Set(api.regions.map(region => region.id)).size, 224);
     assert.equal(api.regions.reduce((sum, region) => sum + region.objectCount, 0), api.objectCount);
     assert.ok(api.visibility().buildings >= 600);
