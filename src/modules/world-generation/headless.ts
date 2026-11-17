@@ -222,7 +222,7 @@ export interface CitySource {
   readonly spawn: {readonly x:number;readonly z:number}; readonly waterLevel:number;
   readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[];readonly details?:readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[]}[]}[];
   readonly placements: readonly WorldPlacement[];
-  readonly colliders: readonly (Rectangle & {readonly id:string;readonly minY:number;readonly maxY:number;readonly outline:readonly (readonly number[])[]})[];
+  readonly colliders: readonly (Rectangle & {readonly id:string;readonly minY:number;readonly maxY:number;readonly outline:readonly (readonly number[])[];readonly parts?:readonly (readonly (readonly number[])[])[]})[];
   readonly roads: readonly {readonly id:string;readonly name:string;readonly points:readonly (readonly number[])[];readonly width:number;readonly oneway:string;readonly bridge:boolean;readonly layer:number}[];
 }
 
@@ -245,6 +245,14 @@ export function generateCity(source: CitySource): CitySource {
   for(const p of source.placements) {
     if(ids.has(p.key)||!p.key.trim()||(!p.templateId.startsWith('city/')&&p.templateId!=='world/lamp')||p.position.length!==3||p.rotation.length!==3||![...p.position,...p.rotation,...Object.values(p.parameters)].every(Number.isFinite))throw new Error('Invalid city placement');ids.add(p.key);
   }
-  for(const c of source.colliders)if(!validRectangle(c)||![c.minY,c.maxY].every(Number.isFinite)||c.maxY<=c.minY||c.outline.length<3||c.outline.some(p=>p.length!==2||!p.every(Number.isFinite)))throw new Error('Invalid city collider');
+  const validRing=(ring:readonly (readonly number[])[])=>ring.length>=3&&ring.length<=256&&ring.every(p=>p.length===2&&p.every(Number.isFinite));
+  let courtyardParts=0;
+  for(const c of source.colliders){
+    if(!validRectangle(c)||![c.minY,c.maxY].every(Number.isFinite)||c.maxY<=c.minY||!validRing(c.outline))throw new Error('Invalid city collider');
+    if(c.parts){
+      courtyardParts+=c.parts.length;
+      if(!c.parts.length||c.parts.length>128||courtyardParts>2048||c.parts.some(ring=>!validRing(ring)))throw new Error('Invalid city collider parts');
+    }
+  }
   return source;
 }

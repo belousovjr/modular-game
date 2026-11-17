@@ -12,6 +12,29 @@ export interface CollisionWorld {
   readonly spawn: { readonly x: number; readonly z: number };
 }
 
+export function steppedBuildingParts(profile:string,width:number,depth:number,height:number) {
+  const part=(x:number,y:number,z:number,w:number,h:number,d:number)=>({
+    position:[x,y,z] as const,
+    size:[w,h,d] as const,
+  });
+  if(profile==='willis'){
+    return [.52,.72,.92,.72,1,.92,.52,.72,.52].map((scale,i)=>{
+      const h=height*scale;
+      return part((i%3-1)*width/3,h/2,(Math.floor(i/3)-1)*depth/3,width/3,h,depth/3);
+    });
+  }
+  if(profile==='trump'||profile==='wrigley'||profile==='tribune'){
+    return [
+      part(0,height*.27,0,width,height*.54,depth),
+      part(0,height*.69,0,width*.72,height*.3,depth*.72),
+      part(0,height*.92,0,width*.42,height*.16,depth*.42),
+    ];
+  }
+  return null;
+}
+
+export const snapCityMeasure=(value:number,step:number)=>Math.round(value/step)*step;
+
 export function createCollisionWorld(placements: readonly WorldPlacement[], bounds: Rectangle, baseHeight: number, slopeX: number): CollisionWorld {
   const blockers: CollisionBox[] = [];
   let spawn = { x:10,z:12 }, spawnDistance = Infinity;
@@ -61,7 +84,35 @@ export function cityCollision(city:CitySource):CollisionWorld {
     const radius=p.parameters.height*.022;
     return {id:p.key,minX:x-radius,maxX:x+radius,minZ:z-radius,maxZ:z+radius,minY:y,maxY:y+p.parameters.height*.72};
   });
-  const blockers=[...city.colliders,...furniture,...trees,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
+  const placements=new Map(city.placements.map(p=>[p.key,p]));
+  const buildingBlockers=city.colliders.flatMap((source):CollisionBox[]=>{
+    const placement=placements.get(source.id);
+    if(placement){
+      const {width,depth,height,foundation}=placement.parameters;
+      const tiers=steppedBuildingParts(placement.templateId.slice('city/'.length),width,depth,height);
+      if(tiers){
+        const [x,y,z]=placement.position;
+        const angle=snapCityMeasure(placement.rotation[1],Math.PI/12),c=Math.cos(angle),s=Math.sin(angle);
+        return [...tiers,{position:[0,-foundation/2,0],size:[width,foundation,depth]}].map((part,index)=>{
+          const [cx,cy,cz]=part.position.map(v=>snapCityMeasure(v,.125));
+          const [w,h,d]=part.size.map(v=>Math.max(.25,snapCityMeasure(v,.25)));
+          const outline=[[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]]
+            .map(([u,v])=>[x+(cx+u)*c+(cz+v)*s,z-(cx+u)*s+(cz+v)*c]);
+          return {id:index===0?source.id:`${source.id}/volume/${index}`,
+            minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),
+            minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),
+            minY:y+cy-h/2,maxY:y+cy+h/2,outline};
+        });
+      }
+    }
+    if(!source.parts)return [source];
+    return source.parts.map((outline,index)=>({
+      id:index===0?source.id:`${source.id}/court/${index}`,outline,minY:source.minY,maxY:source.maxY,
+      minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),
+      minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),
+    }));
+  });
+  const blockers=[...buildingBlockers,...furniture,...trees,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
     const [x,y,z]=p.position;
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];

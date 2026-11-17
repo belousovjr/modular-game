@@ -25,3 +25,14 @@ test('camera pulls in immediately and returns smoothly at different frame rates'
   assert.ok(Math.abs(run(9)-run(72))<1e-9);
   assert.equal(recoverCameraRadius(5.995,6,16),6);
 });
+
+test('camera can orbit into a concave facade recess and stops at its visible rear wall',()=>{
+  const outline=[[-6,10],[-1,10],[-1,16],[9,16],[9,10],[14,10],[14,28],[-6,28]];
+  for(const ring of [outline,[...outline].reverse()]){
+    const facade={id:'facade',minX:-6,maxX:14,minY:0,maxY:30,minZ:10,maxZ:28,outline:ring};
+    const eye={x:3,y:1.2,z:8};
+    assert.equal(cameraObstacleFraction(eye,{x:0,y:0,z:6},6,[facade]),1);
+    const fraction=cameraObstacleFraction(eye,{x:0,y:0,z:10},10,[facade]);
+    assert.ok(Math.abs(fraction*10-7.78)<1e-8);
+  }
+});

@@ -1,5 +1,6 @@
 import type {ObjectTemplate} from '../object-templates/index.ts';
 import type {GeometryPart} from '../geometry/index.ts';
+import {snapCityMeasure,steppedBuildingParts} from './headless.ts';
 
 const span={default:30,min:.1,max:1000};
 export const cityTemplates:readonly ObjectTemplate[]=[
@@ -12,13 +13,11 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       const body=part(0,height/2,0,width,height,depth);
       const foundationPart=part(0,-foundation/2,0,width,foundation,depth,'foundation');
       const crown:GeometryPart[]=[];
-      let silhouette:GeometryPart[]=[body];
+      const tiers=steppedBuildingParts(profile,width,depth,height);
+      let silhouette:GeometryPart[]=tiers?.map(tier=>({...tier,surface}))??[body];
       if(profile==='willis') {
-        // The landmark's nine bundled tubes retain their silhouette in every LOD.
-        silhouette=Array.from({length:9},(_,i)=>{const h=height*[.52,.72,.92,.72,1,.92,.52,.72,.52][i];return part((i%3-1)*width/3,h/2,(Math.floor(i/3)-1)*depth/3,width/3,h,depth/3);});
         crown.push(part(-width/6,height+35,-depth/6,.8,70,.8,'metal'),part(width/6,height+35,depth/6,.8,70,.8,'metal'));
       } else if(profile==='trump'||profile==='tribune'||profile==='wrigley') {
-        silhouette=[part(0,height*.27,0,width,height*.54,depth),part(0,height*.69,0,width*.72,height*.3,depth*.72),part(0,height*.92,0,width*.42,height*.16,depth*.42)];
         if(profile==='trump')crown.push(part(0,height+24,0,.8,48,.8,'metal'));
         if(profile==='tribune')for(const x of [-1,1])for(const z of [-1,1])crown.push(part(x*width*.22,height*.97,z*depth*.22,width*.08,height*.12,depth*.08));
         if(profile==='wrigley')crown.push(part(0,height*1.015,0,width*.24,height*.03,depth*.24,'roof'));
@@ -76,7 +75,7 @@ export const cityTemplates:readonly ObjectTemplate[]=[
 
 // Parts use the quarter-metre module; centres need half a module to align their faces.
 export function toCityGrid(template:ObjectTemplate):ObjectTemplate {
-  const snap=(value:number,step:number)=>Math.round(value/step)*step;
+  const snap=snapCityMeasure;
   const part=(p:GeometryPart):GeometryPart=>({...p,
     size:[Math.max(.25,snap(p.size[0],.25)),Math.max(.25,snap(p.size[1],.25)),Math.max(.25,snap(p.size[2],.25))],
     position:p.position?[snap(p.position[0],.125),snap(p.position[1],.125),snap(p.position[2],.125)]:undefined,

@@ -518,3 +518,36 @@ test('tree batches crossfade with complementary coverage and fade out before unl
   assert.deepEqual(treeLodBounds(197.5,197.5),{coverage:.5,split:.5});
   assert.deepEqual(treeLodBounds(210,210),{coverage:0,split:0});
 });
+
+test('the Art Institute courtyard is open below the surrounding facade and landmark setbacks follow real tier heights',async()=>{
+  const world=cityCollision(citySource);
+  const court='osm/r1870546/0/0/1';
+  assert.ok(world.blockers.some(b=>b.id.startsWith(court+'/court/')));
+  const create=createCharacterAuthorityFactory(world);
+  const actor=create(0,{x:742,z:-517});
+  for(let tick=1;tick<=200;tick++){
+    if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:0,z:1,run:true,jump:false},'local').accepted);
+    actor.step(tick);
+  }
+  assert.ok(actor.snapshot().z>-505&&actor.snapshot().z<-502.5,JSON.stringify(actor.snapshot()));
+
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  for(const profile of ['willis','trump','wrigley','tribune']){
+    const template=cityTemplates.find(t=>t.id==='city/'+profile);assert.ok(template);
+    for(const p of citySource.placements.filter(p=>p.templateId===template.id)){
+      const volumes=world.blockers.filter(b=>b.id===p.key||b.id.startsWith(p.key+'/volume/'));
+      const model:import('../src/modules/object-templates/index.ts').TemplateContent=toCityGrid(template).build(p.parameters);
+      const count=profile==='willis'?10:4;
+      assert.equal(volumes.length,count);
+      for(let i=0;i<count;i++){
+        const part=model.levels[1].parts[i],volume=volumes[i],y=p.position[1]+(part.position?.[1]??0);
+        assert.equal(volume.minY,y-part.size[1]/2);
+        assert.equal(volume.maxY,y+part.size[1]/2);
+        const ring=volume.outline;assert.ok(ring);
+        const width=Math.hypot(ring[1][0]-ring[0][0],ring[1][1]-ring[0][1]);
+        const depth=Math.hypot(ring[3][0]-ring[0][0],ring[3][1]-ring[0][1]);
+        assert.ok(Math.abs(width-part.size[0])<1e-8&&Math.abs(depth-part.size[2])<1e-8);
+      }
+    }
+  }
+});

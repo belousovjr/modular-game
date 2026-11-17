@@ -88,3 +88,5 @@ Marina City author correction: the two towers share a conservative 26.5 m envelo
 Run `node scripts/prepare-downtown-trees.mjs` after preparing `city.json`. The script reads the pinned park, pavement and road triangles and writes `trees.json` with the same coordinates and ground heights. Tree locations outside the authored plaza planters are procedural.
 
 `public/textures/trees/downtown-atlas.webp` packs the procedurally drawn branch and crown cutouts from the sibling `chicago-test` project (`scripts/build-tree-leaves.py`) with original procedural bark shading. No downloaded tree model or texture is needed.
+
+Run `node scripts/prepare-downtown-collision.mjs` after updating `city.json` to refresh `collision-courtyards.json`. The offline step detects interior plinth rings and merges projected roof triangles into convex pieces. The resulting volumes leave the courtyard open. Steps in reusable landmark templates share their dimensions and grid rounding with the runtime collision data.

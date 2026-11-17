@@ -220,3 +220,18 @@ test('a physically overturned car uses a crawling exit then releases ordinary wa
     assert.equal(s.car.receive(cmd('enter',s.tick,10001),'local').reason,'overturned');assert.equal(s.car.snapshot().phase,'parked');
   }finally{s.car.dispose();}
 });
+
+test('vehicle moves inside the real Art Institute courtyard and stops at the inner facade',async()=>{
+  const {citySource}=await import('../src/modules/world/city.ts');
+  const {cityCollision}=await import('../src/modules/world/headless.ts');
+  const s=session({...cityCollision(citySource),spawn:{x:738.5,z:-520}});
+  try{
+    board(s);
+    let furthest=s.car.snapshot().position[2];
+    for(let i=0;i<155;i++){
+      s.advance(s.tick+1,t=>{if(i%6===0)assert.ok(s.car.receive(drive(t),'local').accepted);});
+      furthest=Math.max(furthest,s.car.snapshot().position[2]);
+    }
+    assert.ok(furthest>-507&&furthest<-502.5,String(furthest));
+  }finally{s.car.dispose();}
+});
