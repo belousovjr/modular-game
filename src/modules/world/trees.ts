@@ -1,12 +1,32 @@
 import {Color3} from '@babylonjs/core/Maths/math.color.js';
 import {Vector3} from '@babylonjs/core/Maths/math.vector.js';
 import {StandardMaterial} from '@babylonjs/core/Materials/standardMaterial.js';
+import {MaterialPluginBase} from '@babylonjs/core/Materials/materialPluginBase.js';
 import {Texture} from '@babylonjs/core/Materials/Textures/texture.js';
 import {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import {CreateSphereVertexData} from '@babylonjs/core/Meshes/Builders/sphereBuilder.js';
+import {CreateBoxVertexData} from '@babylonjs/core/Meshes/Builders/boxBuilder.js';
 import type {Scene} from '@babylonjs/core/scene.js';
 import type {Scope} from '../../core/modules.ts';
 import type {WorldPlacement} from '../world-generation/index.ts';
+import {TREE_TRUNK} from './headless.ts';
+
+class TreeShade extends MaterialPluginBase {
+  constructor(material:StandardMaterial){super(material,'TreeShade',210,{},true,true);}
+  getClassName(){return 'TreeShade';}
+  getCustomCode(type:string){
+    if(type!=='fragment')return null;
+    // Keep full environmental shadow on bark and soften its contrast over the layered leaf cards.
+    return {'!g!diffuseBase\\+=info\\.diffuse\\*shadow;':`
+      #ifdef DIFFUSE
+      diffuseBase+=info.diffuse*mix(1.,shadow,mix(.75,1.,step(.9375,vDiffuseUV.x)));
+      #else
+      diffuseBase+=info.diffuse*shadow;
+      #endif
+    `};
+  }
+}
 
 export function groupTrees(placements:readonly WorldPlacement[]){
   const groups=new Map<string,{trees:WorldPlacement[];bounds:{minX:number;maxX:number;minZ:number;maxZ:number};minY:number;maxY:number}>();
@@ -44,7 +64,36 @@ export function createTreeMaterial(scene:Scene,owner:Scope){
   material.transparencyMode=StandardMaterial.MATERIAL_ALPHATEST;
   material.alphaCutOff=.33;
   material.backFaceCulling=false;
+  new TreeShade(material);
   return material;
+}
+
+const crownShadow=CreateSphereVertexData({segments:2,dedupTopBottomIndices:true});
+const trunkShadow=CreateBoxVertexData({size:1});
+
+export function createTreeShadowBatch(name:string,trees:readonly WorldPlacement[],material:StandardMaterial,owner:Scope){
+  const mesh=new Mesh(name,material.getScene());
+  owner.onDispose(()=>mesh.dispose());
+  const positions:number[]=[],indices:number[]=[];
+  const append=(source:VertexData,x:number,y:number,z:number,width:number,height:number)=>{
+    const start=positions.length/3,p=source.positions??[];
+    for(let i=0;i<p.length;i+=3)positions.push(x+p[i]*width,y+p[i+1]*height,z+p[i+2]*width);
+    for(const index of source.indices??[])indices.push(start+index);
+  };
+  for(const tree of trees){
+    const [x,y,z]=tree.position,h=tree.parameters.height;
+    append(trunkShadow,x,y+h*.23,z,h*TREE_TRUNK.radius*1.8,h*.46);
+    append(crownShadow,x,y+h*.66,z,h*.45,h*.43);
+  }
+  const normals:number[]=[];
+  VertexData.ComputeNormals(positions,indices,normals);
+  const data=new VertexData();data.positions=positions;data.indices=indices;data.normals=normals;data.applyToMesh(mesh);
+  mesh.material=material;
+  mesh.isPickable=false;
+  mesh.layerMask=0;
+  mesh.metadata={treeShadow:true,shadowNearOnly:true,shadowReceiver:false};
+  mesh.freezeWorldMatrix();
+  return mesh;
 }
 
 export function treeLodBounds(distance:number,horizontalDistance:number){
@@ -91,7 +140,7 @@ export function createTreeBatch(name:string,trees:readonly WorldPlacement[],mate
   for(const tree of trees){
     const h=tree.parameters.height,[x,y,z]=tree.position,yaw=tree.rotation[1];
     const base=new Vector3(x,y-.07,z);
-    tube(base,new Vector3(x,y+h*.72,z),h*.022,far?4:6);
+    tube(base,new Vector3(x,y+h*TREE_TRUNK.height,z),h*TREE_TRUNK.radius,far?4:6);
     if(far){
       const centre=new Vector3(x,y+h*.69,z);
       const across=new Vector3(Math.cos(yaw),0,Math.sin(yaw)).scale(h*.37);
@@ -125,7 +174,7 @@ export function createTreeBatch(name:string,trees:readonly WorldPlacement[],mate
   data.applyToMesh(mesh);
   mesh.material=material;
   mesh.isPickable=false;
-  // shortcut: cutout vegetation receives shadows, revisit casting when static cutouts can reuse shadow maps.
+  // Only the opaque proxy casts; cutout casters would bypass the shadow cache.
   mesh.metadata={shadowCaster:false,vegetation:true,vegetationLod:far?'far':'near'};
   mesh.setEnabled(false);
   mesh.freezeWorldMatrix();

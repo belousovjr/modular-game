@@ -137,7 +137,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
       sun.position.copyFrom(center).addInPlace(sun.direction.scale(-180));
       for (const mesh of getMeshes()) {
         if (mesh.isDisposed() || !mesh.isEnabled() || !mesh.isVisible) continue;
-        if (!receivers.has(mesh)) { receivers.set(mesh, mesh.receiveShadows); mesh.receiveShadows = true; }
+        if (mesh.metadata?.shadowReceiver !== false && !receivers.has(mesh)) { receivers.set(mesh, mesh.receiveShadows); mesh.receiveShadows = true; }
         if (mesh.hasThinInstances || mesh.metadata?.shadowCaster === false) continue;
         const world = mesh.computeWorldMatrix(!!mesh.parent || !mesh.isSynchronized());
         const box = mesh.getBoundingInfo().boundingBox;

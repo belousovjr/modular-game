@@ -34,6 +34,7 @@ export function steppedBuildingParts(profile:string,width:number,depth:number,he
 }
 
 export const snapCityMeasure=(value:number,step:number)=>Math.round(value/step)*step;
+export const TREE_TRUNK=Object.freeze({radius:.022,height:.72});
 
 export function createCollisionWorld(placements: readonly WorldPlacement[], bounds: Rectangle, baseHeight: number, slopeX: number): CollisionWorld {
   const blockers: CollisionBox[] = [];
@@ -79,10 +80,10 @@ export function cityCollision(city:CitySource):CollisionWorld {
     const outline=[[-width/2,-depth/2],[width/2,-depth/2],[width/2,depth/2],[-width/2,depth/2]].map(([u,v])=>[x+u*c+v*s,z-u*s+v*c]);
     return [{id:p.key,minX:Math.min(...outline.map(v=>v[0])),maxX:Math.max(...outline.map(v=>v[0])),minZ:Math.min(...outline.map(v=>v[1])),maxZ:Math.max(...outline.map(v=>v[1])),minY:y,maxY:y+height,outline}];
   });
-  const trees=city.placements.filter(p=>p.templateId==='city/tree'&&!p.key.startsWith('authored/tree/planter/')).map(p=>{
+  const trees=city.placements.filter(p=>p.templateId==='city/tree').map(p=>{
     const [x,y,z]=p.position;
-    const radius=p.parameters.height*.022;
-    return {id:p.key,minX:x-radius,maxX:x+radius,minZ:z-radius,maxZ:z+radius,minY:y,maxY:y+p.parameters.height*.72};
+    const radius=p.parameters.height*TREE_TRUNK.radius;
+    return {id:p.key,minX:x-radius,maxX:x+radius,minZ:z-radius,maxZ:z+radius,minY:y,maxY:y+p.parameters.height*TREE_TRUNK.height};
   });
   const placements=new Map(city.placements.map(p=>[p.key,p]));
   const buildingBlockers=city.colliders.flatMap((source):CollisionBox[]=>{

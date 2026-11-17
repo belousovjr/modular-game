@@ -1,4 +1,5 @@
 import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
+import {StandardMaterial} from '@babylonjs/core/Materials/standardMaterial.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { defineModule } from '../../core/context.ts';
@@ -9,7 +10,7 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
-import {createTreeBatch,createTreeMaterial,groupTrees,treeLodBounds} from './trees.ts';
+import {createTreeBatch,createTreeMaterial,createTreeShadowBatch,groupTrees,treeLodBounds} from './trees.ts';
 import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
@@ -75,6 +76,8 @@ export const worldModule = defineModule({
     const treeViews=new Set<(point:ReturnType<typeof deps.rendering.getDistanceOrigin>)=>void>();
     if(treeGroups.size){
       const material=createTreeMaterial(core.scene,scope);
+      const shadowMaterial=new StandardMaterial('world/tree-shadow-only',core.scene);
+      scope.onDispose(()=>shadowMaterial.dispose());
       for(const [key,{trees,bounds,minY,maxY}] of treeGroups){
         const id=`${city.id}/trees/${key}`;
         deps.streaming.registerSection(id,bounds,owner=>{
@@ -93,13 +96,20 @@ export const worldModule = defineModule({
             };
           }
           const near=level(false),far=level(true);
+          let shadow:Mesh|undefined;
           const update=(point:ReturnType<typeof deps.rendering.getDistanceOrigin>)=>{
-            if(!point){near(0,0);far(0,0);return;}
+            if(!point){near(0,0);far(0,0);shadow?.setEnabled(false);return;}
             const horizontal=Math.hypot(Math.max(bounds.minX-point.x,0,point.x-bounds.maxX),Math.max(bounds.minZ-point.z,0,point.z-bounds.maxZ));
             const distance=Math.hypot(horizontal,Math.max(minY-point.y,0,point.y-maxY));
             const {coverage,split}=treeLodBounds(distance,horizontal);
             far(0,split);
             near(split,coverage);
+            const cast=distance<=(shadow?.isEnabled()?60:48);
+            if(cast&&!shadow){
+              shadow=createTreeShadowBatch(`${id}/shadow`,trees,shadowMaterial,owner);
+              deps.geometry.registerMeshes([shadow],owner);
+            }
+            if(shadow&&shadow.isEnabled()!==cast)shadow.setEnabled(cast);
           };
           treeViews.add(update);
           owner.onDispose(()=>treeViews.delete(update));

@@ -413,6 +413,7 @@ test('Daley street furniture stays sparse, matches permanent blockers and simpli
       assert.ok(overlap.some(v=>v<=.00001),'Furniture parts intersect instead of joining at their faces');
     }
     for(const other of world.blockers)if(other.id!==blocker.id){
+      if(prop.templateId==='city/planter' && other.id===`authored/tree/planter/${x}/${z}`)continue;
       assert.ok(blocker.maxX+.5<=other.minX||other.maxX+.5<=blocker.minX||blocker.maxZ+.5<=other.minZ||other.maxZ+.5<=blocker.minZ,'Furniture overlaps another obstacle');
     }
   }
@@ -500,13 +501,22 @@ test('street and park tree trunks share the visual placement and keep the plaza 
     assert.ok(tree.parameters.height>=5.5&&tree.parameters.height<=9.5);
     if(tree.key.startsWith('authored/tree/planter/')){
       assert.ok(planters.some(p=>p.position[0]===x&&p.position[2]===z&&p.position[1]+.5===y));
-      continue;
+    }else{
+      assert.ok(!(x>=0&&x<=92&&z>=-80&&z<=-38));
     }
     const blocker=blockers.get(tree.key);
     assert.ok(blocker&&blocker.minX<x&&blocker.maxX>x&&blocker.minZ<z&&blocker.maxZ>z);
     assert.equal(blocker.minY,y);
-    assert.ok(!(x>=0&&x<=92&&z>=-80&&z<=-38));
+    assert.equal(blocker.maxY,y+tree.parameters.height*.72);
+    assert.ok(Math.abs(blocker.maxX-x-tree.parameters.height*.022)<1e-10);
   }
+  const create=createCharacterAuthorityFactory(cityCollision(citySource));
+  const actor=create(0,{x:605,z:-102});
+  for(let tick=1;tick<=45;tick++){
+    if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:true,jump:false},'local').accepted);
+    actor.step(tick);
+  }
+  assert.ok(actor.snapshot().x>606.25&&actor.snapshot().x<606.52,JSON.stringify(actor.snapshot()));
 });
 
 test('tree batches crossfade with complementary coverage and fade out before unloading',async()=>{

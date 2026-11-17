@@ -129,6 +129,15 @@ test('world places persistent generated content, keeps fallback styling without 
     assert.equal(shadows.getStats().casters, 0);
     point = { x: 0, y: 10, z: 0 }; settle();
     const steady = counts();
+    point = { x:24, y:3, z:-60 }; settle();
+    const treeProxies=scene.meshes.filter(mesh=>mesh.metadata?.treeShadow&&mesh.isEnabled());
+    const treeCasters=light.getSunLight().getShadowGenerator()?.getShadowMap()?.renderList??[];
+    assert.ok(treeProxies.length>0);
+    assert.ok(treeProxies.every(mesh=>mesh.layerMask===0&&!mesh.receiveShadows&&treeCasters.includes(mesh)));
+    assert.ok(treeCasters.every(mesh=>!mesh.metadata?.vegetation));
+    point = null; settle();
+    point = { x:0, y:10, z:0 }; settle();
+    assert.deepEqual(counts(),steady);
     if (repeat === 0) t.diagnostic(`Streaming steady resources: ${JSON.stringify(steady)}`);
     assert.ok(rendering.getStats().objects < api.objectCount);
     assert.ok(shadows.getStats().casters > 0);
