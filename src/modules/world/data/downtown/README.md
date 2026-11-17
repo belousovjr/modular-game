@@ -82,3 +82,9 @@ An authored paved patch replaces (rather than overlays) ground at X 3â€¦89 / Z â
 
 
 Marina City author correction: the two towers share a conservative 26.5 m envelope, 179 m height and base datum, rather than independently shrinking into irregular inscribed OSM rectangles. `normalize_marina` in prepare-downtown.py updates placements, canonical outline colliders and overview footprints together. The cylindrical facade is a low-poly approximation; the original 105-foot external balcony diameter is not claimed. Twin form/height references: [Chicago landmark designation report](https://www.loopnorth.com/doc/2016/O2016-65.pdf), [1962 architectural description](https://www.usmodernist.org/AA/AA-1962-01.pdf). Shader UV uses complete 32-cell circumference at both radial LODs.
+
+## Vegetation
+
+Run `node scripts/prepare-downtown-trees.mjs` after preparing `city.json`. The script reads the pinned park, pavement and road triangles and writes `trees.json` with the same coordinates and ground heights. Tree locations outside the authored plaza planters are procedural.
+
+`public/textures/trees/downtown-atlas.webp` packs the procedurally drawn branch and crown cutouts from the sibling `chicago-test` project (`scripts/build-tree-leaves.py`) with original procedural bark shading. No downloaded tree model or texture is needed.

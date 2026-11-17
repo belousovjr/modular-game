@@ -9,6 +9,7 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
+import {createTreeBatch,createTreeMaterial,groupTrees,treeLodBounds} from './trees.ts';
 import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
@@ -34,7 +35,7 @@ export const worldModule = defineModule({
     const updateAviationLights=createAviationLights(core.scene,scope,aviationLights);
     const buildings = new Set<ReturnType<typeof deps.rendering.createObject>>();
     const lamps: typeof buildings = new Set();
-    const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass');
+    const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass'&&p.templateId!=='city/tree');
     const buildingCount=city.colliders.length;
     const lampCount = placements.filter(p => p.templateId === 'city/signal' || p.templateId === 'world/lamp').length;
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
@@ -70,6 +71,41 @@ export const worldModule = defineModule({
     const surfaceViews=new Set<{bounds:SectionBounds;load:number;unload:number;visibility:Visibility}>();
     const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number;visibility?:Visibility}>();
     const heights=new Map(city.placements.map(p=>[p.key,p.parameters.height]));
+    const treeGroups=groupTrees(city.placements);
+    const treeViews=new Set<(point:ReturnType<typeof deps.rendering.getDistanceOrigin>)=>void>();
+    if(treeGroups.size){
+      const material=createTreeMaterial(core.scene,scope);
+      for(const [key,{trees,bounds,minY,maxY}] of treeGroups){
+        const id=`${city.id}/trees/${key}`;
+        deps.streaming.registerSection(id,bounds,owner=>{
+          function level(far:boolean){
+            let mesh:Mesh|undefined,previousLower=0,previousUpper=0;
+            return (lower:number,upper:number)=>{
+              if(lower===previousLower&&upper===previousUpper)return;
+              previousLower=lower;previousUpper=upper;
+              if(upper<=lower){mesh?.setEnabled(false);return;}
+              if(!mesh){
+                mesh=createTreeBatch(`${id}/${far?'far':'near'}`,trees,material,owner,far);
+                deps.geometry.registerMeshes([mesh],owner);
+              }
+              deps.geometry.setMeshFade(mesh,lower,upper);
+              mesh.setEnabled(true);
+            };
+          }
+          const near=level(false),far=level(true);
+          const update=(point:ReturnType<typeof deps.rendering.getDistanceOrigin>)=>{
+            if(!point){near(0,0);far(0,0);return;}
+            const horizontal=Math.hypot(Math.max(bounds.minX-point.x,0,point.x-bounds.maxX),Math.max(bounds.minZ-point.z,0,point.z-bounds.maxZ));
+            const distance=Math.hypot(horizontal,Math.max(minY-point.y,0,point.y-maxY));
+            const {coverage,split}=treeLodBounds(distance,horizontal);
+            far(0,split);
+            near(split,coverage);
+          };
+          treeViews.add(update);
+          owner.onDispose(()=>treeViews.delete(update));
+        },scope,{load:210,unload:225});
+      }
+    }
     for(const band of [{meshes:groupDistantSurfaces(city),load:1200,unload:1400},{meshes:groupStreetSurfaces(city),load:192,unload:256}])for(const surface of band.meshes){
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
       for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
@@ -125,6 +161,7 @@ export const worldModule = defineModule({
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
       const point=deps.rendering.getDistanceOrigin();
       updateAviationLights(point);
+      for(const update of treeViews)update(point);
       for(const view of surfaceViews){
         const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
         view.visibility.setVisible(distance<=(view.visibility.isVisible()?view.unload:view.load),!point);

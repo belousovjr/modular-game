@@ -488,3 +488,33 @@ test('skyline batches preserve fitted UVs and geometry across tile boundaries',a
   assert.deepEqual(result[0].meshes,[{surface:wall.surface,positions:[...wall.positions,...next.positions],
     indices:[0,1,2,3,4,5],uvs:[...wall.uvs,...next.uvs]}]);
 });
+
+test('street and park tree trunks share the visual placement and keep the plaza route open',()=>{
+  const trees=citySource.placements.filter(p=>p.templateId==='city/tree');
+  assert.ok(trees.length>300&&trees.length<600);
+  const blockers=new Map(cityCollision(citySource).blockers.map(b=>[b.id,b]));
+  const planters=citySource.placements.filter(p=>p.templateId==='city/planter');
+  assert.equal(trees.filter(p=>p.key.startsWith('authored/tree/planter/')).length,planters.length);
+  for(const tree of trees){
+    const [x,y,z]=tree.position;
+    assert.ok(tree.parameters.height>=5.5&&tree.parameters.height<=9.5);
+    if(tree.key.startsWith('authored/tree/planter/')){
+      assert.ok(planters.some(p=>p.position[0]===x&&p.position[2]===z&&p.position[1]+.5===y));
+      continue;
+    }
+    const blocker=blockers.get(tree.key);
+    assert.ok(blocker&&blocker.minX<x&&blocker.maxX>x&&blocker.minZ<z&&blocker.maxZ>z);
+    assert.equal(blocker.minY,y);
+    assert.ok(!(x>=0&&x<=92&&z>=-80&&z<=-38));
+  }
+});
+
+test('tree batches crossfade with complementary coverage and fade out before unloading',async()=>{
+  const {treeLodBounds}=await import('../src/modules/world/trees.ts');
+  assert.deepEqual(treeLodBounds(32,32),{coverage:1,split:0});
+  assert.deepEqual(treeLodBounds(46,46),{coverage:1,split:.5});
+  assert.deepEqual(treeLodBounds(60,60),{coverage:1,split:1});
+  assert.deepEqual(treeLodBounds(90,0),{coverage:1,split:1});
+  assert.deepEqual(treeLodBounds(197.5,197.5),{coverage:.5,split:.5});
+  assert.deepEqual(treeLodBounds(210,210),{coverage:0,split:0});
+});
