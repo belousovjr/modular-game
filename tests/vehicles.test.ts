@@ -71,6 +71,7 @@ test('vehicle delivery reorders/drops real commands and closes pending work',asy
 test('prepared car keeps its budget, real texture/AO and functional door/wheel pivots',()=>{
   const bytes=readFileSync(new URL('../public/models/car/car.glb',import.meta.url)),manifest=JSON.parse(readFileSync(new URL('../public/models/car/manifest.json',import.meta.url),'utf8'));
   const gltf=JSON.parse(bytes.subarray(20,20+bytes.readUInt32LE(12)).toString());assert.ok(manifest.triangles<4000);assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.ok(bytes.length<600000);
+  for(const name of ['door/left','door/right'])assert.equal(gltf.nodes.filter((n:{name:string})=>n.name===name).length,1,'Exterior door must be unique: '+name);
   for(const name of ['door/left','door/right','wheel/front/left','wheel/front/right','wheel/rear/left','wheel/rear/right','steering'])assert.ok(gltf.nodes.some((n:{name:string})=>n.name===name),name);
   for(const material of gltf.materials)assert.ok(material.pbrMetallicRoughness.baseColorTexture);
   assert.ok(gltf.materials.some((m:{normalTexture?:unknown})=>m.normalTexture));assert.equal(gltf.textures.length,2);
@@ -202,4 +203,20 @@ test('released throttle slows gradually and an abandoned car comes to rest',()=>
     assert.ok(coast<initial-1,'Releasing throttle did not create rolling resistance');assert.ok(coast>initial*.65,'Coasting stopped too abruptly');
     s.advance(s.tick+1200,t=>{if(!abandon)s.car.receive(drive(t,0,0),'local');});assert.ok(s.car.snapshot().speed<.2,'Car kept coasting without a driver or throttle');
   }finally{s.car.dispose();}}
+});
+
+
+test('a physically overturned car uses a crawling exit then releases ordinary walking',()=>{
+  const w={...world,bounds:{minX:-200,maxX:200,minZ:-200,maxZ:200},floors:[{minX:4,maxX:20,minZ:14,maxZ:100,elevation:1}]};
+  const s=session(w);try{board(s);while(new Quaternion(...s.car.snapshot().rotation).vmult(new Vec3(0,1,0)).y>-.5&&s.tick<1000)s.advance(s.tick+1,t=>{s.car.receive(drive(t),'local');});
+    assert.ok(new Quaternion(...s.car.snapshot().rotation).vmult(new Vec3(0,1,0)).y<-.5,'Fixture did not overturn the car');
+    assert.equal(s.car.receive(cmd('exit',s.tick,10000),'local').accepted,true);const start=s.tick;
+    s.advance(start+1);assert.equal(s.actor.snapshot().vehicleAnimation,'crawling');assert.equal(s.actor.snapshot().vehicleRotation,undefined);
+    s.advance(start+30);assert.equal(s.actor.snapshot().vehicleAnimation,'crawling');assert.ok(Math.max(s.car.snapshot().leftDoor,s.car.snapshot().rightDoor)>1.1);assert.ok(Math.min(s.car.snapshot().leftDoor,s.car.snapshot().rightDoor)<.01);
+    s.advance(start+CAR_GUIDES.crawl.duration-1);assert.equal(s.actor.snapshot().vehicleAnimation,'crawling');
+    s.advance(start+CAR_GUIDES.crawl.duration);const a=s.actor.snapshot();assert.equal(a.vehicleId,undefined);const car=s.car.snapshot(),offset=new Quaternion(...car.rotation).vmult(new Vec3(0,.65,0));assert.ok(Math.hypot(a.x-car.position[0]-offset.x,a.z-car.position[2]-offset.z)>2.4);
+    assert.equal(s.actor.receive({type:'move',characterId:'local-player',sequence:1,tick:s.tick,x:0,z:1,run:false,jump:false},'local').accepted,true);
+    assert.ok(new Quaternion(...s.car.snapshot().rotation).vmult(new Vec3(0,1,0)).y<.35);
+    assert.equal(s.car.receive(cmd('enter',s.tick,10001),'local').reason,'overturned');assert.equal(s.car.snapshot().phase,'parked');
+  }finally{s.car.dispose();}
 });

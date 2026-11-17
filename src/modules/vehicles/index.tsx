@@ -9,7 +9,7 @@ import {geometryModule} from '../geometry/index.ts';
 import {createVehicleAuthority,createVehicleConnection,type VehicleSnapshot,type VehicleCommand} from './headless.ts';
 import {createCarView} from './view.ts';
 import type {CoreContext} from '../../core/context.ts';
-const feedback:Record<string,string>={'too-far':'Подойдите к водительской двери','blocked-exit':'Слева нет безопасного места для выхода','blocked-door':'Подход к двери перекрыт','unavailable':'Действие сейчас недоступно','driver':'Сначала сядьте за руль'};
+const feedback:Record<string,string>={'overturned':'В перевёрнутую машину сесть нельзя','too-far':'Подойдите к водительской двери','blocked-exit':'Слева нет безопасного места для выхода','blocked-door':'Подход к двери перекрыт','unavailable':'Действие сейчас недоступно','driver':'Сначала сядьте за руль'};
 function VehicleInfo({read,onFrame}:{read:()=>{snapshot:VehicleSnapshot;state:string;error:string};onFrame:CoreContext['onFrame']}){
   const [state,setState]=useState(read);
   useEffect(()=>{let elapsed=0;const observer=onFrame.add(delta=>{elapsed+=delta;if(elapsed>=200){elapsed=0;setState(read());}});return()=>{onFrame.remove(observer);};},[read,onFrame]);

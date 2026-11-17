@@ -1,6 +1,6 @@
 {
   "source": "Quaternius: Modular Character Outfits – Fantasy + Universal Base Characters",
-  "license": "CC0-1.0 model/Quaternius clips; Adobe Mixamo terms for Car_Enter/Car_Exit",
+  "license": "CC0-1.0 model/Quaternius clips; Adobe Mixamo terms for Car_Enter/Car_Exit/Crawl_Loop",
   "triangles": 5970,
   "primitives": 1,
   "joints": 65,
@@ -32,7 +32,8 @@
     "Jump_Land",
     "Driving_Loop",
     "Car_Enter",
-    "Car_Exit"
+    "Car_Exit",
+    "Crawl_Loop"
   ],
   "animationLibraries": [
     {
@@ -136,7 +137,7 @@
       ]
     }
   ],
-  "sha256": "8ed32f11b41a95ff754e54867caafcc47bc7c6707aabc1788a82acbe03c541cb",
+  "sha256": "acb55bf373e938b23d3b6dda1761096ac7f8f0b4596831e6cb4caf8e77e9dd51",
   "vehicleAnimations": [
     {
       "clip": "Car_Enter",
@@ -155,6 +156,15 @@
       "sha256": "c6e3d2c80233b0ce3cb00084643aee6b5710aa524671be171bca002d3969f67d",
       "duration": 3.866666793823242,
       "playbackSourceRate": 1.5
+    },
+    {
+      "clip": "Crawl_Loop",
+      "sourceClip": "Crawling",
+      "url": "https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters/resolve/main/animation/Crawling.fbx",
+      "license": "Adobe Mixamo terms; game use, not CC0",
+      "sha256": "e139611c3b4d9dd892593d50f7ba25b552d0eb9673618f05cc62ba64523271ad",
+      "duration": 1.7999999523162842,
+      "playbackSourceRate": 1
     }
   ]
 }

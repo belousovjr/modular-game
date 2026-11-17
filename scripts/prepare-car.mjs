@@ -45,9 +45,10 @@ for(const n of r.listNodes()){
   }
   const name=n.getName();
   if(name.endsWith(' Tire')&&!name.includes('Rear'))n.setName(`wheel/${n.getTranslation()[2]>0?'front':'rear'}/${n.getTranslation()[0]>0?'left':'right'}`);
-  else if(name.endsWith(' Door'))n.setName(`door/${n.getTranslation()[0]>0?'left':'right'}`);
+  else if(name.endsWith(' L Door')||name.endsWith(' R Door'))n.setName(`door/${n.getTranslation()[0]>0?'left':'right'}`);
   else if(name.endsWith('Stearing'))n.setName('steering');else n.setName('body/'+name);
 }
+for(const name of ['door/left','door/right'])assert.equal(r.listNodes().filter(n=>n.getName()===name).length,1,'Exterior door must have a unique node: '+name);
 const primitives=r.listMeshes().flatMap(m=>m.listPrimitives());
 const count=primitives.reduce((n,p)=>n+p.getIndices().getCount()/3,0);assert.ok(count<12000,`Too many triangles: ${count}`);
 

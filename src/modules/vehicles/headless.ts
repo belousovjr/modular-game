@@ -15,6 +15,7 @@ export interface VehicleSnapshot {
 export const CAR_GUIDES={
   id:'compact-suv',height:2.3,stand:{x:-1.7,z:-.35},seat:{x:-.46,y:.47,z:-.12},
   enter:{duration:110,open:[18,36],close:[80,104],move:[39,75],lift:[53,60]},
+  crawl:{duration:150,move:[0,135],lower:[0,18]},
   exit:{duration:117,movingDuration:59,movingMove:[15,55],open:[3,21],close:[72,90],move:[30,71],drop:[38,45]},
 } as const;
 const ID='car/0',TILE=32,STEP=2,ROOT_OFFSET=.65;
@@ -119,10 +120,11 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   let leftDoor=0,rightDoor=0,leftOpen=false,rightOpen=false;
   let approachPath:{x:number;z:number}[]=[],approachNode=0,lastProgress=startTick,lastDistance=Infinity;
   let character:CharacterSnapshot|null=null,entry={x:0,y:0,z:0,yaw:0},exit={x:0,y:0,z:0,yaw:0},release:VehicleCharacterFrame['release']=null;
-  let coasting=false;
+  let coasting=false,exitCrawling=false,crawlRight=false;
   const point=(x:number,y:number,z:number)=>{const v=body.quaternion.vmult(new Vec3(x,y-ROOT_OFFSET,z));return {x:v.x+body.position.x,y:v.y+body.position.y,z:v.z+body.position.z};};
   const heading=()=>{const v=body.quaternion.vmult(new Vec3(0,0,1));return Math.atan2(v.x,v.z);};
   const speed=()=>body.velocity.length();
+  const overturned=()=>body.quaternion.vmult(new Vec3(0,1,0)).y<.35;
   const denied=(reason:string):Receipt=>{message=reason;return {accepted:false,reason};};
   function carBlocker(){
     const p=body.position,c=Math.cos(heading()),sn=Math.sin(heading());
@@ -130,7 +132,14 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
     return {id:ID,minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),minY:p.y-ROOT_OFFSET,maxY:p.y-ROOT_OFFSET+CAR_GUIDES.height,outline};
   }
   function standingPoint(){const p=point(CAR_GUIDES.stand.x,0,CAR_GUIDES.stand.z),s=probe(tick,{x:p.x,z:p.z}).snapshot();return {x:s.x,y:s.y,z:s.z,yaw:heading()-Math.PI/2};}
-  function safeExit(){try{const p=standingPoint();return p;}catch{return null;}}
+  function safeExit(crawl=false){
+    if(!crawl){try{return standingPoint();}catch{return null;}}
+    for(const side of [-1,1])try{const yaw=heading(),x=body.position.x+side*Math.cos(yaw)*2.6,z=body.position.z-side*Math.sin(yaw)*2.6,p=probe(tick,{x,z}).snapshot();
+      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5)continue;
+      return {x:p.x,y:p.y,z:p.z,yaw:Math.atan2(p.x-body.position.x,p.z-body.position.z)};
+    }catch{continue;}
+    return null;
+  }
   function snapshot():VehicleSnapshot{return Object.freeze({id:ID,tick,position:Object.freeze(Object.values(point(0,0,0))),rotation:Object.freeze([body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]),wheels:Object.freeze(car.wheelInfos.map(w=>{const t=w.worldTransform;return Object.freeze({position:Object.freeze([t.position.x,t.position.y,t.position.z]),rotation:Object.freeze([t.quaternion.x,t.quaternion.y,t.quaternion.z,t.quaternion.w])});})),speed:speed(),steering:steeringAngle,driverId,phase,leftDoor,rightDoor,message});}
   return {
     observeCharacter(s:CharacterSnapshot){character=s;},
@@ -145,6 +154,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(Object.keys(input).length!==keys.length||Object.keys(input).some(k=>!keys.includes(k))||!['drive','enter','exit','door'].includes(String(type)))return denied('invalid');
       if(type==='drive'&&(typeof input.throttle!=='number'||typeof input.steer!=='number'||![input.throttle,input.steer].every(Number.isFinite)||Math.abs(input.throttle)>1||Math.abs(input.steer)>1||typeof input.brake!=='boolean'))return denied('invalid');
       if(type==='door'&&input.side!=='left'&&input.side!=='right')return denied('invalid');
+      if(type==='enter'&&overturned())return denied('overturned');
       if(type==='enter'||type==='door'){
         if(!character||phase!=='parked'||speed()>.6||!character.grounded)return denied('unavailable');
         const door=type==='enter'?body.position:point(input.side==='right'?1.9:-1.9,0,-.05);if(Math.hypot(character.x-door.x,character.y-door.y,character.z-door.z)>(type==='enter'?6.5:2.6))return denied('too-far');
@@ -157,7 +167,8 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(type==='exit'){
         if(phase==='approaching'){phase='parked';driverId=null;approachPath=[];}
         else{
-          if(phase!=='driving')return denied('unavailable');const p=safeExit();if(!p)return denied('blocked-exit');exit=p;since=tick;leftOpen=rightOpen=false;throttle=steering=0;brake=true;
+          if(phase!=='driving')return denied('unavailable');const crawl=overturned(),p=safeExit(crawl);if(!p)return denied('blocked-exit');exit=p;since=tick;leftOpen=rightOpen=false;throttle=steering=0;brake=true;
+          exitCrawling=crawl;crawlRight=crawl&&body.quaternion.vmult(new Vec3(1,0,0)).dot(new Vec3(p.x-body.position.x,0,p.z-body.position.z))>0;leftOpen=crawl&&!crawlRight;rightOpen=crawl&&crawlRight;if(crawl&&character)entry={x:character.x,y:character.y,z:character.z,yaw:character.yaw};
           coasting=speed()>.6;phase='exiting';
         }
       }
@@ -170,6 +181,10 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
     step(nextTick:number,s:CharacterSnapshot):VehicleCharacterFrame{
       if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;release=null;syncTerrain();
       if(tick>expires){throttle=steering=0;brake=true;}
+      if((phase==='approaching'||phase==='entering')&&overturned()){
+        if(phase==='entering')release=safeExit(true)??entry;
+        phase='parked';driverId=null;approachPath=[];message='overturned';
+      }
       if(phase==='approaching'){
         const target=approachPath[approachNode],distance=target?Math.hypot(s.x-target.x,s.z-target.z):0;
         if(distance<lastDistance-.005){lastDistance=distance;lastProgress=tick;}
@@ -194,14 +209,14 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(body.sleepState!==Body.SLEEPING||phase==='driving')physics.step(1/60);
       if(phase!=='driving'&&tick-startTick>120&&speed()<.18&&car.wheelInfos.filter(w=>w.isInContact).length>=3)body.sleep();
       if(phase==='exiting'){
-        const target=safeExit();
+        const target=safeExit(exitCrawling);
         if(!target){phase='driving';coasting=false;brake=true;message='blocked-exit';}
-        else{exit=target;if(elapsed>=(coasting?CAR_GUIDES.exit.movingDuration:CAR_GUIDES.exit.duration)){phase='parked';driverId=null;leftOpen=coasting;rightOpen=false;release=exit;}}
+        else{exit=target;if(elapsed>=(exitCrawling?CAR_GUIDES.crawl.duration:coasting?CAR_GUIDES.exit.movingDuration:CAR_GUIDES.exit.duration)){phase='parked';driverId=null;leftOpen=exitCrawling?!crawlRight:coasting;rightOpen=exitCrawling&&crawlRight;release=exit;}}
       }
       for(let i=0;i<4;i++)car.updateWheelTransform(i);
       leftDoor+=Math.max(-.06,Math.min(.06,Number(leftOpen)*1.15-leftDoor));rightDoor+=Math.max(-.06,Math.min(.06,Number(rightOpen)*1.15-rightDoor));
       if(phase==='entering')leftDoor=1.15*ramp(elapsed,CAR_GUIDES.enter.open)*(1-ramp(elapsed,CAR_GUIDES.enter.close));
-      if(phase==='exiting')leftDoor=1.15*ramp(elapsed,CAR_GUIDES.exit.open)*(coasting?1:1-ramp(elapsed,CAR_GUIDES.exit.close));
+      if(phase==='exiting'){if(exitCrawling){if(crawlRight)rightDoor=1.15*ramp(elapsed,[0,18]);else leftDoor=1.15*ramp(elapsed,[0,18]);}else leftDoor=1.15*ramp(elapsed,CAR_GUIDES.exit.open)*(coasting?1:1-ramp(elapsed,CAR_GUIDES.exit.close));}
       const blocker=carBlocker();
       let pose:VehicleCharacterFrame['pose']=null;
       let approach:VehicleCharacterFrame['approach'];
@@ -210,12 +225,13 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
         if(p)approach={x:p.x,z:p.z,yaw:heading()+Math.PI/2,vehicleId:ID,run:Math.hypot(s.x-approachPath.at(-1)!.x,s.z-approachPath.at(-1)!.z)>2.5,align:Math.hypot(s.x-approachPath.at(-1)!.x,s.z-approachPath.at(-1)!.z)<.08};
       }else if(driverId){
         const seat=point(CAR_GUIDES.seat.x,CAR_GUIDES.seat.y,CAR_GUIDES.seat.z),entering=phase==='entering',exiting=phase==='exiting';
-        const a=entering?ramp(elapsed,CAR_GUIDES.enter.move):exiting?ramp(elapsed,coasting?CAR_GUIDES.exit.movingMove:CAR_GUIDES.exit.move):1;
-        const from=entering?entry:seat,to=exiting?exit:seat;
+        const a=entering?ramp(elapsed,CAR_GUIDES.enter.move):exiting?ramp(elapsed,exitCrawling?CAR_GUIDES.crawl.move:coasting?CAR_GUIDES.exit.movingMove:CAR_GUIDES.exit.move):1;
+        const from=entering||(exiting&&exitCrawling)?entry:seat,to=exiting?exit:seat;
         let y=seat.y;
         if(entering){const lift=ramp(elapsed,CAR_GUIDES.enter.lift);const footCorrection=.1*ramp(elapsed,[45,53]);y=(entry.y+footCorrection)*(1-lift)+seat.y*lift;}
         if(exiting){const compensation=.15*(1-ramp(elapsed,coasting?[45,55]:[45,100]));const drop=ramp(elapsed,CAR_GUIDES.exit.drop);y=seat.y*(1-drop)+(exit.y+compensation)*drop;}
-        pose={...(phase==='driving'?{rotation:[body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]}:{}),x:from.x+(to.x-from.x)*a,y,z:from.z+(to.z-from.z)*a,yaw:heading(),vehicleId:ID,animation:entering?'entering':exiting?'exiting':'driving'};
+        if(exiting&&exitCrawling)y=entry.y+(exit.y-entry.y)*ramp(elapsed,CAR_GUIDES.crawl.lower);
+        pose={...(phase==='driving'?{rotation:[body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]}:{}),x:from.x+(to.x-from.x)*a,y,z:from.z+(to.z-from.z)*a,yaw:exiting&&exitCrawling?exit.yaw:heading(),vehicleId:ID,animation:entering?'entering':exiting?(exitCrawling?'crawling':'exiting'):'driving'};
       }
       return {blocker,pose,release,...(approach?{approach}:{})};
     },snapshot,

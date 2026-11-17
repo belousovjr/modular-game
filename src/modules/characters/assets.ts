@@ -139,7 +139,7 @@ export function blendAnimations(groups: readonly AnimationGroup[], active: Anima
 }
 
 export function selectAnimation(s: CharacterSnapshot) {
-  if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
+  if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='crawling'?'Crawl_Loop':s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
   return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.running?'Sprint_Loop':'Walk_Loop';
 }
 

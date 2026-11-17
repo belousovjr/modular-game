@@ -4,13 +4,13 @@ export interface MoveCommand { readonly type: 'move'; readonly characterId: stri
 export interface VehicleCharacterFrame {
   readonly blocker: CollisionBox;
   readonly approach?: {readonly x:number;readonly z:number;readonly yaw:number;readonly vehicleId:string;readonly run:boolean;readonly align:boolean};
-  readonly pose: {readonly x:number;readonly y:number;readonly z:number;readonly yaw:number;readonly vehicleId:string;readonly rotation?:readonly number[];readonly animation:'approaching'|'entering'|'driving'|'exiting'} | null;
+  readonly pose: {readonly x:number;readonly y:number;readonly z:number;readonly yaw:number;readonly vehicleId:string;readonly rotation?:readonly number[];readonly animation:'approaching'|'entering'|'driving'|'exiting'|'crawling'} | null;
   readonly release: {readonly x:number;readonly y:number;readonly z:number;readonly yaw:number} | null;
 }
 export interface CharacterSnapshot {
   readonly tick: number; readonly id: string; readonly ownerId: string;
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
-  readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting';
+  readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting'|'crawling';
   readonly grounded: boolean; readonly verticalSpeed: number; readonly airborneTicks: number; readonly landedTick: number;
   readonly moving: boolean; readonly running: boolean; readonly lastSequence: number;
 }

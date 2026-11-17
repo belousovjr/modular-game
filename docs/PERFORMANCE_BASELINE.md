@@ -632,3 +632,23 @@ All loaded avatar orientations use quaternion shortest-arc smoothing, including 
 143 tests/check/build pass: quaternion interpolation/interruptibility, held final action pose, existing animation weights, and pedestrian authority walking inside the AABB of a real downtown concave facade before stopping at its polygon wall. The latter verifies walking separately from vehicle compounds; character collision already uses canonical outlines and requires no additional render geometry.
 
 GPU keyboard smoke near the driver door, including an opposite-facing walking input before entry: Walk→Car_Enter→Driving_Loop→Car_Exit→Idle observed; 1144 bounded orientation samples, maximum change 0.349 rad between frames separated by <=50 ms, no instantaneous half-turn. 1280×720 RTX 3050 Laptop, short parked sample 100.7 FPS / P95 15.1 ms; camera/path differ from prior driving benchmarks. Memory cap 2 GiB, no swap, peak 1510797312 bytes, OOM=0, browser errors=0. Long stress/soak not performed.
+
+### Seat clearance and entry endpoint — 2026-11-17
+
+Car_Enter's last 12% now converges smoothly to the exact local joint rotations and pelvis translation of Driving_Loop frame zero; the asset test checks matching endpoints and bounds late head rise. Driver guide Y increases .35→.47 m. Car body/doors/interior root gains 4% Y scale after wheel detachment; wheels retain original shape/anchors. Geometry/material counts are unchanged. Human GLB is 1282532 bytes and remains inside the existing budget.
+
+GPU side/low-angle entry→driving→exit check passed, with bounded per-frame head/foot sampling. Late entry head joint maximum 1.685 m above the vehicle model root; settled driving head 1.676–1.677 m, minimum ankle joint height 0.570 m. Visual low-angle screenshot shows no soles below the body; the checked late transition stays below the roof. The initially reported brief head spike did not reproduce in the pre-change capture, so this records endpoint/clearance correction and the verified trace rather than a reproduced root cause. 143 tests/check/build passed. Memory cap 2 GiB, no swap, OOM=0, browser errors=0; long low-FPS soak not performed.
+
+### Crawling escape from overturned vehicles — 2026-11-17
+
+Added one compatible Mixamo Crawling clip after the user relaxed the Quaternius-only requirement. Source URL/hash/licence are in human manifest.vehicleAnimations and SOURCES.md; it is Adobe-terms, not Quaternius Standard/CC0. Human GLB 1344824 bytes remains below 1400 KiB with the same 5970 triangles, 65 joints, mesh and texture maps. No crawling model, extra skeleton or additional render pass is introduced.
+
+Authority chooses crawling when chassis world-up.y<0.35, selects a free side exit and opens the matching physical left/right door using the rotated chassis basis. The 150-tick exit uses the standard animation/orientation crossfade, then releases to walking; that door stays open. Boarding an overturned car is rejected by authority and approaching/entering is cancelled if it overturns. A regression genuinely rolls the Cannon car over a one-sided ledge, checks Crawl_Loop state, one open door, safe release, restored movement and rejection of re-entry.
+
+Independent scoped GPU fixture used the same car/avatar renderers and unchanged headless authorities/protocol delivery. It physically rolled the car to up.y<-0.9, showed Crawl_Loop through the open right door on the world's left side, then Idle outside with that door open. Screenshots crawl-{overturned,exit,standing}.png. Browser errors=0 under MemoryMax=2 GiB/no swap/90 s timeout. 144 tests/check/build pass. This isolated visual fixture is not a full-city FPS benchmark or exhaustive rollover/trapping test.
+
+### Exterior right door correction — 2026-11-17
+
+Correction to the earlier crawl visual check: the broad source-name suffix `Door` assigned `door/right` both to `Interior Door` and the actual `R Door`. The renderer selected the interior part first, so the numeric right-door angle changed while the exterior door stayed closed. The earlier check of the snapshot angle did not establish that the actual exterior mesh opened.
+
+The builder now names only `L Door`/`R Door` as functional doors. Interior Door remains a body node; offline preparation, asset regression and loader all require unique exterior-door IDs. Car geometry/texture budgets remain 3442 triangles/two materials with the same maps. The repeated overturned-car GPU run asserts quaternion rotation of the real exterior right-door transform (y≈0.544 at angle 1.15), visually shows the open doorway while crawling and the door remaining open afterward. Browser errors=0 under the existing 2 GiB cap. 144 tests/check/build passed. No full-city performance rerun for this node-name correction.

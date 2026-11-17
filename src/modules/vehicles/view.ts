@@ -27,6 +27,7 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
     for(const node of container.rootNodes)node.parent=root;
     const nodes=root.getDescendants().filter((n):n is TransformNode=>n instanceof TransformNode);
     left=nodes.find(n=>n.name==='door/left');right=nodes.find(n=>n.name==='door/right');steering=nodes.find(n=>n.name==='steering');
+    if(nodes.filter(n=>n.name==='door/left').length!==1||nodes.filter(n=>n.name==='door/right').length!==1)throw new Error('Exterior car door nodes must be unique');
     if(!left||!right||!steering)throw new Error('Car has no functional door/steering nodes');
     for(const axle of ['front','rear'])for(const side of ['left','right']){
       const node=nodes.find(n=>n.name===`wheel/${axle}/${side}`);if(!node)throw new Error('Missing wheel');

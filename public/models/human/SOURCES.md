@@ -59,3 +59,8 @@ The directory contains Entering_Car.fbx and Exiting_Car.fbx. Assimp (development
 These are actual car-specific entry/exit motions, not the generic Sitting_Enter/Sitting_Exit clips used during the first unfinished attempt. Constant reset tracks across all ten runtime clips prevent stale hand poses. Geometry/materials/textures/65 joints remain shared; exact runtime GLB hash is in manifest.json.
 
 The final 12% of Car_Enter is smoothly fitted to the first Driving_Loop pose (all local joint rotations and pelvis translation). This keeps the held final pose and the driving crossfade consistent without a transient torso/head rise. The asset regression checks the exact endpoint and late head height.
+
+
+### Crawling escape clip
+
+`Crawl_Loop` is retargeted from Mixamo `Crawling.fbx`, downloaded from [the same public Adobe-terms dataset](https://huggingface.co/datasets/Linzhan/Mixamo-Animations-Characters/resolve/main/animation/Crawling.fbx) as the car clips. It is **not** a Quaternius Standard/CC0 clip; the user accepted any compatible crawling animation. The inspected free Quaternius Standard library does not contain crawling. Source hash/duration/licence are in manifest.vehicleAnimations. `prepare-car-animations.mjs` now takes Crawling.fbx alongside the two car FBXs, removes horizontal root motion and compensates the target proportions to keep hands above ground. Runtime now contains eleven clips; GLB remains below 1400 KiB, with the same mesh, textures and rig.

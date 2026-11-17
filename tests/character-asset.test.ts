@@ -13,7 +13,7 @@ test('human asset stays within the render budget with one shared rig and baked l
   assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));
   assert.equal(gltf.meshes.length,1);assert.equal(gltf.meshes[0].primitives.length,1);assert.equal(gltf.materials.length,1);
   assert.equal(gltf.skins.length,1);assert.equal(gltf.skins[0].joints.length,65);
-  assert.deepEqual(gltf.animations.map((a:{name:string})=>a.name).sort(),['Car_Enter','Car_Exit','Driving_Loop','Idle_Loop','Jog_Fwd_Loop','Jump_Land','Jump_Loop','Jump_Start','Sprint_Loop','Walk_Loop']);
+  assert.deepEqual(gltf.animations.map((a:{name:string})=>a.name).sort(),['Car_Enter','Car_Exit','Crawl_Loop','Driving_Loop','Idle_Loop','Jog_Fwd_Loop','Jump_Land','Jump_Loop','Jump_Start','Sprint_Loop','Walk_Loop']);
   assert.ok(gltf.animations.every((a:{channels:unknown[]})=>a.channels.length<=80),'Static bone tracks must stay pruned');
   const primitive=gltf.meshes[0].primitives[0];assert.ok('JOINTS_0'in primitive.attributes&&'WEIGHTS_0'in primitive.attributes);
   assert.equal(gltf.accessors[primitive.indices].count/3,manifest.triangles);
@@ -63,6 +63,7 @@ test('walking selects its own clip and visual turning follows the short arc inde
   assert.equal(selectAnimation({...s,moving:true,running:false}),'Walk_Loop');
   assert.equal(selectAnimation({...s,moving:true,running:true}),'Sprint_Loop');
   assert.equal(selectAnimation(s),'Idle_Loop');
+  assert.equal(selectAnimation({...s,vehicleId:'car/0',vehicleAnimation:'crawling'}),'Crawl_Loop');
   assert.equal(selectAnimation({...s,grounded:false,airborneTicks:8,moving:true}),'Jump_Loop');
   const turned=smoothYaw(0,Math.PI/2,16);
   assert.ok(turned>0&&turned<Math.PI/2,'Direction must not snap');
@@ -93,6 +94,7 @@ test('car-specific Mixamo clips keep feet below the head and meet the driving se
     }
     return {hip:node('pelvis').getWorldTranslation()[1],head:node('Head').getWorldTranslation()[1],feet:['foot_l','foot_r'].map(n=>node(n).getWorldTranslation()[1]),rotations:nodes.map(n=>n.getRotation())};
   };
+  for(const t of [0,.25,.5,.75,1]){const crawl=pose('Crawl_Loop',t);assert.ok(crawl.head>.3&&crawl.head<.8,'Crawl must stay near the ground');assert.ok(Math.min(...crawl.feet)>0);}
   const seated=pose('Driving_Loop',0),standing=pose('Idle_Loop',0);
   for(const clip of ['Car_Enter','Car_Exit'])for(const t of [0,.25,.5,.75,1]){
     const p=pose(clip,t);assert.ok(p.head>Math.max(...p.feet)+.35,'Retargeted legs flipped above the torso');assert.ok(p.head<2&&p.hip>.3&&p.hip<1.1);
