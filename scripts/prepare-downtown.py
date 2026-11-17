@@ -12,6 +12,21 @@ from shapely.ops import unary_union,polygonize
 from shapely.prepared import prep
 from shapely import constrained_delaunay_triangles
 from shapely.affinity import rotate,translate,scale
+def normalize_marina(result):
+    # Shared conservative envelope avoids shrinking the twin towers independently into OSM rectangles.
+    towers=[p for p in result['placements'] if p['templateId']=='city/marina']
+    if len(towers)!=2:raise ValueError('Expected two Marina City towers')
+    base=max(p['position'][1] for p in towers)
+    for p in towers:
+        p['parameters'].update(width=26.5,depth=26.5,height=179.0,foundation=2.25)
+        p['position'][1]=base;p['rotation']=[0,0,0]
+        x,_,z=p['position']
+        outline=[[round(x+13.25*math.cos(i*math.pi/4),4),round(z+13.25*math.sin(i*math.pi/4),4)] for i in range(8)]
+        collider=next(c for c in result['colliders'] if c['id']==p['key'])
+        collider.update(minX=x-13.25,maxX=x+13.25,minZ=z-13.25,maxZ=z+13.25,minY=base-2.25,maxY=base+179,outline=outline)
+        building=next(b for b in result['buildings'] if b['id']==p['key'])
+        building['sourceFootprint']=outline+[outline[0]]
+
 ROOT=Path(__file__).resolve().parents[1];DATA=ROOT/'src/modules/world/data/downtown'
 config=json.loads((DATA/'district.json').read_text())
 LON,LAT=config['origin']
@@ -615,6 +630,7 @@ for ch in chunks.values():
     for target in [ch,*ch.get('details',[])]:
       for m in target['meshes']:counts[m['surface']]+=len(m['indices'])//3
 result={'version':1,'id':config['id'],'origin':[LON,LAT],'geographicBounds':BBOX,'bounds':{'minX':minx,'maxX':maxx,'minZ':minz,'maxZ':maxz},'spawn':{'x':snap(spawn.x,POSITION),'z':snap(spawn.y,POSITION)},'waterLevel':WATER,'roads':roads,'chunks':list(chunks.values()),'placements':placements,'colliders':colliders,'buildings':building_data,'grid':GRID,'source':{'osmSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'attribution':'© OpenStreetMap contributors','licence':'ODbL-1.0','elevation':'USGS 3DEP; bilinear 9x9 samples; NAVD88 datum offset 180 m','bathymetry':'procedural reference profile, not survey data'},'trafficLayout':{'junctions':[{'id':j['id'],'nodes':j['nodes'],'outline':outline(j['shape'])} for j in junctions],'crosswalks':crossing_layout,'signals':signal_layout},'report':{'buildings':len(colliders),'roads':len(roads),'signals':len(signals),'lamps':len(lamps),'junctions':len(junctions),'crossingStripes':len(crossings),'riverArea':round(water.area,2),'triangles':dict(counts),'chunks':len(chunks)}}
+normalize_marina(result)
 (DATA/'city.json').write_text(json.dumps(result,separators=(',',':'),ensure_ascii=False)+'\n')
 print(json.dumps(result['report']));print('spawn',result['spawn']);print('bytes',(DATA/'city.json').stat().st_size)
 

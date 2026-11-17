@@ -13,6 +13,7 @@ type Triple = readonly [number, number, number];
 export type FaceUV = readonly [number, number, number, number];
 export interface GeometryPart {
   readonly surface: string;
+  readonly radialSegments?: number;
   readonly size: Triple;
   readonly position?: Triple;
   readonly rotation?: Triple;
@@ -35,6 +36,11 @@ export const geometryModule = defineModule({
     source.isVisible = false;
     source.material = fallback;
     const sources = new Map<string, Mesh>();
+    function getRadialSource(segments:number){
+      const key=`radial/${segments}`;let mesh=sources.get(key);
+      if(!mesh){mesh=MeshBuilder.CreateCylinder(key,{height:1,diameter:1,tessellation:segments},core.scene);scope.onDispose(()=>mesh?.dispose());mesh.isVisible=false;mesh.material=fallback;sources.set(key,mesh);}
+      return mesh;
+    }
     function getSource(faceUV: readonly FaceUV[] | undefined): Mesh {
       if (!faceUV) return source;
       const key = JSON.stringify(faceUV);
@@ -95,6 +101,7 @@ export const geometryModule = defineModule({
       if (stopped) throw new Error('Модуль геометрии остановлен');
       if (!parts.length) throw new Error('Нужна хотя бы одна деталь');
       for (const part of parts) {
+        if(part.radialSegments!==undefined&&(!Number.isSafeInteger(part.radialSegments)||part.radialSegments<8||part.radialSegments>32||part.faceUV!==undefined))throw new Error('Некорректная радиальная деталь');
         if (!part.surface.trim() || part.size.length !== 3 || !part.size.every(value => Number.isFinite(value) && value > 0) ||
             [part.position, part.rotation].some(value => value !== undefined && (value.length !== 3 || !value.every(Number.isFinite))) ||
             (part.faceUV !== undefined && (part.faceUV.length !== 6 || part.faceUV.some(uv => uv.length !== 4 || !uv.every(value => Number.isFinite(value) && value >= 0 && value <= 1) || uv[0] >= uv[2] || uv[1] >= uv[3])))) {
@@ -114,7 +121,8 @@ export const geometryModule = defineModule({
       try {
         for (const part of parts) {
           // shortcut: clones share geometry but not draw calls, batch compatible variants in object-rendering.
-          const mesh = getSource(part.faceUV).clone(`${name}/${part.surface}`, root, true);
+          const mesh = (part.radialSegments?getRadialSource(part.radialSegments):getSource(part.faceUV)).clone(`${name}/${part.surface}`, root, true);
+          if(part.radialSegments)mesh.metadata={radialFacade:true};
           mesh.isVisible = true;
           mesh.material = getSurfaceMaterial(part.surface, detail);
           mesh.scaling.copyFromFloats(...part.size);

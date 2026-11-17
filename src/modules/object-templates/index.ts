@@ -31,6 +31,7 @@ export interface ResolvedTemplate extends TemplateContent {
 function copyPart(part: GeometryPart): GeometryPart {
   return {
     surface: part.surface, size: [...part.size],
+    ...(part.radialSegments!==undefined?{radialSegments:part.radialSegments}:{}),
     ...(part.position ? { position: [...part.position] } : {}),
     ...(part.rotation ? { rotation: [...part.rotation] } : {}),
     ...(part.faceUV ? { faceUV: part.faceUV.map(uv => [...uv]) } : {}),

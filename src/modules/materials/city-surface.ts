@@ -18,13 +18,13 @@ export class WaterSurface extends MaterialPluginBase {
   `}:null;}
 }
 export class CityFacade extends MaterialPluginBase {
-  constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false},true,true);this.doNotSerialize=true;}
+  constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false,RADIAL_FACADE_UV:false},true,true);this.doNotSerialize=true;}
   night=0;
   getClassName(){return 'CityFacade';}
   getUniforms(){return {ubo:[{name:'cityNight',size:1,type:'float'}]};}
   bindForSubMesh(buffer:UniformBuffer){buffer.updateFloat('cityNight',this.night);}
   getAttributes(attributes:string[]){for(const name of ['uv','normal'])if(!attributes.includes(name))attributes.push(name);}
-  prepareDefinesBeforeAttributes(defines:MaterialDefines,_scene:Scene,mesh:AbstractMesh){defines.FITTED_SURFACE_UV=mesh.metadata?.fittedUV===true;}
+  prepareDefinesBeforeAttributes(defines:MaterialDefines,_scene:Scene,mesh:AbstractMesh){defines.FITTED_SURFACE_UV=mesh.metadata?.fittedUV===true;defines.RADIAL_FACADE_UV=mesh.metadata?.radialFacade===true;}
   getCustomCode(type:string):Record<string,string>|null{
     if(type==='vertex')return {
       CUSTOM_VERTEX_DEFINITIONS:`
@@ -38,7 +38,9 @@ export class CityFacade extends MaterialPluginBase {
         varying vec2 vCityUV;
       `,
       CUSTOM_VERTEX_MAIN_END:`
-        #ifdef FITTED_SURFACE_UV
+        #ifdef RADIAL_FACADE_UV
+        vCityUV=vec2(uv.x*32.,(positionUpdated.y+.5)*max(1.,floor(length(finalWorld[1].xyz)/3.5+.5)));
+        #elif defined(FITTED_SURFACE_UV)
         vCityUV=uv;
         #else
         // Shared world-metre projection keeps landmark windows in phase when boxes change LOD.

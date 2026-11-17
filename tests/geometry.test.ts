@@ -195,3 +195,17 @@ test('polygon surface meshes validate buffers, face upward, follow materials and
   assert.throws(()=>api.createSurfaceMesh('bad','road',[0,0,0,1,0,0,0,0,1],[0,1,9],owner));
   assert.ok([...api.getMeshes()].includes(mesh));disposeOwner();assert.ok(mesh.isDisposed());
 });
+
+
+test('radial parts share capped geometry, retain a closed window seam and validate tessellation',t=>{
+  const {api,owner}=fixture(t);
+  const a=api.createModel('round-a',[{surface:'wall',size:[26.5,179,26.5],radialSegments:16}],owner);
+  const b=api.createModel('round-b',[{surface:'wall',size:[26.5,179,26.5],radialSegments:16}],owner);
+  const mesh=a.surfaces.get('wall')?.[0],other=b.surfaces.get('wall')?.[0];assert.ok(mesh&&other);
+  assert.equal(mesh.geometry,other.geometry);assert.equal(mesh.metadata.radialFacade,true);
+  const uv=mesh.getVerticesData('uv');assert.ok(uv);
+  const normals=mesh.getVerticesData('normal');assert.ok(normals);
+  const u=uv.filter((_,i)=>i%2===0&&Math.abs(normals[i/2*3+1])<.4).map(v=>v*32);assert.ok(u.includes(0)&&u.includes(32));
+  assert.ok(u.every(v=>Math.abs(v-Math.round(v))<1e-5));
+  for(const radialSegments of [0,3,16.5,33,NaN])assert.throws(()=>api.createModel('invalid',[{surface:'wall',size:[1,1,1],radialSegments}],owner),/радиальная/);
+});

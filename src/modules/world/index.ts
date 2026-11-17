@@ -13,7 +13,7 @@ import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
 import district from './data/downtown/district.json' with {type:'json'};
 import {cityCollision} from './headless.ts';
 import {geometryModule} from '../geometry/index.ts';
-import {distantSurfaces,groupDistantSurfaces} from './distant-surfaces.ts';
+import {distantSurfaces,groupDistantSurfaces,groupStreetSurfaces} from './distant-surfaces.ts';
 import {createElement} from 'react';
 import {Link} from '@radix-ui/themes';
 export type { CollisionWorld, CollisionBox } from './headless.ts';
@@ -63,18 +63,19 @@ export const worldModule = defineModule({
     }
     const bandViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;count:number;load:number;unload:number}>();
     const heights=new Map(city.placements.map(p=>[p.key,p.parameters.height]));
-    for(const surface of groupDistantSurfaces(city)){
+    for(const band of [{meshes:groupDistantSurfaces(city),load:1200,unload:1400},{meshes:groupStreetSurfaces(city),load:192,unload:256}])for(const surface of band.meshes){
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
       for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
       deps.streaming.registerSection(surface.id,bounds,owner=>{
-        const mesh=deps.geometry.createSurfaceMesh(surface.id,surface.surface,surface.positions,surface.indices,owner);
-        mesh.metadata={...mesh.metadata,citySurface:surface.surface,distantGround:true,shadowCaster:false};mesh.freezeWorldMatrix();
-      },scope,{load:1200,unload:1400});
+        const material=surface.surface==='road-base'?'road':surface.surface;
+        const mesh=deps.geometry.createSurfaceMesh(surface.id,material,surface.positions,surface.indices,owner);
+        mesh.metadata={...mesh.metadata,citySurface:material,distantGround:band.load===1200,shadowCaster:false};mesh.freezeWorldMatrix();
+      },scope,{load:band.load,unload:band.unload});
     }
     const bands=[{id:'surfaces',minHeight:0,maxHeight:0,load:192,unload:256},...district.buildingLod];
     for(const chunk of city.chunks)for(const band of bands) {
       const distant=band.id!=='surfaces';
-      const surfaces=chunk.meshes.filter(m=>distant?m.surface.startsWith('city-')&&m.surface.endsWith('-'+band.id):!m.surface.startsWith('city-')&&!distantSurfaces.has(m.surface));
+      const surfaces=chunk.meshes.filter(m=>distant?m.surface.startsWith('city-')&&m.surface.endsWith('-'+band.id):!m.surface.startsWith('city-')&&!distantSurfaces.has(m.surface)&&m.surface!=='road'&&m.surface!=='sidewalk');
       if(!surfaces.length)continue;
       const bounds=distant?{minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity}:{...chunk.bounds};
       let minY=Infinity,maxY=-Infinity;

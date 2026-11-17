@@ -260,7 +260,8 @@ test('Marina balcony slabs use textured concrete without facade windows',async()
     assert.ok(slabs.length>40);
     assert.ok(slabs.every(p=>p.surface==='foundation'));
     assert.ok(model.levels[1].parts.every(p=>p.size[1]>.25));
-    assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
+    assert.ok(model.levels[2].parts.length<=model.levels[1].parts.length);
+    if(candidate===template)assert.equal(model.levels[2].parts[0].radialSegments,8);
     assert.ok(model.levels[1].parts.some(p=>p.surface==='city-stone'));
   }
 });
@@ -313,7 +314,8 @@ test('every landmark sheds detail early and strongly reduces its distant silhoue
     const template=cityTemplates.find(t=>t.id==='city/'+name);assert.ok(template);
     const model=toCityGrid(template).build({width:32,depth:32,height:179,foundation:2});
     assert.equal(model.levels[1].distance,24);assert.equal(model.levels[2].distance,80);
-    assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
+    if(name==='marina')assert.ok((model.levels[2].parts[0].radialSegments??0)<(model.levels[1].parts[0].radialSegments??0));
+    else assert.ok(model.levels[2].parts.length<model.levels[1].parts.length);
     assert.ok(model.levels[2].parts.length<=6);
   }
 });
@@ -426,4 +428,18 @@ test('walking authority enters a real downtown facade recess inside building bou
     assert.ok(Math.hypot(end.x-wall.x,end.z-wall.z)<.6,'Pedestrian stopped before reaching the actual wall');return;
   }
   assert.fail('No real facade recess exercised');
+});
+
+
+test('Marina twins share dimensions, orientation, floor phase and matching radial collision outlines',async()=>{
+  const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
+  const twins=citySource.placements.filter(p=>p.templateId==='city/marina');assert.equal(twins.length,2);
+  assert.deepEqual(twins[0].parameters,twins[1].parameters);assert.deepEqual(twins[0].rotation,twins[1].rotation);assert.equal(twins[0].position[1],twins[1].position[1]);
+  const template=cityTemplates.find(t=>t.id==='city/marina');assert.ok(template);
+  for(const p of twins){
+    const model=toCityGrid(template).build(p.parameters);
+    for(const level of model.levels){assert.equal(level.parts.filter(x=>x.surface==='city-stone').length,1);assert.ok(level.parts.every(x=>x.radialSegments===8||x.radialSegments===16));}
+    const collider=citySource.colliders.find(c=>c.id===p.key);assert.ok(collider?.outline);
+    assert.ok(collider.outline.every(([x,z])=>Math.abs(Math.hypot(x-p.position[0],z-p.position[2])-13.25)<.001));
+  }
 });

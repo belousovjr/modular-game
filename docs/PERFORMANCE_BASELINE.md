@@ -699,3 +699,37 @@ Night facade coverage decreases from roughly 38% to 10–13%; most illuminated r
 Same full city/8 NPC/car/atmosphere, RTX 3050 Laptop ANGLE/D3D12, 1280×720 uncapped, 512 MiB V8 / 256 MiB Node / 2 GiB cgroup cap, no swap, sequential GPU samples (2.2 s each): day plaza 84.7 FPS / P95 30.9 ms, day street 89.1 / 18.5, day skyline 97.1 / 15.7, night plaza 103.0 / 15.0, night skyline 107.8 / 14.7. Earlier five views were 83.1/86.6/92.3/101.0/106.3 FPS. Host variation and short samples do not establish an isolated improvement; the day-plaza P95 is worse in this sample, so no claim that all frame hitches improved. Peak 1703358464 bytes, OOM=0, browser errors=0. Visually checked ground continuity, river/park coverage, elevated views and subdued night glazing. Nightly soak was not repeated for this change.
 
 Two district loops with the new backbone: 65.9–84.8 average FPS per continuous 4 s leg, worst P95 33.7 ms. Both returns exactly 365 meshes / 210 geometries / 30 materials / 30 textures / 9 skeletons / 2 lights, including 22 distant ground packets. Peak 950587392 bytes, OOM=0, errors=0. No resource growth across these returns; this is not a long soak or an isolated same-session A/B benchmark. 149 Node tests/check/build pass.
+
+
+### Marina City twin geometry and continuous window mapping — 2026-11-17
+
+The independent inscribed-rectangle fitting produced mismatched Marina placements (15.75×11 versus 26.5×26.75 m). Offline normalize_marina now gives both the same conservative 26.5 m envelope, 179 m height, 2.25 m foundation, shared base elevation and zero heading; canonical colliders and overview footprints change with placements. This conservative diameter fits the current authored block, rather than claiming the original towers' exact external balcony diameter. Other buildings and source IDs are unchanged. The pinned city patch applies only this normalisation; unrelated road/terrain triangulation was not regenerated.
+
+Marina template v4 replaces intersecting rotated boxes with one capped radial facade, 16 sides near / 8 beyond 80 m. Concrete circular floor slabs exist only below 24 m and share cylinder geometry; the foundation uses the same radial shape. No per-window geometry/material or new texture. GeometryPart.radialSegments is the only added public shape field (validated integer 8..32, mutually exclusive with faceUV); object-templates copies it through resolve, and bounds continue using the conservative size box. Shared sources and clones retain normal scope cleanup.
+
+CityFacade's radial shader variant maps 32 complete window cells around the seam, 2/4 per face, and an integer floor count along local height. The ordinary box/fitted UV paths, textured stone albedo/AO/normal maps and emission density/brightness are unchanged. This removes partial strips from the former overlapping-box world projections. Node tests cover twin parameters/outlines, UV seam, tessellation validation/sharing and the cheaper far shape; existing cleanup tests pass.
+
+GPU views of both towers, facade at <24 m, >80 m LOD and night were inspected. RTX 3050 Laptop ANGLE/D3D12, 1280×720 uncapped, whole city/8 NPC/characters/materials/shadows/atmosphere; player-control and vehicles disabled for a camera-centred LOD inspection. Three 2.2 s samples: twins 93.1 FPS / P95 17.6 ms, near 89.5 / 17.7, far 93.8 / 16.7. This different camera/module set is not an A/B comparison with the driving demo. Peak 1604145152 bytes under the 2 GiB/no-swap cap, OOM=0, browser errors=0. No overnight soak or full architectural reconstruction.
+
+
+### Separate near streets from the distant simple ground — 2026-11-17
+
+User clarified that the 1200/1400 m range is for simple ground/grass/water/bed, not detailed street surfaces. Road/sidewalk materials now load at 192/256 m in merged 256 m regions instead of per-128 m tile draws. Curbs/markings/banks retain the near range. Distant 1024 m packets contain urban-ground/terrain/water/riverbed. Street cutouts are filled by canonical road/sidewalk top triangles with the generic urban-ground material and pavement lift removed; only projected curb tops close the thin remaining strips, no vertical curb faces. No new materials/textures/casters or authority collision changes. Shared road depth bias -1/-1 separates actual asphalt from the continuous base; marking keeps -1/-2. Tests cover range membership, merged index offsets, generic underlay height, rejection of vertical curb triangles and native depth bias. 151 tests/check/build pass; elevated/day/night screenshots inspected without the former thin gaps.
+
+Recent host performance was lower than prior runs, so an immediate sequential comparison built the earlier long-range-road variant with only the batching/range logic changed (same current Marina geometry/materials). Full city/8 NPC/car/atmosphere, RTX 3050 Laptop D3D12, 1280×720 uncapped, same 2 GiB/no-swap cap and temporary browser, five 2.2 s samples:
+
+| View | Previous long-range streets FPS | Near streets + generic base FPS | New P95 ms |
+| --- | ---: | ---: | ---: |
+| Day plaza | 62.2 | 57.1 | 29.4 |
+| Day street | 58.1 | 55.3 | 29.1 |
+| Day skyline | 65.8 | 66.2 | 34.2 |
+| Night plaza | 72.5 | 69.7 | 33.9 |
+| Night skyline | 76.3 | 75.3 | 34.6 |
+
+The new version is slightly more expensive in most of these views because near asphalt/paving overlays the hole-free generic base. No claim of an FPS gain; short sequential samples do not isolate host variation. The much larger difference from the earlier 85–108 FPS also occurs in the old configuration, so it cannot be attributed solely to this change. New cgroup peak 953483264 bytes, old 943398912; OOM=0/browser errors=0 in both. Existing average>=30 threshold remains unchanged; 100+ everywhere still not met. No new long soak.
+
+### Flat distant asphalt silhouette — 2026-11-17
+
+Following the user's refinement, distant road cutouts now use a road-base packet with the shared road material instead of neutral urban-ground. It is only the canonical simple surface following terrain, with the normal distance mip reduction, no markings, curb walls, props or extra textures/materials. The duplicate near asphalt packet is removed: its geometry/UV/material were identical, so proximity adds sidewalk/curbs/markings rather than drawing the same asphalt twice. Flat sidewalk/curb-top gap fillers remain urban-ground. Road-base load/unload remains 1200/1400 m, street details remain 192/256 m; authority collision is unchanged.
+
+151 tests/check/build pass; elevated/street/day/night GPU views show the asphalt footprint without gaps. Same RTX 3050 Laptop D3D12, 1280×720 uncapped full demo/8 NPC/car/atmosphere, five 2.2 s samples: day plaza 64.1 FPS / P95 33.8 ms, day street 70.0 / 25.9, day skyline 70.0 / 33.9, night plaza 78.1 / 30.3, night skyline 79.3 / 24.8. Host performance remains variable; no isolated speedup claim against the preceding separate run. Peak 1634533376 bytes under the 2 GiB/no-swap cap, OOM=0, browser errors=0. No long soak repeated.
