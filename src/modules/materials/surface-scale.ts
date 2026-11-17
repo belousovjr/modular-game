@@ -90,11 +90,7 @@ export class SurfaceScale extends MaterialPluginBase {
           #endif
         }
         vec4 surfacePlainSample(sampler2D image, vec2 coords) {
-          #if __VERSION__ >= 300
-          return surfaceSample(image,coords,dFdx(coords),dFdy(coords));
-          #else
           return texture2D(image,coords,surfaceMipBias());
-          #endif
         }
         vec4 surfaceTile(sampler2D wall, sampler2D roof, sampler2D base, sampler2D metal, vec3 ready, bool normalMap) {
         #ifdef SURFACE_ATLAS

@@ -71,13 +71,13 @@ export function createCollisionWorld(placements: readonly WorldPlacement[], boun
 }
 
 export function cityCollision(city:CitySource):CollisionWorld {
-  const triangles:number[][]=[],water:number[][]=[];
+  const triangles:(readonly number[])[]=[],water:(readonly number[])[]=[];
   for(const chunk of city.chunks)for(const mesh of chunk.meshes) {
     if(['bank','marking','facade','foundation','metal','roof'].includes(mesh.surface)||mesh.surface.startsWith('city-'))continue;
     for(let i=0;i<mesh.indices.length;i+=3) {
       const a=mesh.indices[i]*3,b=mesh.indices[i+1]*3,c=mesh.indices[i+2]*3;
       if(Math.abs((mesh.positions[b]-mesh.positions[a])*(mesh.positions[c+2]-mesh.positions[a+2])-(mesh.positions[c]-mesh.positions[a])*(mesh.positions[b+2]-mesh.positions[a+2]))<1e-8)continue;
-      (mesh.surface==='water'?water:triangles).push([mesh.positions[a],mesh.positions[a+1],mesh.positions[a+2],mesh.positions[b],mesh.positions[b+1],mesh.positions[b+2],mesh.positions[c],mesh.positions[c+1],mesh.positions[c+2]]);
+      (mesh.surface==='water'?water:triangles).push(Object.freeze([mesh.positions[a],mesh.positions[a+1],mesh.positions[a+2],mesh.positions[b],mesh.positions[b+1],mesh.positions[b+2],mesh.positions[c],mesh.positions[c+1],mesh.positions[c+2]]));
     }
   }
   const rooftopBlockers:CollisionBox[]=[];
@@ -137,5 +137,5 @@ export function cityCollision(city:CitySource):CollisionWorld {
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];
   })];
-  return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,floors:[],triangles,water:{level:city.waterLevel,triangles:water}});
+  return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,floors:[],triangles:Object.freeze(triangles),water:{level:city.waterLevel,triangles:Object.freeze(water)}});
 }

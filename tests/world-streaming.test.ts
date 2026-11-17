@@ -62,6 +62,17 @@ test('streaming validates registrations and rolls back a partially failed load',
   assert.equal(f.streaming.getStats().loaded, 0);
 });
 
+test('a settled origin handles late sections and still loads nearest first with registration-order ties',t=>{
+  const f=fixture(t), order:string[]=[];
+  f.frame();
+  for(const [id,minX] of [['far',60],['near',20],['tie',20],['middle',40]] as const){
+    f.streaming.registerSection(id,{minX,maxX:minX+2,minZ:-1,maxZ:1},()=>order.push(id),f.owner);
+  }
+  f.frame();assert.deepEqual(order,['near','tie']);
+  f.frame();assert.deepEqual(order,['near','tie','middle','far']);
+  f.frame();assert.equal(f.streaming.getStats().loads,4);
+});
+
 test('skyline sections can stream farther while street sections retain their normal budget',t=>{
   const f=fixture(t),bounds={minX:990,maxX:1010,minZ:-10,maxZ:10};let streets=0,skyline=0;
   f.streaming.registerSection('street',bounds,o=>{streets++;o.onDispose(()=>streets--);},f.owner);

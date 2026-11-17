@@ -2,6 +2,28 @@ import type {CollisionBox} from '../world/index.ts';
 
 type Point = {readonly x:number;readonly y:number;readonly z:number};
 const CLEARANCE=.2;
+const CELL=32;
+
+export function createCameraObstacleSweep(blockers:readonly CollisionBox[]) {
+  const grid=new Map<string,number[]>(),large:number[]=[];
+  const cell=(value:number)=>Math.floor(value/CELL);
+  for(const [index,b] of blockers.entries()){
+    const x0=cell(b.minX),x1=cell(b.maxX),z0=cell(b.minZ),z1=cell(b.maxZ);
+    if(![x0,x1,z0,z1].every(Number.isSafeInteger)||(x1-x0+1)*(z1-z0+1)>256){large.push(index);continue;}
+    for(let x=x0;x<=x1;x++)for(let z=z0;z<=z1;z++){
+      const key=`${x}/${z}`,entries=grid.get(key);
+      if(entries)entries.push(index);else grid.set(key,[index]);
+    }
+  }
+  return (target:Point,arm:Point,radius:number)=>{
+    const x0=cell(Math.min(target.x,target.x+arm.x)-CLEARANCE),x1=cell(Math.max(target.x,target.x+arm.x)+CLEARANCE);
+    const z0=cell(Math.min(target.z,target.z+arm.z)-CLEARANCE),z1=cell(Math.max(target.z,target.z+arm.z)+CLEARANCE);
+    const selected=new Set(large);
+    for(let x=x0;x<=x1;x++)for(let z=z0;z<=z1;z++)for(const i of grid.get(`${x}/${z}`)??[])selected.add(i);
+    const candidates=[...selected].sort((a,b)=>a-b).map(i=>blockers[i]);
+    return cameraObstacleFraction(target,arm,radius,candidates);
+  };
+}
 
 function outlineEntry(target:Point,arm:Point,box:CollisionBox,outline:readonly (readonly number[])[],limit:number){
   let first=0,last=limit;

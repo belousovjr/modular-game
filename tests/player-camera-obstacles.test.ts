@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {cameraObstacleFraction,recoverCameraRadius} from '../src/modules/player-control/camera-obstacles.ts';
+import {cameraObstacleFraction,createCameraObstacleSweep,recoverCameraRadius} from '../src/modules/player-control/camera-obstacles.ts';
 
 const wall={id:'wall',minX:0,maxX:2,minY:0,maxY:5,minZ:-3,maxZ:3};
 
@@ -34,5 +34,18 @@ test('camera can orbit into a concave facade recess and stops at its visible rea
     assert.equal(cameraObstacleFraction(eye,{x:0,y:0,z:6},6,[facade]),1);
     const fraction=cameraObstacleFraction(eye,{x:0,y:0,z:10},10,[facade]);
     assert.ok(Math.abs(fraction*10-7.78)<1e-8);
+  }
+});
+
+test('indexed camera sweep matches full collision checks across cells with overlapping blockers',()=>{
+  const a={...wall,minX:-33,maxX:-31,minZ:31,maxZ:34};
+  const b={...a,id:'overlap',minX:-32.995};
+  const c={...wall,id:'large',minX:-1024,maxX:1024,minZ:35,maxZ:1024};
+  const blockers=[b,c,a,wall];
+  const sweep=createCameraObstacleSweep(blockers);
+  for(const target of [{x:-37,y:1.1,z:32},{x:-35,y:2,z:28},{x:-.2,y:1.2,z:0}]){
+    for(const arm of [{x:10,y:0,z:0},{x:5,y:1,z:7},{x:0,y:1,z:10},{x:-8,y:0,z:0}]){
+      assert.equal(sweep(target,arm,10),cameraObstacleFraction(target,arm,10,blockers));
+    }
   }
 });

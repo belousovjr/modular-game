@@ -4,14 +4,14 @@ type Point = {readonly x:number;readonly y:number;readonly z:number};
 
 // Index static terrain once; camera movement only visits cells along its short orbit.
 export function createCameraGroundSweep(world:CollisionWorld) {
-  const cells=new Map<string,number[][]>();
-  const add=(p:number[])=>{
+  const cells=new Map<string,(readonly number[])[]>();
+  const add=(p:readonly number[])=>{
     for(let x=Math.floor(Math.min(p[0],p[3],p[6])/16);x<=Math.floor(Math.max(p[0],p[3],p[6])/16);x++)
       for(let z=Math.floor(Math.min(p[2],p[5],p[8])/16);z<=Math.floor(Math.max(p[2],p[5],p[8])/16);z++) {
         const key=`${x}/${z}`,cell=cells.get(key);if(cell)cell.push(p);else cells.set(key,[p]);
       }
   };
-  for(const p of world.triangles??[])add([...p]);
+  for(const p of world.triangles??[])add(p);
   for(const f of world.floors){
     const y=(x:number)=>world.baseHeight+world.slopeX*x+f.elevation;
     add([f.minX,y(f.minX),f.minZ,f.maxX,y(f.maxX),f.minZ,f.maxX,y(f.maxX),f.maxZ]);
@@ -24,7 +24,7 @@ export function createCameraGroundSweep(world:CollisionWorld) {
     const baseStart=origin.y-world.baseHeight-world.slopeX*origin.x-clearance*Math.hypot(1,world.slopeX);
     const baseDirection=delta.y-world.slopeX*delta.x;
     if(baseStart>=0&&baseDirection<0)fraction=Math.min(fraction,baseStart/-baseDirection);
-    const visited=new Set<number[]>();
+    const visited=new Set<readonly number[]>();
     for(let x=Math.floor(Math.min(origin.x,origin.x+delta.x)/16);x<=Math.floor(Math.max(origin.x,origin.x+delta.x)/16);x++)
       for(let z=Math.floor(Math.min(origin.z,origin.z+delta.z)/16);z<=Math.floor(Math.max(origin.z,origin.z+delta.z)/16);z++)
         for(const p of cells.get(`${x}/${z}`)??[]) {

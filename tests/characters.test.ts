@@ -55,6 +55,17 @@ test('character ticks and clocks produce the same collision result at different 
   const s=run(60); assert.ok(s.z>5 && s.x>3); assert.ok(Number.isFinite(s.y));
 });
 
+test('terrain reuse requires immutable triangle rows and preserves mutable fixture snapshots',()=>{
+  const plane=[-1,1,-1,2,1,-1,-1,1,2];
+  const collision={...world,baseHeight:-10,slopeX:0,floors:[],triangles:Object.freeze([plane])};
+  const original=createCharacterAuthority(collision);
+  for(const offset of [1,4,7])plane[offset]=2;
+  assert.equal(createCharacterAuthority(collision).snapshot().y,2);
+  original.step(1);assert.equal(original.snapshot().y,1);
+  const frozen={...collision,triangles:Object.freeze([Object.freeze([...plane])])};
+  assert.deepEqual(createCharacterAuthority(frozen).snapshot(),createCharacterAuthority(frozen).snapshot());
+});
+
 test('authority stops at walls, slides, climbs curbs and slopes, prevents diagonal speed boosts and expires stale input', () => {
   const a=createCharacterAuthority(world);
   a.receive(command(1,1,0,true),'local');

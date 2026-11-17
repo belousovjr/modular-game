@@ -29,6 +29,8 @@ export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
 const HEIGHT = {standing:1.8,crouching:1.3,prone:.65};
 const CELL = 32;
+type Triangle={minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[];denominator:number};
+const terrainIndices=new WeakMap<readonly (readonly number[])[],{cells:Map<string,Triangle[]>;entries:number}>();
 
 export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
   return createCharacterAuthorityFactory(world)(startTick);
@@ -37,8 +39,6 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
 export function createCharacterAuthorityFactory(world: CollisionWorld) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
-  type Triangle={minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[];denominator:number};
-  const triangles=new Map<string,Triangle[]>(),waterTriangles=new Map<string,Triangle[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
   let entries = 0;
   function index<T extends { minX: number; maxX: number; minZ: number; maxZ: number }>(map: Map<string, T[]>, item: T) {
@@ -61,21 +61,35 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     if (!Number.isFinite(f.elevation) || f.elevation < 0 || f.elevation > 10) throw new Error('Invalid floor');
     index(floors, Object.freeze({ ...f }));
   }
-  function indexTriangles(source:readonly (readonly number[])[],map:Map<string,Triangle[]>) {
+  function indexTriangles(source:readonly (readonly number[])[]|undefined) {
+    const map=new Map<string,Triangle[]>();
+    if(!source)return map;
+    const cached=terrainIndices.get(source);
+    if(cached){
+      entries+=cached.entries;
+      if(entries>1000000)throw new Error('Collision grid budget exceeded');
+      return cached.cells;
+    }
     if(source.length>350000)throw new Error('Too many terrain triangles');
+    const firstEntry=entries;
+    let immutable=Object.isFrozen(source);
     for(const p of source){
       if(p.length!==9||!p.every(Number.isFinite))throw new Error('Invalid terrain triangle');
+      const frozen=Object.isFrozen(p);
+      immutable&&=frozen;
       const denominator=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);
       if(Math.abs(denominator)<1e-10)continue;
       const minX=Math.min(p[0],p[3],p[6]),maxX=Math.max(p[0],p[3],p[6]);
       const minZ=Math.min(p[2],p[5],p[8]),maxZ=Math.max(p[2],p[5],p[8]);
-      index(map,{minX,maxX,minZ,maxZ,vertices:Object.freeze([...p]),denominator});
+      index(map,{minX,maxX,minZ,maxZ,vertices:frozen?p:Object.freeze([...p]),denominator});
     }
+    if(immutable)terrainIndices.set(source,{cells:map,entries:entries-firstEntry});
+    return map;
   }
-  indexTriangles(world.triangles??[],triangles);
+  const triangles=indexTriangles(world.triangles);
   const waterLevel=world.water?.level??-Infinity;
   if(world.water&&!Number.isFinite(waterLevel))throw new Error('Invalid water level');
-  indexTriangles(world.water?.triangles??[],waterTriangles);
+  const waterTriangles=indexTriangles(world.water?.triangles);
   const bounds = { ...world.bounds }, baseHeight = world.baseHeight, slopeX = world.slopeX;
   const query = <T>(map: Map<string, T[]>, x: number, z: number) => map.get(`${Math.floor(x / CELL)}/${Math.floor(z / CELL)}`) ?? [];
   function triangleHeight({vertices:p,denominator}:Triangle,x:number,z:number){

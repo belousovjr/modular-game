@@ -3,6 +3,7 @@ import './style.css';
 import { ChevronDown, ChevronRight, Info, Layers, MoreHorizontal, Play, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Observable } from '@babylonjs/core/Misc/observable';
 import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip, Tabs, DropdownMenu } from '@radix-ui/themes';
 import { createPanels, usePanels } from './core/panels.ts';
 import { PanelWindow } from './core/panel-window.tsx';
@@ -25,8 +26,29 @@ import { isModuleStatus, readModulePreferences, selectModules, PREFERENCES_STORA
 
 const categories = groupModules(modules);
 
+function useDisplayValue<T>(updates: Observable<T>, initial: T) {
+  const [value, setValue] = useState(initial);
+  useEffect(() => {
+    const observer = updates.add(value => setValue(value));
+    return () => { updates.remove(observer); };
+  }, [updates]);
+  return value;
+}
+
+function FpsDisplay({ updates }: { updates: Observable<number> }) {
+  const fps = useDisplayValue(updates, 0);
+  return <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>;
+}
+
+const idleTestState: TestState = { running: false, title: '', progress: 0, index: 0, total: 0, results: [] };
+function TestDisplay({ updates, stop }: { updates: Observable<TestState>; stop(): void }) {
+  return <TestPanel state={useDisplayValue(updates, idleTestState)} stop={stop} />;
+}
+
 function App() {
-  const [testState, setTestState] = useState<TestState>({ running: false, title: '', progress: 0, index: 0, total: 0, results: [] });
+  const [testRunning, setTestRunning] = useState(false);
+  const [testUpdates] = useState(() => new Observable<TestState>());
+  const [fpsUpdates] = useState(() => new Observable<number>());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => {
     try { return new Set(readCollapsedCategories(localStorage.getItem(CATEGORIES_STORAGE_KEY), categories.map(category => category.title))); }
     catch { return new Set(); }
@@ -45,7 +67,6 @@ function App() {
   const [selected, setSelected] = useState(initial.ids);
   const [status, setStatus] = useState(initial.status);
   const [modulesOpen, setModulesOpen] = useState(() => readWindow('modules').open);
-  const [fps, setFps] = useState(0);
   const [ready, setReady] = useState(false);
   const [panels] = useState(createPanels);
   const entries = usePanels(panels);
@@ -58,7 +79,10 @@ function App() {
   useEffect(() => {
     if (!canvas.current) return;
     try {
-      viewport.current = createViewport(canvas.current, value => setFps(Math.round(value)), panels, setTestState);
+      viewport.current = createViewport(canvas.current, value => fpsUpdates.notifyObservers(Math.round(value)), panels, state => {
+        setTestRunning(state.running);
+        testUpdates.notifyObservers(state);
+      });
       viewport.current.restart(modules, initial.ids);
       window.moduleTests = viewport.current.tests;
       setReady(true);
@@ -70,7 +94,7 @@ function App() {
     const onPageHide = (event: PageTransitionEvent) => { if (!event.persisted) dispose(); };
     window.addEventListener('pagehide', onPageHide);
     return () => { window.removeEventListener('pagehide', onPageHide); dispose(); };
-  }, [initial, panels]);
+  }, [initial, panels, fpsUpdates, testUpdates]);
 
   async function runTests(ids?: readonly string[]) {
     try { await viewport.current?.tests.run(ids); }
@@ -90,7 +114,7 @@ function App() {
 
   function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
     const currentViewport = viewport.current;
-    if (!currentViewport || testState.running) return;
+    if (!currentViewport || testRunning) return;
     try { settingsHistory.transaction(() => {
       const next = selectModules(modules, ids, nextPreferences.statuses);
       if (resetCamera || next.length !== enabled.size || next.some(id => !enabled.has(id))) {
@@ -125,11 +149,11 @@ function App() {
 
   return <Theme appearance="dark">
     <main id="game-stage" ref={host}>
-      <div className="game-controls" inert={testState.running}>
+      <div className="game-controls" inert={testRunning}>
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
-      <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>
+      <FpsDisplay updates={fpsUpdates} />
       <Box className="module-panel">
-        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testState.running} restore={restoreSettings} /></Flex>
+        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testRunning} restore={restoreSettings} /></Flex>
         <Box id="status" role="status" aria-live="polite">
           {status && <Callout.Root size="1" mt="2"><Callout.Text>{status}</Callout.Text></Callout.Root>}
         </Box>
@@ -213,7 +237,7 @@ function App() {
       </Box>
       {entries.map(panel => <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
       </div>
-      <TestPanel state={testState} stop={() => viewport.current?.tests.stop()} />
+      <TestDisplay updates={testUpdates} stop={() => viewport.current?.tests.stop()} />
     </main>
   </Theme>;
 }

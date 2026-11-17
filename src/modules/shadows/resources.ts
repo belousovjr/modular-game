@@ -7,6 +7,7 @@ import { Frustum } from '@babylonjs/core/Maths/math.frustum.js';
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
+import type { Material } from '@babylonjs/core/Materials/material.js';
 import type { Scene } from '@babylonjs/core/scene.js';
 import type { Scope } from '../../core/modules.ts';
 import type { DistancePoint } from '../object-rendering/index.ts';
@@ -98,16 +99,26 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
   const center = Vector3.Zero();
   const up = Vector3.Up();
   const zero = Vector3.Zero();
-  function casterRevision(mesh: Mesh) {
+  const casterStates=new WeakMap<Mesh,{matrix:Matrix;visibility:number;feather:unknown;material:Material|null;backFace?:boolean;cullBack?:boolean;fill?:number}>();
+  function casterChanged(mesh: Mesh) {
     const material = mesh.material;
-    return [mesh.visibility, mesh.metadata?.shadowFeather, ...mesh.getWorldMatrix().m, material, material?.backFaceCulling, material?.cullBackFaces, material?.fillMode];
+    const matrix=mesh.getWorldMatrix(),feather:unknown=mesh.metadata?.shadowFeather;
+    const backFace=material?.backFaceCulling,cullBack=material?.cullBackFaces,fill=material?.fillMode;
+    const previous=casterStates.get(mesh);
+    if(!previous){casterStates.set(mesh,{visibility:mesh.visibility,feather,material,backFace,cullBack,fill,matrix:matrix.clone()});return true;}
+    if(previous.visibility===mesh.visibility&&previous.feather===feather&&previous.material===material&&
+      previous.backFace===backFace&&previous.cullBack===cullBack&&previous.fill===fill&&previous.matrix.equals(matrix))return false;
+    previous.visibility=mesh.visibility;previous.feather=feather;previous.material=material;
+    previous.backFace=backFace;previous.cullBack=cullBack;previous.fill=fill;
+    previous.matrix.copyFrom(matrix);
+    return true;
   }
   let previousCasters: Mesh[] = [];
-  let previousRevisions: ReturnType<typeof casterRevision>[] = [];
   const previousView = Matrix.Zero();
   const previousDirection = Vector3.Zero();
   const previousPosition = Vector3.Zero();
   let previousCamera = scene.activeCamera;
+  let previousNear: number | undefined, previousFar: number | undefined;
   let previousEnabled = false;
   let revision = 0;
   const shadowMap = generator.getShadowMap();
@@ -115,7 +126,7 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
   let enabled = false;
   let count = 0;
   let stopped = false;
-  scope.onDispose(() => { stopped = true; previousCasters = []; previousRevisions = []; previousCamera = null; });
+  scope.onDispose(() => { stopped = true; previousCasters = []; previousCamera = null; });
   const observer = scene.onBeforeRenderObservable.add(() => {
     cascadePlanesReady = false;
     const origin = readOrigin();
@@ -159,22 +170,29 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
     sun.shadowEnabled = enabled;
     const camera = scene.activeCamera;
     const viewProjection = camera?.getTransformationMatrix();
-    const revisions = casters.map(casterRevision);
-    const uncached = casters.some(mesh => (!(mesh.material instanceof StandardMaterial)&&!(mesh.material instanceof PBRMaterial&&mesh.metadata?.shadowStaticMaterial===true)) || !mesh.material || mesh.material.needAlphaTesting() || mesh.material.needAlphaBlendingForMesh(mesh) || mesh.material.shadowDepthWrapper || mesh.skeleton || mesh.morphTargetManager);
-    const dirty = uncached || enabled !== previousEnabled || (cascaded && (camera !== previousCamera || !viewProjection || !viewProjection.equals(previousView))) ||
-      !sun.direction.equals(previousDirection) || !sun.position.equals(previousPosition) || casters.length !== previousCasters.length ||
-      casters.some((mesh, index) => mesh !== previousCasters[index] || revisions[index].some((value, key) => value !== previousRevisions[index]?.[key]));
+    const listChanged=casters.length!==previousCasters.length||casters.some((mesh,i)=>mesh!==previousCasters[i]);
+    let changed=false,uncached=false;
+    for(const mesh of casters){
+      if(casterChanged(mesh))changed=true;
+      if(!uncached){
+        const material=mesh.material;
+        uncached=(!(material instanceof StandardMaterial)&&!(material instanceof PBRMaterial&&mesh.metadata?.shadowStaticMaterial===true)) ||
+          material.needAlphaTesting() || material.needAlphaBlendingForMesh(mesh) || !!(material.shadowDepthWrapper || mesh.skeleton || mesh.morphTargetManager);
+      }
+    }
+    const clipChanged=camera!==previousCamera||camera?.minZ!==previousNear||camera?.maxZ!==previousFar;
+    const dirty = uncached || enabled !== previousEnabled || (cascaded && (clipChanged || !viewProjection || !viewProjection.equals(previousView))) ||
+      !sun.direction.equals(previousDirection) || !sun.position.equals(previousPosition) || listChanged || changed;
     if (dirty) {
-      map.renderList = casters;
+      if(listChanged){map.renderList=casters;previousCasters=casters;}
       map.resetRefreshCounter();
       revision++;
       if (cascaded && enabled) {
-        // Refresh bounds after LOD changes, then split for the current camera (including test cameras).
-        cascaded.freezeShadowCastersBoundingInfo = true;
-        cascaded.splitFrustum();
+        if(listChanged||changed||uncached)cascaded.freezeShadowCastersBoundingInfo=true;
+        if(clipChanged||!previousEnabled)cascaded.splitFrustum();
       }
-      previousCasters = casters; previousRevisions = revisions;
       previousCamera = camera; previousEnabled = enabled;
+      previousNear=camera?.minZ;previousFar=camera?.maxZ;
       if (viewProjection) previousView.copyFrom(viewProjection);
       previousDirection.copyFrom(sun.direction); previousPosition.copyFrom(sun.position);
     }

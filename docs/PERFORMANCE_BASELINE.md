@@ -850,3 +850,20 @@ The 3.4×3.4 km build keeps 756 source tiles. Grouping coarse buildings by 512 m
 | Centre return | 48.5 | 34.3 | 143 |
 
 Active meshes at the corresponding centre and river cameras were 171 and 97 before final batching. This is a measure of scene activity, not a draw-call counter. Browser peak was 1.61 GB under the 2 GiB cgroup limit with swap disabled, compared with 1.06 GB on the old map. No OOM or browser errors were recorded. These short samples do not cover an extended drive or memory soak.
+
+### Frame overhead on the expanded map
+
+Compared production builds before (`aec9446`) and after the optimization on RTX 3050 Laptop via ANGLE/D3D12, 1280×720, with Chromium's frame cap and vsync disabled. Eight NPCs, the car, and the same shadow and LOD settings were active in both builds. The clock was held at the selected time and each fixed view was sampled for about 2.45 s after settling.
+
+| View | FPS before → after | P95 frame time before → after, ms |
+| --- | ---: | ---: |
+| Plaza | 41.2 → 107.9 | 36.0 → 13.5 |
+| River | 44.8 → 206.1 | 36.5 → 7.8 |
+| Lakefront | 55.0 → 264.9 | 31.1 → 6.5 |
+| Plaza at night | 49.0 → 186.8 | 37.0 → 8.2 |
+
+Peak cgroup memory dropped from 1.51 to 1.31 GiB with the same 2 GiB cap and swap disabled. Both runs had zero OOM events and browser errors. At each view the active mesh count matched, and the maximum average per-channel image difference across the four screenshots, excluding the HUD, was 0.09 out of 255. These samples measure frame headroom on one GPU at fixed views. They do not estimate the physical display rate or attribute the gain to individual changes.
+
+On the built-in 10 s world flythrough under the same conditions, average FPS rose from 38.3 to 90.0, and P95 frame time fell from 41.4 to 16.0 ms. The slowest frame fell from about 185 to 82 ms. Both runs loaded 223 sections and unloaded 41. Peak cgroup memory fell from 1.52 to 1.31 GiB, with zero OOM events or browser errors.
+
+In a separate browser check, keyboard walking, right-drag camera rotation, and the test panel's start and completion states passed. After three additional west → lakefront → plaza loops, the plaza still held 324 meshes, 210 geometries, 33 materials, 31 textures, and nine skeletons. JS heap after garbage collection went from 255.7 to 256.5 MiB. The peak with the same cap was 1.31 GiB, with zero OOM events or browser errors.

@@ -46,6 +46,7 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
   const visibility = () => { if (document.hidden) { runner.stop(); saveCamera(); } };
   document.addEventListener('visibilitychange', visibility);
   let last = performance.now();
+  let lastFpsReport = -Infinity;
   engine.runRenderLoop(() => {
     const now = performance.now();
     const delta = now - last;
@@ -55,7 +56,7 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
     catch (error) { runner.fail(error); throw error; }
     runner.advance(delta);
     if (now - lastCameraSave >= 500) { saveCamera(); lastCameraSave = now; }
-    reportFps(engine.getFps());
+    if (now - lastFpsReport >= 250) { reportFps(engine.getFps()); lastFpsReport = now; }
   });
   const resize = () => engine.resize();
   const observer = new ResizeObserver(resize);

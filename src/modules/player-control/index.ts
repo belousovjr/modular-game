@@ -1,6 +1,6 @@
 import {createElement} from 'react';
 import {ControlPanel} from './panel.tsx';
-import {cameraObstacleFraction,recoverCameraRadius} from './camera-obstacles.ts';
+import {createCameraObstacleSweep,recoverCameraRadius} from './camera-obstacles.ts';
 import {createCameraGroundSweep} from './camera-ground.ts';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
@@ -38,6 +38,7 @@ export const playerControlModule = defineModule({
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
+    const obstacleSweep=createCameraObstacleSweep(deps.world.collision.blockers);
     const arm=Vector3.Zero();
     let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();
@@ -143,7 +144,7 @@ export const playerControlModule = defineModule({
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));
-      const fraction=Math.min(groundSweep(target,arm),cameraObstacleFraction(target,arm,desiredRadius,deps.world.collision.blockers));
+      const fraction=Math.min(groundSweep(target,arm),obstacleSweep(target,arm,desiredRadius));
       // Reconstructing the orbit from a near-zero position can reset alpha and beta.
       const safeRadius=Math.max(.05,desiredRadius*fraction);
       const previousRadius=Math.max(.05,camera.radius);
