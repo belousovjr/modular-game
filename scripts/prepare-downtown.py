@@ -603,13 +603,11 @@ for kind,x,z,w,d,yaw in plaza_props:
     y=min(terrain(px,pz)+SIZE for px,pz in footprint.exterior.coords)
     placements.append({'key':f'authored/daley/{kind}/{x}/{z}','templateId':f'city/{kind}','parameters':{},'position':[x,round(y,4),z],'rotation':[0,yaw,0]})
 
-# A dry, wide, unobstructed road segment supports the existing 4x4 crowd test.
-candidates=[]
-for r in roads:
-    line=LineString(r['points']);point=line.interpolate(.5,normalized=True)
-    if r['width']>=12 and line.length>25 and road.covers(point.buffer(3.5)) and not water.buffer(20).intersects(point):candidates.append(point)
-assert candidates,'No safe spawn'
-spawn=min(candidates,key=lambda p:p.distance(Point(0,0)))
+# Start in the open aisle beside the authored plaza seating, also clear for the 4x4 crowd test.
+spawn=Point(24,-60)
+assert plaza.covers(spawn.buffer(4)), 'Spawn outside plaza paving'
+assert all(spawn.distance(Polygon(b['outline']))>4 for b in colliders), 'Spawn blocked by building'
+assert all(spawn.distance(p)>4 for p in used), 'Spawn blocked by plaza furniture'
 print('Markings and signals complete',len(signals),len(crossings),flush=True)
 # Keep source derivation and key counts inspectable; no remote source is needed at runtime.
 counts=Counter()
