@@ -1,6 +1,9 @@
 import type { CollisionWorld, CollisionBox } from '../world/headless.ts';
 
-export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null }
+export type LocomotionMode = 'walk' | 'fly' | 'swim';
+interface LocomotionInput {readonly boost:boolean;readonly lift:number;readonly flight:boolean|null}
+export const LOCOMOTION_SPEEDS = Object.freeze({walk:1.8,run:7,sprint:22,fly:25,fastFly:70,swim:3.1,fastSwim:5.2});
+export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null; readonly locomotion?:LocomotionInput }
 export interface VehicleCharacterFrame {
   readonly blocker: CollisionBox;
   readonly approach?: {readonly x:number;readonly z:number;readonly yaw:number;readonly vehicleId:string;readonly run:boolean;readonly align:boolean};
@@ -12,7 +15,14 @@ export interface CharacterSnapshot {
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
   readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting'|'crawling';
   readonly grounded: boolean; readonly verticalSpeed: number; readonly airborneTicks: number; readonly landedTick: number;
+  readonly mode: LocomotionMode; readonly boosted:boolean;
   readonly moving: boolean; readonly running: boolean; readonly lastSequence: number;
+}
+function validLocomotion(value:unknown):value is LocomotionInput{
+  return !!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===3
+    &&'boost' in value&&typeof value.boost==='boolean'
+    &&'lift' in value&&typeof value.lift==='number'&&Number.isFinite(value.lift)&&Math.abs(value.lift)<=1
+    &&'flight' in value&&(typeof value.flight==='boolean'||value.flight===null);
 }
 export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
@@ -26,7 +36,8 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
 export function createCharacterAuthorityFactory(world: CollisionWorld) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 10000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
-  const triangles=new Map<string,{minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[]}[]>();
+  type Triangle={minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[];denominator:number};
+  const triangles=new Map<string,Triangle[]>(),waterTriangles=new Map<string,Triangle[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
   let entries = 0;
   function index<T extends { minX: number; maxX: number; minZ: number; maxZ: number }>(map: Map<string, T[]>, item: T) {
@@ -49,35 +60,50 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     if (!Number.isFinite(f.elevation) || f.elevation < 0 || f.elevation > 10) throw new Error('Invalid floor');
     index(floors, Object.freeze({ ...f }));
   }
-  if((world.triangles?.length??0)>200000)throw new Error('Too many terrain triangles');
-  for(const vertices of world.triangles??[]) {
-    if(vertices.length!==9||!vertices.every(Number.isFinite))throw new Error('Invalid terrain triangle');
-    const minX=Math.min(vertices[0],vertices[3],vertices[6]),maxX=Math.max(vertices[0],vertices[3],vertices[6]);
-    const minZ=Math.min(vertices[2],vertices[5],vertices[8]),maxZ=Math.max(vertices[2],vertices[5],vertices[8]);
-    if(maxX-minX<1e-8||maxZ-minZ<1e-8)continue;
-    index(triangles,{minX,maxX,minZ,maxZ,vertices:Object.freeze([...vertices])});
+  function indexTriangles(source:readonly (readonly number[])[],map:Map<string,Triangle[]>) {
+    if(source.length>200000)throw new Error('Too many terrain triangles');
+    for(const p of source){
+      if(p.length!==9||!p.every(Number.isFinite))throw new Error('Invalid terrain triangle');
+      const denominator=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);
+      if(Math.abs(denominator)<1e-10)continue;
+      const minX=Math.min(p[0],p[3],p[6]),maxX=Math.max(p[0],p[3],p[6]);
+      const minZ=Math.min(p[2],p[5],p[8]),maxZ=Math.max(p[2],p[5],p[8]);
+      index(map,{minX,maxX,minZ,maxZ,vertices:Object.freeze([...p]),denominator});
+    }
   }
+  indexTriangles(world.triangles??[],triangles);
+  const waterLevel=world.water?.level??-Infinity;
+  if(world.water&&!Number.isFinite(waterLevel))throw new Error('Invalid water level');
+  indexTriangles(world.water?.triangles??[],waterTriangles);
   const bounds = { ...world.bounds }, baseHeight = world.baseHeight, slopeX = world.slopeX;
   const query = <T>(map: Map<string, T[]>, x: number, z: number) => map.get(`${Math.floor(x / CELL)}/${Math.floor(z / CELL)}`) ?? [];
-  function ground(x: number, z: number) {
+  function triangleHeight({vertices:p,denominator}:Triangle,x:number,z:number){
+    const a=((p[5]-p[8])*(x-p[6])+(p[6]-p[3])*(z-p[8]))/denominator;
+    const b=((p[8]-p[2])*(x-p[6])+(p[0]-p[6])*(z-p[8]))/denominator;
+    return a>=-1e-7&&b>=-1e-7&&a+b<=1+1e-7?a*p[1]+b*p[4]+(1-a-b)*p[7]:-Infinity;
+  }
+  function ground(x: number, z: number, ceiling=Infinity) {
     let elevation = 0;
     for (const f of query(floors,x,z)) if (x >= f.minX && x <= f.maxX && z >= f.minZ && z <= f.maxZ) elevation = Math.max(elevation, f.elevation);
     let height=baseHeight+slopeX*x+elevation;
-    for(const {vertices:p} of query(triangles,x,z)) {
-      const denominator=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);
-      if(Math.abs(denominator)<1e-10)continue;
-      const a=((p[5]-p[8])*(x-p[6])+(p[6]-p[3])*(z-p[8]))/denominator;
-      const b=((p[8]-p[2])*(x-p[6])+(p[0]-p[6])*(z-p[8]))/denominator;
-      if(a>=-1e-7&&b>=-1e-7&&a+b<=1+1e-7)height=Math.max(height,a*p[1]+b*p[4]+(1-a-b)*p[7]);
+    if(height>ceiling)height=-Infinity;
+    for(const triangle of query(triangles,x,z)){
+      const sample=triangleHeight(triangle,x,z);
+      if(sample<=ceiling)height=Math.max(height,sample);
     }
     return height;
   }
+  const overWater=(x:number,z:number)=>query(waterTriangles,x,z).some(t=>triangleHeight(t,x,z)>-Infinity);
+  const swimY=waterLevel-1.08;
+  const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
   return (startTick=0,spawn=defaultSpawn)=>{
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
   let lastSequence = 0, acceptedTick = -1, expiry = startTick, dx = 0, dz = 0, run = false, facing:number|null = null;
+  let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
+  let vx=0,vy=0,vz=0;
   function support(px: number,pz: number) {
     let height=ground(px,pz);
     for(const b of obstacles(px,pz)) if(px>b.minX-RADIUS && px<b.maxX+RADIUS && pz>b.minZ-RADIUS && pz<b.maxZ+RADIUS && b.maxY<=y+.3 && touches(b,px,pz)) height=Math.max(height,b.maxY);
@@ -97,9 +123,58 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
     }
     return inside;
   }
-  function blocked(px: number, pz: number, py: number) {
-    if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || py - y > 0.3) return true;
+  function blocked(px: number, pz: number, py: number, checkStep=true) {
+    if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || (checkStep&&py-y>.3)) return true;
     return obstacles(px,pz).some(b => py < b.maxY && py + HEIGHT > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS && touches(b,px,pz));
+  }
+  function freeBlocked(px:number,pz:number,py:number){
+    if(blocked(px,pz,py,false))return true;
+    const top=ground(px,pz);
+    if(top<=py+1e-7)return false;
+    // Bridge decks are ceilings below their deck, while dry terrain is solid beneath its surface.
+    if(!overWater(px,pz))return true;
+    return ground(px,pz,py+HEIGHT-1e-7)>py+1e-7;
+  }
+  function resetMotion(){
+    mode='walk';vx=vy=vz=0;boost=false;lift=0;flightRequest=null;
+  }
+  function freeStep(hasInput:boolean){
+    const swim=mode==='swim';
+    const speed=swim?(boost&&hasInput?LOCOMOTION_SPEEDS.fastSwim:LOCOMOTION_SPEEDS.swim)
+      :(boost&&hasInput?LOCOMOTION_SPEEDS.fastFly:LOCOMOTION_SPEEDS.fly);
+    const inputX=hasInput?dx:0,inputZ=hasInput?dz:0,inputY=hasInput?lift:0;
+    const length=Math.max(1,Math.hypot(inputX,inputY,inputZ));
+    const targetX=inputX*speed/length,targetZ=inputZ*speed/length;
+    const targetY=swim&&inputY===0?Math.max(-1.7,Math.min(2,(swimY-y)*5)):inputY*speed/length;
+    const changeX=targetX-vx,changeY=targetY-vy,changeZ=targetZ-vz;
+    const limit=(swim?22:(inputX||inputY||inputZ)?105:145)/60;
+    const scale=Math.min(1,limit/(Math.hypot(changeX,changeY,changeZ)||1));
+    vx+=changeX*scale;vy+=changeY*scale;vz+=changeZ*scale;
+    const steps=Math.max(1,Math.ceil(Math.hypot(vx,vy,vz)/60/.22));
+    const beforeX=x,beforeY=y,beforeZ=z;
+    for(let i=0;i<steps;i++){
+      const nx=x+vx/(steps*60),nz=z+vz/(steps*60),ny=y+vy/(steps*60);
+      if(vx){if(freeBlocked(nx,z,y))vx=0;else x=nx;}
+      if(vz){if(freeBlocked(x,nz,y))vz=0;else z=nz;}
+      if(vy){
+        const capped=swim?Math.min(ny,swimY):Math.min(ny,800);
+        if(freeBlocked(x,z,capped)){
+          if(!swim&&vy<0){mode='walk';vx=vy=vz=0;break;}
+          vy=0;
+        }else{y=capped;if(capped!==ny)vy=0;}
+      }
+    }
+    grounded=false;
+    verticalSpeed=(y-beforeY)*60;
+    const moveX=x-beforeX,moveZ=z-beforeZ;
+    moving=Math.hypot(moveX,swim&&inputY===0?0:y-beforeY,moveZ)>.00015;
+    if(hasInput&&facing!==null)yaw=facing;
+    else if(Math.hypot(moveX,moveZ)>.00015)yaw=Math.atan2(moveX,moveZ);
+    if(swim&&!deepWater(x,z)){
+      resetMotion();
+      const top=ground(x,z);
+      if(top>=y-.3&&top<=y+.3){y=top;grounded=true;}
+    }
   }
   if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
   return {
@@ -109,13 +184,15 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         if(![frame.blocker.minX,frame.blocker.maxX,frame.blocker.minZ,frame.blocker.maxZ,frame.blocker.minY,frame.blocker.maxY].every(Number.isFinite)||frame.blocker.minX>=frame.blocker.maxX||frame.blocker.minZ>=frame.blocker.maxZ||frame.blocker.minY>=frame.blocker.maxY)throw new Error('Invalid vehicle frame');
         for(const pose of [frame.pose,frame.release])if(pose&&![pose.x,pose.y,pose.z,pose.yaw].every(Number.isFinite))throw new Error('Invalid vehicle pose');
         const pose=frame.pose??frame.release;
-        if(pose){x=pose.x;y=pose.y;z=pose.z;yaw=pose.yaw;verticalSpeed=0;grounded=true;jump=false;dx=dz=0;}
+        if(pose){x=pose.x;y=pose.y;z=pose.z;yaw=pose.yaw;verticalSpeed=0;grounded=true;jump=false;dx=dz=0;resetMotion();}
       }
       if(vehicleFrame?.approach&&!frame?.approach&&!frame?.pose){dx=dz=0;run=false;facing=null;expiry=tick;}
       vehicleFrame=frame;
     },
     receive(input: unknown, ownerId: string): Receipt {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== ('facing' in input ? 9 : 8) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== (8+Number('facing' in input)+Number('locomotion' in input)) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
+      const locomotion='locomotion' in input?input.locomotion:undefined;
+      if('locomotion' in input&&!validLocomotion(locomotion))return {accepted:false,reason:'invalid'};
       if (vehicleFrame?.pose||vehicleFrame?.approach) return {accepted:false,reason:'vehicle'};
       if (ownerId !== 'local') return { accepted: false, reason: 'owner' };
       if (input.sequence <= lastSequence) return { accepted: false, reason: 'sequence' };
@@ -124,6 +201,10 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       lastSequence = input.sequence; acceptedTick = tick; expiry = tick + 12;
       const length = Math.max(1, Math.hypot(input.x,input.z));
       dx = input.x / length; dz = input.z / length; run = input.run; jump = input.jump && grounded; facing='facing' in input && typeof input.facing==='number'?input.facing:null;
+      if(validLocomotion(locomotion)){
+        boost=locomotion.boost;lift=locomotion.lift;
+        if(locomotion.flight!==null)flightRequest=locomotion.flight;
+      }else{boost=false;lift=0;}
       return { accepted: true, reason: 'accepted' };
     },
     step(nextTick: number) {
@@ -131,19 +212,29 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       tick = nextTick;
       moving = false;
       if(vehicleFrame?.pose)return;
-      if(vehicleFrame?.approach){const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
+      if(vehicleFrame?.approach){resetMotion();const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
+      if(flightRequest!==null){
+        if(flightRequest&&mode!=='fly'){
+          const takeoff=grounded&&lift>=0;
+          mode='fly';vx=vz=0;vy=takeoff?8:0;verticalSpeed=0;grounded=false;airborneTicks=12;
+        }
+        else if(!flightRequest&&mode==='fly'){resetMotion();verticalSpeed=0;airborneTicks=12;}
+        flightRequest=null;
+      }
+      if(mode==='walk'&&y<=swimY&&deepWater(x,z)){mode='swim';grounded=false;vx=vy=vz=0;}
+      if(mode!=='walk'){jump=false;freeStep(tick<=expiry);return;}
       if (jump && grounded) { verticalSpeed = 5.5; grounded = false; airborneTicks = 0; }
       jump = false;
-      const speed = run ? 7 : 1.8;
+      const speed=boost?LOCOMOTION_SPEEDS.sprint:run?LOCOMOTION_SPEEDS.run:LOCOMOTION_SPEEDS.walk;
       if (tick <= expiry) {
         // Swept movement is subdivided below the radius, then slides along each axis.
-        const steps = Math.max(1, Math.ceil(speed / 60 / 0.1));
+        const steps = Math.max(1, Math.ceil(Math.hypot(dx,dz)*speed / 60 / 0.1));
         const beforeX = x, beforeZ = z;
         for (let i = 0; i < steps; i++) {
           const nx = x + dx * speed / 60 / steps;
-          if (!blocked(nx,z,grounded ? support(nx,z) : Math.max(y,ground(nx,z)))) x = nx;
+          if(dx&&!(grounded?blocked(nx,z,support(nx,z)):freeBlocked(nx,z,y)))x=nx;
           const nz = z + dz * speed / 60 / steps;
-          if (!blocked(x,nz,grounded ? support(x,nz) : Math.max(y,ground(x,nz)))) z = nz;
+          if(dz&&!(grounded?blocked(x,nz,support(x,nz)):freeBlocked(x,nz,y)))z=nz;
           if (grounded) { const floor=support(x,z); if(y-floor>.3) grounded=false; else y=floor; }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
@@ -154,7 +245,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         airborneTicks++;
         verticalSpeed -= 16 / 60;
         let nextY = y + verticalSpeed / 60;
-        let support = ground(x,z);
+        let support=ground(x,z,overWater(x,z)?y+.3:Infinity);
         for (const b of query(cells,x,z)) {
           if (x <= b.minX-RADIUS || x >= b.maxX+RADIUS || z <= b.minZ-RADIUS || z >= b.maxZ+RADIUS || !touches(b,x,z)) continue;
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
@@ -164,7 +255,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,moving,running: moving && run,lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,boosted:moving&&boost&&tick<=expiry,moving,running: moving&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
   };
   };
 }
@@ -184,7 +275,7 @@ export function createLocalConnection(authority: ReturnType<typeof createCharact
       if (dropEvery && count % dropEvery === 0) return Promise.resolve({ accepted: false, reason: 'dropped' });
       seed = (Math.imul(seed,1664525) + 1013904223) >>> 0;
       const delay = Math.max(0, latency + Math.floor(seed / 0x100000000 * (jitter * 2 + 1)) - jitter);
-      return new Promise(resolve => queue.push({ command: { ...command }, due: authority.snapshot().tick + delay + 1, resolve }));
+      return new Promise(resolve => queue.push({ command: { ...command,...(command.locomotion?{locomotion:{...command.locomotion}}:{}) }, due: authority.snapshot().tick + delay + 1, resolve }));
     },
     step(tick: number) {
       queue.sort((a,b) => a.due - b.due);

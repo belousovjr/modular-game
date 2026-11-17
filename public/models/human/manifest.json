@@ -33,7 +33,12 @@
     "Driving_Loop",
     "Car_Enter",
     "Car_Exit",
-    "Crawl_Loop"
+    "Crawl_Loop",
+    "Swim_Fwd_Loop",
+    "Swim_Idle_Loop",
+    "Fly_Idle_Loop",
+    "Fly_Loop",
+    "Fly_Boost_Loop"
   ],
   "animationLibraries": [
     {
@@ -137,7 +142,7 @@
       ]
     }
   ],
-  "sha256": "acb55bf373e938b23d3b6dda1761096ac7f8f0b4596831e6cb4caf8e77e9dd51",
+  "sha256": "66e65d5c46e6613aebe0aa87d9f3f50cd37b4938c049d13085438ca79cf5f005",
   "vehicleAnimations": [
     {
       "clip": "Car_Enter",
@@ -166,5 +171,20 @@
       "duration": 1.7999999523162842,
       "playbackSourceRate": 1
     }
-  ]
+  ],
+  "locomotionAnimations": {
+    "swim": [
+      "Swim_Fwd_Loop",
+      "Swim_Idle_Loop"
+    ],
+    "flight": [
+      "Fly_Idle_Loop",
+      "Fly_Loop",
+      "Fly_Boost_Loop"
+    ],
+    "swimLibrary": "https://quaternius.com/packs/universalanimationlibrary.html",
+    "swimArchive": "https://github.com/Barbatos6669/elderforge/tree/main/assets/animations/universal_animation_library_1",
+    "swimSourceSha256": "69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997",
+    "flightSource": "Original poses authored on the project rig"
+  }
 }

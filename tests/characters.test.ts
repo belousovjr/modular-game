@@ -150,3 +150,109 @@ test('facing intentions use the existing delayed protocol and reject reordered s
   assert.equal(a.snapshot().moving,false);assert.equal(a.snapshot().yaw,Math.PI);
   connection.close();
 });
+
+const locomotionWorld:CollisionWorld={...world,baseHeight:0,slopeX:0,blockers:[],floors:[]};
+const createInput=(tick:number,changes:Partial<MoveCommand>={}):MoveCommand=>({...command(tick,0,0),...changes});
+function locomotionStep(a:ReturnType<typeof createCharacterAuthority>,changes:Partial<MoveCommand>,count:number){
+  for(let i=0;i<count;i++){
+    const next=a.snapshot().tick+1;
+    if(i%6===0)assert.equal(a.receive(createInput(next,changes),'local').accepted,true);
+    a.step(next);
+  }
+  return a.snapshot();
+}
+
+test('boost runs at 22 m/s and still cannot tunnel through a narrow barrier',()=>{
+  const travel=(boost:boolean,blockers:CollisionWorld['blockers']=[])=>{
+    const a=createCharacterAuthority({...locomotionWorld,blockers});
+    return locomotionStep(a,{z:1,run:true,locomotion:{boost,lift:0,flight:null}},60);
+  };
+  assert.ok(Math.abs(travel(false).z-7)<1e-8);
+  assert.ok(Math.abs(travel(true).z-22)<1e-8);
+  assert.equal(travel(true).boosted,true);
+  const stopped=travel(true,[{id:'pole',minX:-.05,maxX:.05,minZ:5,maxZ:5.02,minY:0,maxY:3}]);
+  assert.ok(stopped.z>4.5&&stopped.z<=4.65);
+});
+
+test('flight is deterministic at different render rates, boosts, brakes and lands on a roof',()=>{
+  const setup={...locomotionWorld,blockers:[{id:'roof',minX:-5,maxX:5,minZ:34,maxZ:45,minY:0,maxY:9}]};
+  function run(fps:number){
+    const a=createCharacterAuthority(setup),clock=createLocalAuthority();
+    clock.addSystem(tick=>{
+      if(tick%6===1)a.receive(createInput(tick,{z:Number(tick>36),locomotion:{boost:tick>36,lift:tick<=36?1:0,flight:tick===1?true:null}}),'local');
+      a.step(tick);
+    });
+    for(let frame=0;frame<fps*2;frame++)clock.advance(1000/fps);
+    return a.snapshot();
+  }
+  const flying=run(60);
+  assert.deepEqual(flying,run(30));assert.deepEqual(flying,run(144));
+  assert.ok(flying.z>50&&flying.y>9&&flying.boosted);
+
+  const a=createCharacterAuthority(setup);
+  locomotionStep(a,{locomotion:{boost:false,lift:1,flight:true}},45);
+  locomotionStep(a,{z:1,locomotion:{boost:false,lift:0,flight:null}},100);
+  const stopped=locomotionStep(a,{locomotion:{boost:false,lift:0,flight:null}},25);
+  assert.ok(stopped.z>34&&stopped.z<45,JSON.stringify(stopped));
+  assert.equal(stopped.moving,false);
+  const landed=locomotionStep(a,{locomotion:{boost:false,lift:-1,flight:null}},100);
+  assert.equal(landed.mode,'walk');assert.equal(landed.grounded,true);assert.equal(landed.y,9);
+
+  const blocked=createCharacterAuthority({...locomotionWorld,blockers:[{id:'thin',minX:-2,maxX:2,minZ:37,maxZ:37.02,minY:0,maxY:80}]});
+  const hit=locomotionStep(blocked,{z:1,locomotion:{boost:true,lift:0,flight:true}},120);
+  assert.ok(hit.z>36&&hit.z<=36.65);
+});
+
+const patch=(a:number,b:number,y:number):readonly (readonly number[])[]=>[
+  [a,y,-10,b,y,-10,b,y,10], [a,y,-10,b,y,10,a,y,10],
+];
+
+test('water entry is automatic, swimmers pass under a bridge, can dive, surface and take flight',()=>{
+  const a=createCharacterAuthority({...locomotionWorld,baseHeight:-10,spawn:{x:-1,z:0},
+    triangles:[...patch(-10,0,0),...patch(3,5,0)],
+    water:{level:-1,triangles:patch(0,20,-1)}});
+  const swim=locomotionStep(a,{x:1,run:true},110);
+  assert.equal(swim.mode,'swim');assert.equal(swim.grounded,false);
+  assert.ok(swim.x>4&&swim.y<=-2.08,JSON.stringify(swim));
+  const dive=locomotionStep(a,{x:1,locomotion:{boost:false,lift:-1,flight:null}},60);
+  assert.ok(dive.y<swim.y-1);
+  const surfaced=locomotionStep(a,{locomotion:{boost:false,lift:1,flight:null}},180);
+  assert.ok(Math.abs(surfaced.y+2.08)<1e-6);
+  const fly=locomotionStep(a,{locomotion:{boost:false,lift:1,flight:true}},45);
+  assert.equal(fly.mode,'fly');assert.ok(fly.y>0&&fly.verticalSpeed>0);
+  const cancelled=locomotionStep(a,{locomotion:{boost:false,lift:0,flight:false}},100);
+  assert.equal(cancelled.mode,'swim');
+});
+
+test('cancelling flight under an elevated deck falls into the river instead of snapping onto the bridge',()=>{
+  const a=createCharacterAuthority({...locomotionWorld,baseHeight:-10,spawn:{x:-1,z:0},
+    triangles:[...patch(-10,0,0),...patch(2,8,5)],
+    water:{level:-1,triangles:patch(0,20,-1)}});
+  const swim=locomotionStep(a,{x:1,run:true},110);
+  assert.ok(swim.x>2&&swim.x<8&&swim.mode==='swim');
+  const underDeck=locomotionStep(a,{locomotion:{boost:false,lift:1,flight:true}},38);
+  assert.ok(underDeck.y>0&&underDeck.y<3.3,JSON.stringify(underDeck));
+  const fallen=locomotionStep(a,{locomotion:{boost:false,lift:0,flight:false}},90);
+  assert.equal(fallen.mode,'swim');
+  assert.ok(fallen.y<-2);
+});
+
+test('locomotion rejects malformed values and never repeats a flight request as a toggle',()=>{
+  const a=createCharacterAuthority(locomotionWorld);
+  for(const bad of [null,{}, {boost:1,lift:0,flight:null},{boost:true,lift:Infinity,flight:null},{boost:true,lift:0,flight:'fly'},{boost:true,lift:0,flight:true,extra:1}]){
+    assert.equal(a.receive({...command(),locomotion:bad},'local').reason,'invalid');
+  }
+  assert.equal(locomotionStep(a,{locomotion:{boost:false,lift:1,flight:true}},24).mode,'fly');
+});
+
+test('fractional vertical intent follows a flight vector without increasing its total speed',()=>{
+  const a=createCharacterAuthority(locomotionWorld);
+  const climb=locomotionStep(a,{z:.8,locomotion:{boost:false,lift:.6,flight:true}},90);
+  const later=locomotionStep(a,{z:.8,locomotion:{boost:false,lift:.6,flight:null}},60);
+  assert.ok(Math.abs(later.z-climb.z-20)<1e-8);
+  assert.ok(Math.abs(later.y-climb.y-15)<1e-8);
+  const invalid=createInput(later.tick+1,{locomotion:{boost:false,lift:1.01,flight:null}});
+  assert.equal(a.receive(invalid,'local').reason,'invalid');
+  const descend=locomotionStep(a,{z:.8,locomotion:{boost:false,lift:-.6,flight:null}},60);
+  assert.ok(descend.y<later.y-10&&descend.z>later.z);
+});

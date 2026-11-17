@@ -14,7 +14,7 @@ import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup.j
 import type { Scope } from '../../core/modules.ts';
 import { createScope } from '../../core/scope.ts';
 import type { geometryModule } from '../geometry/index.ts';
-import type { CharacterSnapshot } from './headless.ts';
+import {LOCOMOTION_SPEEDS, type CharacterSnapshot} from './headless.ts';
 import {createCharacterShadowSource} from './shadow-proxy.ts';
 import manifest from '../../../public/models/human/manifest.json' with { type: 'json' };
 
@@ -63,8 +63,9 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   let disposed = false, entries: InstantiatedEntries | null = null, active: AnimationGroup | undefined;
   const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
   const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
+  const clips=new Map<string,AnimationGroup>(),playing=new Set<AnimationGroup>();
   root.metadata = { assetStatus:'loading' };
-  scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null; root.dispose(); });
+  scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null;clips.clear();playing.clear();root.dispose(); });
   const shadow=assets.createShadowProxy(root,scope);
   geometry.registerMeshes([shadow],scope);
   const loading=createScope();scope.onDispose(loading.dispose);
@@ -89,10 +90,11 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       visual.scaling.setAll(1.8/height);visual.position.y=-minimum.y*1.8/height;visual.parent=root;
       geometry.registerMeshes(meshes,scope);
       for(const group of entries.animationGroups) { group.stop();group.enableBlending=false;
+        clips.set(group.name.slice(group.name.lastIndexOf('/')+1),group);
         if(!group.name.endsWith('_Loop'))for(const track of group.targetedAnimations)track.animation.loopMode=Animation.ANIMATIONLOOPMODE_CONSTANT;
       }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
-      if(idle) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);idle.enableBlending=false;active=idle; }
+      if(idle) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);active=idle;playing.add(idle); }
       loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
     } catch(error) {
       entries?.dispose();entries=null;assets.reportError(error);root.metadata={assetStatus:'error',error:error instanceof Error?error.message:String(error)};
@@ -110,26 +112,31 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
     if(!assets.shouldAnimate(s.x,s.y,s.z)){
-      for(const group of entries.animationGroups)if(group.isPlaying){group.pause();paused.push(group);}
+      for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
       root.metadata.animationCulled=true;
       if(root.rotationQuaternion)smoothCharacterRotation(root.rotationQuaternion,s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0),deltaMs,root.rotationQuaternion);
       return;
     }
     for(const group of paused)group.restart();paused.length=0;root.metadata.animationCulled=false;
     const name=selectAnimation(s);
-    const next=entries.animationGroups.find(group=>group.name.endsWith('/'+name));
+    const next=clips.get(name);
     if (!next) return;
     if (next!==active) {
       if(!next.isPlaying) {
         next.start(true);next.weight=0;
+        playing.add(next);
         const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
         if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_')&&name.endsWith('_Loop'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));
       }
       active=next;
     }
-    blendAnimations(entries.animationGroups,active,scene.getEngine().getDeltaTime());
+    blendAnimations(playing,active,deltaMs);
+    for(const group of playing)if(!group.isPlaying)playing.delete(group);
     const yaw=s.yaw+(s.vehicleAnimation==='entering'?(1-active.weight)*Math.PI/2:0);
-    const target=s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,yaw,0);
+    const tilt=s.mode==='fly'&&s.moving
+      ?Math.max(.08,Math.min(1.16,(s.boosted?.98:.63)-.46*Math.atan2(s.verticalSpeed,Math.max(1,speed))))
+      :0;
+    const target=s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(tilt,yaw,0);
     const current=root.rotationQuaternion;
     if(current){
       if(!before)current.copyFrom(target);
@@ -140,11 +147,15 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       }else smoothCharacterRotation(current,target,deltaMs,current);
     }
     root.metadata.animation=name;
-    active.speedRatio=(name==='Car_Enter'||name==='Car_Exit')?2:!name.startsWith('Jump_') && s.moving?Math.max(.65,Math.min(s.running?1.4:1.2,speed/(s.running?7:1.6))):1;
+    active.speedRatio=name==='Car_Enter'||name==='Car_Exit'?2:
+      name==='Sprint_Loop'?Math.max(.9,Math.min(1.65,speed/LOCOMOTION_SPEEDS.sprint*1.5)):
+      name==='Jog_Fwd_Loop'?Math.max(.7,Math.min(1.65,speed/4.4)):
+      name==='Walk_Loop'?Math.max(.65,Math.min(1.2,speed/1.6)):
+      name==='Swim_Fwd_Loop'&&s.boosted?1.35:1;
   };
 }
 
-export function blendAnimations(groups: readonly AnimationGroup[], active: AnimationGroup, deltaMs: number) {
+export function blendAnimations(groups: Iterable<AnimationGroup>, active: AnimationGroup, deltaMs: number) {
   const blend=1-Math.exp(-Math.min(100,deltaMs)/50);
   for(const group of groups) {
     if(!group.isPlaying) continue;
@@ -156,7 +167,9 @@ export function blendAnimations(groups: readonly AnimationGroup[], active: Anima
 
 export function selectAnimation(s: CharacterSnapshot) {
   if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='crawling'?'Crawl_Loop':s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
-  return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.running?'Sprint_Loop':'Walk_Loop';
+  if(s.mode==='fly')return !s.moving?'Fly_Idle_Loop':s.boosted?'Fly_Boost_Loop':'Fly_Loop';
+  if(s.mode==='swim')return s.moving?'Swim_Fwd_Loop':'Swim_Idle_Loop';
+  return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.boosted?'Sprint_Loop':s.running?'Jog_Fwd_Loop':'Walk_Loop';
 }
 
 export function smoothYaw(current: number, target: number, deltaMs: number) {

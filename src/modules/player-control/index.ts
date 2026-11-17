@@ -43,8 +43,9 @@ export const playerControlModule = defineModule({
     const keys = new Set<string>();
     let jump = false, leftHeld = false, rightHeld = false, freeLookAlpha = camera.alpha;
     let sequence = 0, lastTick = -6, lastInput = '', wasActive = false;
+    let flightIntent:boolean|null=null;
     const clearPointer = () => { leftHeld=false; rightHeld=false; };
-    const clear = () => { keys.clear(); jump=false; clearPointer(); lastInput = ''; };
+    const clear = () => { keys.clear(); jump=false; flightIntent=null; clearPointer(); lastInput = ''; };
     if (canvas) {
       const down=(event:PointerEvent)=>{
         if(core.scene.activeCamera!==camera||document.hidden||event.ctrlKey||event.altKey||event.metaKey)return;
@@ -73,7 +74,15 @@ export const playerControlModule = defineModule({
       const e = info.event;
       if (info.type === KeyboardEventTypes.KEYUP) keys.delete(e.code);
       if (!canvas || document.activeElement !== canvas || core.scene.activeCamera !== camera || e.ctrlKey || e.altKey || e.metaKey || document.hidden) { clear(); return; }
-      if (['KeyW','KeyA','KeyS','KeyD','ShiftLeft','ShiftRight','Space'].includes(e.code)) {
+      if(e.code==='KeyF'){
+        e.preventDefault();
+        if(info.type===KeyboardEventTypes.KEYDOWN&&!e.repeat){
+          const state=deps.characters.snapshot();
+          if(!state.vehicleId)flightIntent=!(flightIntent??state.mode==='fly');
+        }
+        return;
+      }
+      if (['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyC','ShiftLeft','ShiftRight','Space'].includes(e.code)) {
         e.preventDefault();
         if (info.type === KeyboardEventTypes.KEYDOWN) { keys.add(e.code); if(e.code==='Space' && !e.repeat) jump=true; }
       }
@@ -90,24 +99,34 @@ export const playerControlModule = defineModule({
       const s = deps.characters.snapshot();
       const active = core.scene.activeCamera === camera && !document.hidden && document.activeElement === canvas;
       if (!active) clear();
-      if(s.vehicleId)jump=false;
+      if(s.vehicleId){jump=false;flightIntent=null;}
+      if(flightIntent!==null&&flightIntent===(s.mode==='fly'))flightIntent=null;
       const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
       const right = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
       const alpha=leftHeld&&!rightHeld?freeLookAlpha:camera.alpha;
-      const x = -Math.cos(alpha)*forward - Math.sin(alpha)*right;
-      const z = -Math.sin(alpha)*forward + Math.cos(alpha)*right;
+      const free=s.mode!=='walk'||flightIntent===true;
+      const manualLift=free?Number(keys.has('Space'))-Number(keys.has('KeyC')):0;
+      const pitch=free&&rightHeld&&manualLift===0?camera.beta-Math.PI/2:0;
+      const pitchedForward=forward*Math.cos(pitch);
+      const aimLift=forward*Math.sin(pitch);
+      const lift=manualLift||(Math.abs(aimLift)>1e-5?aimLift:0);
+      const x = -Math.cos(alpha)*pitchedForward - Math.sin(alpha)*right;
+      const z = -Math.sin(alpha)*pitchedForward + Math.cos(alpha)*right;
       const facing=active&&rightHeld?Math.atan2(forward||right?x:-Math.cos(camera.alpha),forward||right?z:-Math.sin(camera.alpha)):null;
-      const length = Math.max(1,Math.hypot(x,z));
-      const input = `${forward}/${right}/${keys.has('ShiftLeft') || keys.has('ShiftRight')}/${alpha}/${facing}`;
+      const length = Math.max(1,Math.hypot(x,lift,z));
+      const run=keys.has('ShiftLeft')||keys.has('ShiftRight');
+      const boost=keys.has('KeyQ');
+      const input = `${x}/${z}/${run}/${facing}/${boost}/${lift}/${flightIntent}`;
       if (!s.vehicleId && ((jump && s.tick > lastTick) || s.tick-lastTick >= 6 || (input !== lastInput && s.tick > lastTick) || (wasActive && !active))) {
-        void deps.characters.send({ type:'move', characterId:s.id, sequence:++sequence, tick:s.tick, x:x/length, z:z/length, run:keys.has('ShiftLeft') || keys.has('ShiftRight'), jump, facing });
+        void deps.characters.send({type:'move',characterId:s.id,sequence:++sequence,tick:s.tick,x:x/length,z:z/length,
+          run,jump:jump&&!free,facing,locomotion:{boost,lift:lift/length,flight:flightIntent}});
         jump=false; lastTick = s.tick; lastInput = input;
       }
       wasActive = active;
       if (Math.abs(camera.radius-appliedRadius) > 1e-5) desiredRadius = Math.max(1.5,Math.min(10,desiredRadius+camera.radius-appliedRadius));
       if(s.vehicleId)desiredRadius=Math.max(6,desiredRadius);
       if (core.scene.activeCamera !== camera) return;
-      const target=new Vector3(s.x,s.y+1.2,s.z);
+      const target=new Vector3(s.x,s.y+(s.mode==='swim'?.95:1.2),s.z);
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));

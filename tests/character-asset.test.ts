@@ -13,7 +13,7 @@ test('human asset stays within the render budget with one shared rig and baked l
   assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));
   assert.equal(gltf.meshes.length,1);assert.equal(gltf.meshes[0].primitives.length,1);assert.equal(gltf.materials.length,1);
   assert.equal(gltf.skins.length,1);assert.equal(gltf.skins[0].joints.length,65);
-  assert.deepEqual(gltf.animations.map((a:{name:string})=>a.name).sort(),['Car_Enter','Car_Exit','Crawl_Loop','Driving_Loop','Idle_Loop','Jog_Fwd_Loop','Jump_Land','Jump_Loop','Jump_Start','Sprint_Loop','Walk_Loop']);
+  assert.deepEqual(gltf.animations.map((a:{name:string})=>a.name).sort(),['Car_Enter','Car_Exit','Crawl_Loop','Driving_Loop','Fly_Boost_Loop','Fly_Idle_Loop','Fly_Loop','Idle_Loop','Jog_Fwd_Loop','Jump_Land','Jump_Loop','Jump_Start','Sprint_Loop','Swim_Fwd_Loop','Swim_Idle_Loop','Walk_Loop']);
   assert.ok(gltf.animations.every((a:{channels:unknown[]})=>a.channels.length<=80),'Static bone tracks must stay pruned');
   const primitive=gltf.meshes[0].primitives[0];assert.ok('JOINTS_0'in primitive.attributes&&'WEIGHTS_0'in primitive.attributes);
   assert.equal(gltf.accessors[primitive.indices].count/3,manifest.triangles);
@@ -61,7 +61,13 @@ test('walking selects its own clip and visual turning follows the short arc inde
   const {createCharacterAuthority}=await import('../src/modules/characters/headless.ts');
   const s=createCharacterAuthority({bounds:{minX:-10,maxX:10,minZ:-10,maxZ:10},baseHeight:0,slopeX:0,spawn:{x:0,z:0},blockers:[],floors:[]}).snapshot();
   assert.equal(selectAnimation({...s,moving:true,running:false}),'Walk_Loop');
-  assert.equal(selectAnimation({...s,moving:true,running:true}),'Sprint_Loop');
+  assert.equal(selectAnimation({...s,moving:true,running:true}),'Jog_Fwd_Loop');
+  assert.equal(selectAnimation({...s,moving:true,running:true,boosted:true}),'Sprint_Loop');
+  assert.equal(selectAnimation({...s,mode:'fly',grounded:false}),'Fly_Idle_Loop');
+  assert.equal(selectAnimation({...s,mode:'fly',grounded:false,moving:true}),'Fly_Loop');
+  assert.equal(selectAnimation({...s,mode:'fly',grounded:false,moving:true,boosted:true}),'Fly_Boost_Loop');
+  assert.equal(selectAnimation({...s,mode:'swim',grounded:false}),'Swim_Idle_Loop');
+  assert.equal(selectAnimation({...s,mode:'swim',grounded:false,moving:true}),'Swim_Fwd_Loop');
   assert.equal(selectAnimation(s),'Idle_Loop');
   assert.equal(selectAnimation({...s,vehicleId:'car/0',vehicleAnimation:'crawling'}),'Crawl_Loop');
   assert.equal(selectAnimation({...s,grounded:false,airborneTicks:8,moving:true}),'Jump_Loop');
