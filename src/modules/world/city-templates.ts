@@ -5,7 +5,7 @@ import {snapCityMeasure,steppedBuildingParts,steppedBuildingCrownParts} from './
 const span={default:30,min:.1,max:1000};
 export const cityTemplates:readonly ObjectTemplate[]=[
   ...['stone','glass','willis','trump','marina','wrigley','tribune'].map((profile):ObjectTemplate=>({
-    id:`city/${profile}`,version:['stone','glass','marina'].includes(profile)?4:5,
+    id:`city/${profile}`,version:['stone','glass'].includes(profile)?4:5,
     parameters:{width:span,depth:span,height:{default:55,min:3,max:600},foundation:{default:2,min:.1,max:20}},
     build({width,depth,height,foundation}) {
       const surface=profile==='willis'?'city-dark':profile==='stone'||profile==='wrigley'||profile==='tribune'||profile==='marina'?'city-stone':'city-glass';
@@ -30,7 +30,7 @@ export const cityTemplates:readonly ObjectTemplate[]=[
       const levels=[{distance:0,parts:[...mainParts,...detail]}];
       if(profile==='marina'){
         const reduced={...part(0,height/2,0,width*.96,height,depth*.96),radialSegments:8};
-        levels.push({distance:24,parts:mainParts},{distance:80,parts:[reduced,{...foundationPart,radialSegments:8}]});
+        levels.push({distance:36,parts:mainParts},{distance:105,parts:[reduced,{...foundationPart,radialSegments:8}]});
       }
       // Stepped landmarks retain their facade dimensions and roof silhouettes at every distance.
       return {hideDistance:profile==='stone'?300:1200,levels};

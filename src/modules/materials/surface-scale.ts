@@ -89,7 +89,14 @@ export class SurfaceScale extends MaterialPluginBase {
         uniform sampler2D surfaceBaseNormalSampler;
         uniform sampler2D surfaceMetalNormalSampler;
         #endif
-        float surfaceMipBias() { return 3.0*smoothstep(12.,80.,length(vEyePosition.xyz-vPositionW)); }
+        float surfaceMipBias() {
+          float distanceToEye=length(vEyePosition.xyz-vPositionW);
+          #ifdef SURFACE_CITY
+          return 3.0*smoothstep(18.,105.,distanceToEye);
+          #else
+          return 3.0*smoothstep(12.,80.,distanceToEye);
+          #endif
+        }
         vec4 surfaceSample(sampler2D image, vec2 coords, vec2 dx, vec2 dy) {
           #if __VERSION__ >= 300
           float scale=exp2(surfaceMipBias());

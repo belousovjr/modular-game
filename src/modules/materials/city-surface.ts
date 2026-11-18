@@ -82,7 +82,7 @@ export class CityFacade extends MaterialPluginBase {
           vec2 opening=mix(vec2(.32,.34),vec2(.40,.39),groundFloor);
           float window=step(0.,cell.y)*(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
           window*=windowResolution;
-          float detail=(1.-smoothstep(.04,.16,max(edge.x,edge.y)))*(1.-smoothstep(12.,32.,length(vEyePosition.xyz-vPositionW)));
+          float detail=(1.-smoothstep(.04,.16,max(edge.x,edge.y)))*(1.-smoothstep(18.,44.,length(vEyePosition.xyz-vPositionW)));
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
           vec3 glazing=baseColor.rgb*vec3(.22,.33,.38)+vec3(.035,.059,.072);
           baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));

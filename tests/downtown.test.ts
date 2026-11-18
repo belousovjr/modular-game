@@ -373,17 +373,16 @@ test('stepped landmarks keep one silhouette with all windowed tiers and roof par
   }
   const marina=cityTemplates.find(t=>t.id==='city/marina');assert.ok(marina);
   const model=toCityGrid(marina).build({width:32,depth:32,height:179,foundation:2});
-  assert.deepEqual(model.levels.map(level=>level.distance),[0,24,80]);
+  assert.deepEqual(model.levels.map(level=>level.distance),[0,36,105]);
   assert.equal(model.levels[2].parts[0].radialSegments,8);
   assert.equal(model.levels[2].parts.length,2);
 });
 
 
-test('coarse building ranges stay ordered and converge towards the unchanged tall-building range',()=>{
+test('coarse building ranges stay ordered and overlap at the middle and tall band boundary',()=>{
   const bands=district.buildingLod;
   assert.ok(bands[0].unload<bands[1].load&&bands[1].unload<=bands[2].load);
-  assert.equal(bands[2].load,1200);assert.equal(bands[2].unload,1400);
-  assert.deepEqual(bands.map(b=>[b.load,b.unload]),[[800,950],[1000,1200],[1200,1400]]);
+  assert.deepEqual(bands.map(b=>[b.load,b.unload]),[[850,1000],[1050,1250],[1250,1450]]);
   const surfaces=citySource.chunks.flatMap(c=>c.meshes).filter(m=>m.surface.startsWith('city-'));
   for(const band of bands)assert.ok(surfaces.some(m=>m.surface.endsWith('-'+band.id)));
   assert.ok(surfaces.every(m=>bands.some(b=>m.surface.endsWith('-'+b.id))));

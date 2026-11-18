@@ -157,6 +157,7 @@ export const worldModule = defineModule({
         else {const surfaceView={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility(meshes,owner)};surfaceViews.add(surfaceView);owner.onDispose(()=>surfaceViews.delete(surfaceView));}
       },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
+    const detailRange={load:36,unload:46,unloadDelayMs:250};
     const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
     for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
       deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
@@ -171,7 +172,7 @@ export const worldModule = defineModule({
           for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
         }
         view.visibility=deps.rendering.createVisibility(meshes,owner);
-      },scope,{load:24,unload:32,unloadDelayMs:250});
+      },scope,detailRange);
     }
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
       const point=deps.rendering.getDistanceOrigin();
@@ -190,7 +191,8 @@ export const worldModule = defineModule({
       for(const view of detailViews){
         const b=view.bounds;
         const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
-        view.visibility?.setVisible(distance<=32,!point);
+        const limit=view.visibility?.isVisible()?detailRange.unload:detailRange.load;
+        view.visibility?.setVisible(distance<=limit,!point);
       }
     });
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
