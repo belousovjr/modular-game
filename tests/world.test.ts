@@ -175,7 +175,7 @@ test('distant ground batches preserve canonical geometry and avoid per-tile draw
   const banks=groups.filter(g=>g.surface==='bank');
   assert.ok(banks.length>0&&banks.length<=16);
   for(const surface of [...distantSurfaces].filter(surface=>surface!=='rail-track')){
-    const source=citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface===surface||(surface==='urban-ground'&&m.surface==='sidewalk'))),batches=groups.filter(g=>g.surface===surface);
+    const source=citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface===surface||(surface==='urban-ground'&&m.surface==='sidewalk')||(surface==='rail-ballast'&&m.surface==='rail-track'))),batches=groups.filter(g=>g.surface===surface);
     const vertices=batches.reduce((n,m)=>n+m.positions.length,0),indices=batches.reduce((n,m)=>n+m.indices.length,0);
     if(surface==='urban-ground'){
       const extraVertices=vertices-source.reduce((n,m)=>n+m.positions.length,0),extraIndices=indices-source.reduce((n,m)=>n+m.indices.length,0);
@@ -188,11 +188,11 @@ test('distant ground batches preserve canonical geometry and avoid per-tile draw
   const paired=groupDistantSurfaces({...citySource,chunks:[{...chunk,meshes:[triangle,{...triangle,positions:triangle.positions.map((v,i)=>i%3===0?v+2:v)}]}]});
   assert.deepEqual(paired[0].indices,[0,1,2,3,4,5]);
   assert.ok(['road','sidewalk','curb','marking'].every(s=>!distantSurfaces.has(s)));
-  assert.ok(groups.every(g=>!['road','sidewalk'].includes(g.surface)));
+  assert.ok(groups.every(g=>!['road','sidewalk','rail-track'].includes(g.surface)));
   const street=groupDistantSurfaces({...citySource,chunks:[{...chunk,meshes:[{...triangle,surface:'road'},{...triangle,surface:'sidewalk',positions:triangle.positions.map((v,i)=>i%3===1?v+.25:v)}]}]});
   assert.equal(street.length,2);assert.deepEqual(new Set(street.map(m=>m.surface)),new Set(['road-base','urban-ground']));
   const base=groups.filter(g=>g.surface==='road-base');assert.ok(base.length>0);
-  assert.equal(base.reduce((n,m)=>n+m.indices.length,0),citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface==='road'||m.surface==='rail-track')).reduce((n,m)=>n+m.indices.length,0));
+  assert.equal(base.reduce((n,m)=>n+m.indices.length,0),citySource.chunks.flatMap(c=>c.meshes.filter(m=>m.surface==='road')).reduce((n,m)=>n+m.indices.length,0));
   const near=groupStreetSurfaces({...citySource,chunks:[{...chunk,meshes:[{...triangle,surface:'road'},{...triangle,surface:'sidewalk'},triangle]}]});
   assert.equal(near.length,1);assert.equal(near[0].surface,'sidewalk');assert.deepEqual(near[0].positions,triangle.positions);
   assert.ok(street.every(m=>m.positions.every((v,i)=>i%3!==1||Math.abs(v)<1e-9)));

@@ -13,10 +13,11 @@ export function groupStreetSurfaces(city:CitySource){
 function groupSurfaces(city:CitySource,streetOnly:boolean){
   const groups=new Map<string,{id:string;surface:string;positions:number[];indices:number[]}>();
   for(const chunk of city.chunks)for(const mesh of chunk.meshes){
-    const roadBase=mesh.surface==='road'||mesh.surface==='rail-track';
+    const roadBase=mesh.surface==='road';
     const underlay=roadBase||mesh.surface==='sidewalk'||mesh.surface==='curb';
     if(streetOnly?mesh.surface!=='sidewalk':!distantSurfaces.has(mesh.surface)&&!underlay)continue;
-    const surface=underlay&&!streetOnly?(roadBase?'road-base':'urban-ground'):mesh.surface;
+    // The source cuts track strips out of the ballast. Fill those strips with the same material.
+    const surface=mesh.surface==='rail-track'?'rail-ballast':underlay&&!streetOnly?(roadBase?'road-base':'urban-ground'):mesh.surface;
     const span=streetOnly?256:1024;
     const x=Math.floor((chunk.bounds.minX+chunk.bounds.maxX)*.5/span),z=Math.floor((chunk.bounds.minZ+chunk.bounds.maxZ)*.5/span);
     const id=`${city.id}/${streetOnly?'street':'ground'}/${x}/${z}/${surface}`;
