@@ -8,6 +8,7 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { retargetClips } from './retarget-character.mjs';
+import { closeCharacterNeck } from './close-character-neck.mjs';
 
 // Offline only. Inputs are fresh author downloads, never assets from another project.
 if (!process.argv[2]) throw new Error('Usage: node scripts/prepare-character.mjs <prepared-source-directory>');
@@ -139,6 +140,7 @@ for(const node of root.listNodes().filter(n=>n.getSkin()===skin&&n.getMesh())) {
 }
 meshParent.addChild(model.createNode('Human').setMesh(model.createMesh('Human').addPrimitive(joinPrimitives(primitives))).setSkin(skin));
 await model.transform(prune(),dedup(),weld(),unpartition());
+closeCharacterNeck(model,materials.indexOf(faceMaterial));
 const triangles=root.listMeshes().reduce((n,m)=>n+m.listPrimitives().reduce((n,p)=>n+p.getIndices().getCount()/3,0),0);
 const output=resolve('public/models/human');await mkdir(output,{recursive:true});
 await io.write(resolve(output,'character.glb'),model);

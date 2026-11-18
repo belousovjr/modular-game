@@ -73,7 +73,11 @@ test('prepared car keeps its budget, real texture/AO and functional door/wheel p
   const gltf=JSON.parse(bytes.subarray(20,20+bytes.readUInt32LE(12)).toString());assert.ok(manifest.triangles<4000);assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.ok(bytes.length<600000);
   for(const name of ['door/left','door/right'])assert.equal(gltf.nodes.filter((n:{name:string})=>n.name===name).length,1,'Exterior door must be unique: '+name);
   for(const name of ['door/left','door/right','wheel/front/left','wheel/front/right','wheel/rear/left','wheel/rear/right','steering'])assert.ok(gltf.nodes.some((n:{name:string})=>n.name===name),name);
-  for(const material of gltf.materials)assert.ok(material.pbrMetallicRoughness.baseColorTexture);
+  for(const material of gltf.materials){
+    const albedo=material.pbrMetallicRoughness.baseColorTexture;
+    assert.ok(albedo);
+    assert.equal(gltf.samplers[gltf.textures[albedo.index].sampler].minFilter,9729);
+  }
   assert.ok(gltf.materials.some((m:{normalTexture?:unknown})=>m.normalTexture));assert.equal(gltf.textures.length,2);
 });
 

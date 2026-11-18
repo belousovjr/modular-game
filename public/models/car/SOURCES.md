@@ -17,3 +17,5 @@ The original ZIP/GLB is not republished as a standalone asset pack. These checke
 Runtime cabin fit: the body/doors/interior root is 4% taller (Y only), applied after wheel detachment so the tyres keep their shape and physics anchors. Driver guide height is raised by 0.12 m; source mesh/texture budgets are unchanged.
 
 Functional exterior door IDs are assigned only to the source `L Door`/`R Door` nodes. `Interior Door` remains a body/interior node. The builder and runtime reject duplicate exterior door IDs; the original broad suffix match incorrectly gave the interior part the right-door ID.
+
+The broad exterior door faces use the same muted steel-blue paint as the body. Paint contrast from baked occlusion is restrained and the existing 8×8 triangle charts use linear filtering without mipmaps to avoid sampling unrelated charts. Runtime strength of the shared detail texture is reduced. Geometry, pivots and atlas dimensions are preserved.

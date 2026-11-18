@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
+import { refineCarPaint } from './refine-car-paint.mjs';
 const io=new NodeIO().registerExtensions(ALL_EXTENSIONS),source=process.argv[2];
 if(!source)throw Error('Usage: node scripts/prepare-car.mjs <Especial Car_5NL.glb>');
 const d=await io.read(source),r=d.getRoot(),buffer=r.listBuffers()[0];
@@ -87,6 +88,6 @@ for(const n of r.listNodes())if(n.getMesh())for(const p of n.getMesh().listPrimi
 const atlas=d.createTexture('car/albedo-ao').setImage(await sharp(image,{raw:{width:atlasSize,height:atlasSize,channels:3}}).webp({quality:92}).toBuffer()).setMimeType('image/webp');material.setBaseColorTexture(atlas);glass.setBaseColorTexture(atlas);
 const normal=d.createTexture('car/micro-normal').setImage(await readFile('public/textures/city/metal-normal.webp')).setMimeType('image/webp');material.setNormalTexture(normal).setNormalScale(.25);material.getNormalTextureInfo().setTexCoord(1);
 for(const m of r.listMeshes()){const groups=new Map();for(const p of m.listPrimitives()){const list=groups.get(p.getMaterial())??[];list.push(p);groups.set(p.getMaterial(),list);}for(const p of m.listPrimitives())m.removePrimitive(p);for(const ps of groups.values())m.addPrimitive(joinPrimitives(ps));}
-await d.transform(prune(),dedup());await mkdir('public/models/car',{recursive:true});await io.write('public/models/car/car.glb',d);
+await d.transform(prune(),dedup());await refineCarPaint(d,atlas);await mkdir('public/models/car',{recursive:true});await io.write('public/models/car/car.glb',d);
 const metal=await sharp(await readFile('public/textures/city/metal-512.webp')).resize(512,512).removeAlpha().raw().toBuffer();const detail=Buffer.alloc(512*512*4);let average=0;for(let i=0;i<metal.length;i+=3)average+=(metal[i]+metal[i+1]+metal[i+2])/3/(512*512);for(let i=0;i<512*512;i++){const l=(metal[i*3]+metal[i*3+1]+metal[i*3+2])/3;detail[i*4]=Math.max(70,Math.min(186,128+(l-average)*1.8));detail[i*4+1]=128;detail[i*4+2]=150;detail[i*4+3]=128;}await writeFile('public/models/car/detail.png',await sharp(detail,{raw:{width:512,height:512,channels:4}}).png().toBuffer());
 const manifest={source:'Awbmecreations Drivable-Free Low Poly Cars / Especial Car_5NL',url:'https://awbmecreations.itch.io/drivable-free-low-poly-cars',triangles:count,texture:[atlasSize,atlasSize],ao:'8 hemisphere rays per triangle, 0.9 m range; baked into albedo',scale:.98,mirroredX:false,sha256:createHash('sha256').update(await readFile('public/models/car/car.glb')).digest('hex')};await writeFile('public/models/car/manifest.json',JSON.stringify(manifest,null,2)+'\n');console.log(manifest);

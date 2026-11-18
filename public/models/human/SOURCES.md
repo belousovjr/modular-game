@@ -21,7 +21,7 @@ The original seven locomotion/jump clips in character.glb are: **Idle_Loop, Walk
 
 ## Render budget and derivative changes
 
-- 5,970 triangles, one skinned mesh, one primitive/material: one main-pass draw per avatar, plus normal shadow passes.
+- 6,054 triangles, one skinned mesh, one primitive/material: one main-pass draw per avatar, plus normal shadow passes.
 - 65 joints, four influences per vertex, shared source geometry/material/textures across avatar instances; each instance has its own skeleton/animation state.
 - GLB: about 0.85 MB; exact SHA-256 is in manifest.json.
 - One 1024² albedo atlas and one 512² normal atlas, about 6.7 MiB decoded RGBA including mipmaps, shared per scene.
@@ -68,3 +68,5 @@ The final 12% of Car_Enter is smoothly fitted to the first Driving_Loop pose (al
 Flight and swimming extension. After preparing the human and its vehicle animations, run `node scripts/prepare-locomotion-animations.mjs /path/to/UAL1_Standard.glb /path/to/UAL1.glb`. The script retargets `Swim_Fwd_Loop` and `Swim_Idle_Loop` from Quaternius Universal Animation Library Standard (CC0); the archive and SHA-256 are in the manifest. Jog and sprint use the distinct existing Quaternius clips. The three flight clips are original poses authored on the project rig. The output remains a single skinned mesh with the same textures and joints.
 
 Ground postures use Quaternius `Crouch_Fwd_Loop`, `Crouch_Idle_Loop`, `Crawl_Fwd_Loop` and `Crawl_Idle_Loop` from the in-place UAL1 Source GLB (CC0). The public source mirror and input checksum are recorded in the manifest. These four pose loops are baked at 30 samples per second and interpolated by Babylon. The normal atlas uses lossless WebP with a pixel-equality check to keep the GLB under its existing budget. The existing Mixamo clip is used for the overturned-car exit.
+
+The retained neck edge is closed with a 28-edge under-collar extension attached to the upper spine. It uses the existing skin atlas, a single skinned primitive and the current animation rig.

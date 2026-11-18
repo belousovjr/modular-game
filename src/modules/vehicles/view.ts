@@ -23,7 +23,7 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
     const container=await LoadAssetContainerAsync(bytes,scene,{pluginExtension:'.glb'});if(stopped){container.dispose();return;}
     scope.onDispose(()=>container.dispose());container.addAllToScene();
     const detail=new Texture(`${import.meta.env.BASE_URL}models/car/detail.png`,scene,false,false);scope.onDispose(()=>detail.dispose());detail.coordinatesIndex=1;
-    for(const material of container.materials)if(material instanceof PBRMaterial&&material.name==='car/textured'){material.detailMap.texture=detail;material.detailMap.isEnabled=true;material.detailMap.diffuseBlendLevel=.65;material.detailMap.bumpLevel=0;material.detailMap.roughnessBlendLevel=.35;}
+    for(const material of container.materials)if(material instanceof PBRMaterial&&material.name==='car/textured'){material.detailMap.texture=detail;material.detailMap.isEnabled=true;material.detailMap.diffuseBlendLevel=.24;material.detailMap.bumpLevel=0;material.detailMap.roughnessBlendLevel=.15;}
     for(const node of container.rootNodes)node.parent=root;
     const nodes=root.getDescendants().filter((n):n is TransformNode=>n instanceof TransformNode);
     left=nodes.find(n=>n.name==='door/left');right=nodes.find(n=>n.name==='door/right');steering=nodes.find(n=>n.name==='steering');

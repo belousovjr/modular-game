@@ -34,6 +34,36 @@ test('human asset stays within the render budget with one shared rig and baked l
 });
 
 
+test('skin geometry is closed under the shirt collar', async () => {
+  const { NodeIO } = await import('@gltf-transform/core');
+  const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
+  const bytes = readFileSync(new URL('../public/models/human/character.glb', import.meta.url));
+  const model = await new NodeIO().registerExtensions(ALL_EXTENSIONS).readBinary(bytes);
+  const primitive = model.getRoot().listMeshes()[0].listPrimitives()[0];
+  const position = primitive.getAttribute('POSITION');
+  const uv = primitive.getAttribute('TEXCOORD_0');
+  const indices = primitive.getIndices()?.getArray();
+  assert.ok(position && uv && indices);
+  const key = (vertex: number) => {
+    const [x, y, z] = position.getElement(vertex, []);
+    const [u, v] = uv.getElement(vertex, []);
+    if (Math.abs(x) >= .15 || y <= 1.42 || y >= 1.56 || u < .5 || v < .5) return undefined;
+    return [x, y, z].map(value => Math.round(value * 1e5)).join(',');
+  };
+  const edges = new Map<string, number>();
+  for (let i = 0; i < indices.length; i += 3) {
+    const triangle = [key(indices[i]), key(indices[i + 1]), key(indices[i + 2])];
+    for (let side = 0; side < 3; side++) {
+      const a = triangle[side], b = triangle[(side + 1) % 3];
+      if (!a || !b || a === b) continue;
+      const edge = [a, b].sort().join('/');
+      edges.set(edge, (edges.get(edge) ?? 0) + 1);
+    }
+  }
+  assert.ok(edges.size > 100);
+  assert.ok([...edges.values()].every(count => count === 2));
+});
+
 test('native animation weights crossfade without a pose snap and stop faded groups', async () => {
   const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
   const {Scene}=await import('@babylonjs/core/scene.js');

@@ -9,5 +9,5 @@
   "ao": "8 hemisphere rays per triangle, 0.9 m range; baked into albedo",
   "scale": 0.98,
   "mirroredX": false,
-  "sha256": "78e298b30367870d6a2c66e6fa0ff32638247e9055f779f045b587e56f2d1ec7"
+  "sha256": "55ecfd170fc43edbb14515d290cb350d71581f41ac799f1270abb0352d949f3a"
 }
