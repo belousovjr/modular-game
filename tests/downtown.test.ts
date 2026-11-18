@@ -341,7 +341,7 @@ test('ordinary skyline omits all trim and near detail is separately bounded and 
   assert.throws(()=>generateCity({...citySource,chunks:[{...base,details:[{...detail,meshes:[{surface:'city-stone-detail',positions:[0,0,0],indices:[0,1,2]}]}]}]}),/triangles/);
 });
 
-test('stepped landmark LODs preserve all windowed tiers and roof parts',async()=>{
+test('stepped landmarks keep one silhouette with all windowed tiers and roof parts',async()=>{
   const {cityTemplates,toCityGrid}=await import('../src/modules/world/city-templates.ts');
   const expectedParts=new Map([['city/willis',12],['city/trump',5],['city/wrigley',5],['city/tribune',8]]);
   for(const [id,count] of expectedParts){
@@ -351,10 +351,24 @@ test('stepped landmark LODs preserve all windowed tiers and roof parts',async()=
     for(const placement of placements){
       const model=toCityGrid(template).build(placement.parameters);
       assert.equal(model.hideDistance,1200);
-      assert.deepEqual(model.levels.map(level=>level.distance),[0,24]);
-      assert.equal(model.levels[1].parts.length,count);
-      assert.equal(model.levels[0].parts.length,count+2);
-      assert.deepEqual(model.levels[1].parts,model.levels[0].parts.slice(0,count));
+      assert.deepEqual(model.levels.map(level=>level.distance),[0]);
+      const {parts}=model.levels[0];
+      assert.equal(parts.length,count);
+      const edge=(part:typeof parts[number],axis:number,sign:number)=>(part.position?.[axis]??0)+sign*part.size[axis]/2;
+      if(id==='city/willis'){
+        for(let i=0;i<9;i++){
+          if(i%3<2)assert.equal(edge(parts[i],0,1),edge(parts[i+1],0,-1));
+          if(i<6)assert.equal(edge(parts[i],2,1),edge(parts[i+3],2,-1));
+        }
+      }else{
+        for(let i=0;i<2;i++)assert.equal(edge(parts[i],1,1),edge(parts[i+1],1,-1));
+      }
+      if(id==='city/wrigley'){
+        const top=model.levels[0].parts[2],crown=model.levels[0].parts[count-1];
+        assert.ok(top.position&&crown.position);
+        assert.equal(crown.position[1]-crown.size[1]/2,top.position[1]+top.size[1]/2);
+        assert.ok(crown.size[1]>=placement.parameters.height*.04);
+      }
     }
   }
   const marina=cityTemplates.find(t=>t.id==='city/marina');assert.ok(marina);
@@ -589,7 +603,7 @@ test('the Art Institute courtyard is open below the surrounding facade and landm
       const count={willis:10,trump:4,wrigley:5,tribune:8}[profile];assert.ok(count);
       assert.equal(volumes.length,count);
       for(let i=0;i<count;i++){
-        const part=model.levels[1].parts[i],volume=volumes[i],y=p.position[1]+(part.position?.[1]??0);
+        const part=model.levels[0].parts[i],volume=volumes[i],y=p.position[1]+(part.position?.[1]??0);
         assert.equal(volume.minY,y-part.size[1]/2);
         assert.equal(volume.maxY,y+part.size[1]/2);
         const ring=volume.outline;assert.ok(ring);

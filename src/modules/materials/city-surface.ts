@@ -59,35 +59,39 @@ export class CityFacade extends MaterialPluginBase {
       CUSTOM_FRAGMENT_BEFORE_FOG:'color.rgb+=cityWindowGlow;',
       CUSTOM_FRAGMENT_BEFORE_LIGHTS:`
         vec3 cityWindowGlow=vec3(0.);
+        // Use quad derivatives before branching across facade, trim and roof faces.
+        vec2 footprint=max(fwidth(vCityUV),vec2(.002));
+        #ifdef NORMAL
+        float wallY=abs(normalize(vNormalW).y);
+        #else
+        float wallY=abs(normalW.y);
+        #endif
         if(vCityUV.x<-.5){
-          if(vCityUV.x<-2.5)baseColor.rgb*=1.12;
+          if(vCityUV.x<-2.5)baseColor.rgb*=1.21;
           else if(vCityUV.x<-1.5)diffuseColor=vec3(.9);
           else baseColor.rgb*=.67;
-        } else if(abs(normalW.y)<.4){
+        } else if(wallY<.4){
           vec2 cell=vCityUV;
           vec2 uv=abs(fract(cell)-.5);
-          vec2 edge=max(fwidth(cell),vec2(.002));
+          float windowResolution=1.-smoothstep(.30,1.0,max(footprint.x,footprint.y));
+          vec2 edge=min(footprint,vec2(.095));
           float groundFloor=1.-step(1.,cell.y);
           #if !defined(FITTED_SURFACE_UV) && !defined(RADIAL_FACADE_UV)
           groundFloor=1.-step(1.,vSurfaceMeters.y*(2./3.5));
-          float windowResolution=1.-smoothstep(.30,1.0,max(edge.x,edge.y));
-          edge=min(edge,vec2(.095));
           #endif
           vec2 opening=mix(vec2(.32,.34),vec2(.40,.39),groundFloor);
           float window=step(0.,cell.y)*(1.-smoothstep(opening.x-edge.x,opening.x+edge.x,uv.x))*(1.-smoothstep(opening.y-edge.y,opening.y+edge.y,uv.y));
-          #if !defined(FITTED_SURFACE_UV) && !defined(RADIAL_FACADE_UV)
           window*=windowResolution;
-          #endif
           float detail=(1.-smoothstep(.04,.16,max(edge.x,edge.y)))*(1.-smoothstep(12.,32.,length(vEyePosition.xyz-vPositionW)));
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
-          vec3 glazing=baseColor.rgb*vec3(.20,.29,.34)+vec3(.035,.055,.065);
+          vec3 glazing=baseColor.rgb*vec3(.22,.33,.38)+vec3(.035,.059,.072);
           baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));
           if(cityNight>.001){
           vec2 room=floor(cell)+floor(vPositionW.xz/64.);
           float occupied=fract(sin(dot(room,vec2(12.9898,78.233)))*43758.5453);
           vec3 warm=mix(vec3(.58,.54,.46),vec3(.49,.52,.53),step(.985,occupied));
           float interior=(.45+.35*fract(cell.y))*(.85+.15*step(.15,fract(cell.y*8.)));
-          float bright=mix(.25,1.,step(.975,occupied));
+          float bright=mix(.25,1.5,step(.975,occupied));
           cityWindowGlow=warm*cityNight*window*(1.-mullion*.9)*smoothstep(.87,.90,occupied)*interior*bright*1.0;
           }
         }

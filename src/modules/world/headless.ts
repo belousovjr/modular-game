@@ -19,23 +19,33 @@ const buildingPart=(x:number,y:number,z:number,w:number,h:number,d:number)=>({
 
 export function steppedBuildingParts(profile:string,width:number,depth:number,height:number) {
   if(profile==='willis'){
+    // Quantize shared edges before deriving centres and sizes.
+    const edges=(span:number)=>{
+      const modules=Math.max(3,Math.round(span/.25));
+      const outer=modules*.125;
+      const side=Math.round(modules/3)*.25;
+      return [-outer,-outer+side,outer-side,outer];
+    };
+    const x=edges(width),z=edges(depth);
     return [.52,.72,.92,.72,1,.92,.52,.72,.52].map((scale,i)=>{
-      const h=height*scale;
-      return buildingPart((i%3-1)*width/3,h/2,(Math.floor(i/3)-1)*depth/3,width/3,h,depth/3);
+      const column=i%3,row=Math.floor(i/3);
+      const h=snapCityMeasure(height*scale,.25);
+      return buildingPart((x[column]+x[column+1])/2,h/2,(z[row]+z[row+1])/2,x[column+1]-x[column],h,z[row+1]-z[row]);
     });
   }
   if(profile==='trump'||profile==='wrigley'||profile==='tribune'){
-    return [
-      buildingPart(0,height*.27,0,width,height*.54,depth),
-      buildingPart(0,height*.69,0,width*.72,height*.3,depth*.72),
-      buildingPart(0,height*.92,0,width*.42,height*.16,depth*.42),
-    ];
+    const ends=[0,.54,.84,1].map(scale=>snapCityMeasure(height*scale,.25));
+    return [1,.72,.42].map((scale,i)=>
+      buildingPart(0,(ends[i]+ends[i+1])/2,0,width*scale,ends[i+1]-ends[i],depth*scale));
   }
   return null;
 }
 
 export function steppedBuildingCrownParts(profile:string,width:number,depth:number,height:number) {
-  if(profile==='wrigley')return [buildingPart(0,height*1.015,0,width*.24,height*.03,depth*.24)];
+  if(profile==='wrigley'){
+    const crownHeight=Math.max(.25,snapCityMeasure(height*.045,.25));
+    return [buildingPart(0,snapCityMeasure(height,.25)+crownHeight/2,0,width*.24,crownHeight,depth*.24)];
+  }
   if(profile==='tribune')return [-1,1].flatMap(x=>[-1,1].map(z=>
     buildingPart(x*width*.22,height*.97,z*depth*.22,width*.08,height*.12,depth*.08)));
   return [];
