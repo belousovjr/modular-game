@@ -4,6 +4,9 @@ import { geometryModule } from '../geometry/index.ts';
 import { createMaterials } from './resources.ts';
 import { MaterialsPanel } from './panel.tsx';
 
+export { FIRST_WINDOW_THRESHOLD } from './city-surface.ts';
+export { activeStreetLampPhases, streetLampPhase } from './street-lamp.ts';
+
 export const materialsModule = defineModule({
   id: 'materials', title: 'Материалы и текстуры', category: 'Рендеринг', requires: { geometry: geometryModule },
   setup({ core, deps, scope }) {

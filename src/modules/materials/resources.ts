@@ -8,6 +8,7 @@ import type { geometryModule } from '../geometry/index.ts';
 import { SurfaceScale } from './surface-scale.ts';
 import { surfaces } from './palette.ts';
 import { WaterSurface, CityFacade } from './city-surface.ts';
+import {activeStreetLampPhases, StreetLamp} from './street-lamp.ts';
 import {NightField} from './night-field.ts';
 import type {BaseTexture} from '@babylonjs/core/Materials/Textures/baseTexture.js';
 
@@ -23,6 +24,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   const materials = new Map<string, readonly StandardMaterial[]>();
   let stopped = false;
   const facades:CityFacade[]=[];
+  let streetLamp: StreetLamp | undefined;
   const nightFields:NightField[]=[];let fieldActive=false;
   let snapshot: MaterialsSnapshot = { materials: 0, textures: 0, loading: 0, failed: 0, estimatedBytes: 0, errors: [] };
   function publish() {
@@ -88,7 +90,10 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     if (surface.startsWith('city-')) facades.push(new CityFacade(material));
     if(['road','sidewalk','park-path','rail-ballast','curb','terrain','urban-ground','marking'].includes(surface))nightFields.push(new NightField(material));
     if (surface==='signal-red') material.emissiveColor=Color3.FromHexString('#a3200b');
-    if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
+    if (surface === 'lamp-head') {
+      material.emissiveColor = material.diffuseColor.clone();
+      streetLamp = new StreetLamp(material);
+    }
     if (style.texture) {
       new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'),surface==='terrain');
       const family = style.texture === 'building-shell' ? 'brick' : style.texture;
@@ -114,7 +119,8 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
       if(stopped)throw new Error('Материалы остановлены');
       if(value!==null&&(!Number.isFinite(value)||value<0||value>1))throw new Error('Night factor must be between 0 and 1');
       for(const facade of facades)facade.night=value??0;
-      const lamp=materials.get('lamp-head')?.[0];if(lamp)lamp.emissiveColor=value===null?Color3.FromHexString(surfaces['lamp-head'].color):Color3.FromHexString('#ffd7a0').scale(.1+.9*value);
+      if (streetLamp) streetLamp.activePhases = value === null ? 3 : activeStreetLampPhases(value);
+      const lamp=materials.get('lamp-head')?.[0];if(lamp)lamp.emissiveColor=value===null?Color3.FromHexString(surfaces['lamp-head'].color):Color3.FromHexString('#ffd7a0');
     },
     subscribe(listener: () => void) {
       if (stopped) throw new Error('Материалы остановлены');

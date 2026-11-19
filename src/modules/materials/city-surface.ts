@@ -17,6 +17,8 @@ export class WaterSurface extends MaterialPluginBase {
     normalW=normalize(normalW+vec3(slope.x,0.,slope.y)*(.035*waterDetail));
   `}:null;}
 }
+export const FIRST_WINDOW_THRESHOLD = .24;
+
 export class CityFacade extends MaterialPluginBase {
   constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false,RADIAL_FACADE_UV:false},true,true);this.doNotSerialize=true;}
   night=0;
@@ -91,13 +93,14 @@ export class CityFacade extends MaterialPluginBase {
           float mullion=(1.-smoothstep(.012-edge.x,.012+edge.x,uv.x))*detail;
           vec3 glazing=baseColor.rgb*vec3(.22,.33,.38)+vec3(.035,.059,.072);
           baseColor.rgb=mix(baseColor.rgb,glazing,window*(1.-mullion*.65));
-          if(cityNight>.001){
+          if(cityNight>=${FIRST_WINDOW_THRESHOLD}){
           vec2 room=floor(cell)+floor(vPositionW.xz/64.);
           float occupied=fract(sin(dot(room,vec2(12.9898,78.233)))*43758.5453);
+          float switchedOn=step(${FIRST_WINDOW_THRESHOLD}+.55*fract(occupied*153.7),cityNight);
           vec3 warm=mix(vec3(.58,.54,.46),vec3(.49,.52,.53),step(.985,occupied));
           float interior=(.45+.35*fract(cell.y))*(.85+.15*step(.15,fract(cell.y*8.)));
           float bright=mix(.25,1.5,step(.975,occupied));
-          cityWindowGlow=warm*cityNight*window*(1.-mullion*.9)*smoothstep(.87,.90,occupied)*interior*bright*1.0;
+          cityWindowGlow=warm*switchedOn*window*(1.-mullion*.9)*smoothstep(.87,.90,occupied)*interior*bright*1.0;
           }
         }
       `,
