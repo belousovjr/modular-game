@@ -171,6 +171,9 @@ export const worldModule = defineModule({
         for(const surface of surfaces) {
           const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
+          if ('trim' in surface && surface.trim) {
+            mesh.setVerticesData('cityTrim', new Float32Array(surface.trim), false, 4);
+          }
           mesh.metadata={...mesh.metadata,citySurface:material,buildingBand:distant?band.id:undefined,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(material)};mesh.freezeWorldMatrix();view.meshes.push(mesh);
         }
         if(distant)view.visibility=deps.rendering.createVisibility(meshes,owner);

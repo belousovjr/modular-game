@@ -66,9 +66,14 @@ export class CityFacade extends MaterialPluginBase {
         #else
         float wallY=abs(normalW.y);
         #endif
-        if(vCityUV.x<-.5){
-          if(vCityUV.x<-2.5)baseColor.rgb*=1.21;
-          else if(vCityUV.x<-1.5)diffuseColor=vec3(.9);
+        #ifdef CITY_FACADE_TRIM
+        float role = cityTrimRole;
+        #else
+        float role = vCityUV.x;
+        #endif
+        if(role<-.5){
+          if(role<-2.5)baseColor.rgb*=1.21;
+          else if(role<-1.5)diffuseColor=vec3(.9);
           else baseColor.rgb*=.67;
         } else if(wallY<.4){
           vec2 cell=vCityUV;

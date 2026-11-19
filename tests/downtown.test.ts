@@ -539,7 +539,7 @@ test('skyline batches preserve fitted UVs and geometry across tile boundaries',a
   assert.equal(result.length,2);
   assert.deepEqual(result[0].buildingIds,['a','b']);
   assert.deepEqual(result[0].meshes,[{surface:wall.surface,positions:[...wall.positions,...next.positions],
-    indices:[0,1,2,3,4,5],uvs:[...wall.uvs,...next.uvs]}]);
+    indices:[0,1,2,3,4,5],uvs:[...wall.uvs,...next.uvs],trim:Array(24).fill(0)}]);
 });
 
 test('street and park tree trunks share the visual placement and keep the plaza route open',()=>{
@@ -612,4 +612,29 @@ test('the Art Institute courtyard is open below the surrounding facade and landm
       }
     }
   }
+});
+
+test('coarse facades project authored trim onto existing walls and leave the roof vertices alone', async () => {
+  const {collectFacadeBelts, facadeTrim} = await import('../src/modules/world/facade-trim.ts');
+  let walls = 0, withBelts = 0, caps = 0, degenerate = 0;
+  for (const chunk of citySource.chunks) {
+    const belts = collectFacadeBelts(chunk.details ?? []);
+    for (const mesh of chunk.meshes) {
+      if (!mesh.surface.startsWith('city-') || !mesh.uvs) continue;
+      const trim = facadeTrim(mesh, belts);
+      assert.equal(trim.length, mesh.positions.length / 3 * 4);
+      for (let i = 0; i < trim.length; i += 4) {
+        if (mesh.uvs[i / 2] < 0) {
+          assert.equal(trim[i + 1], 0);
+          caps++;
+        } else {
+          if (!trim[i + 1]) { degenerate++; continue; }
+          assert.ok(trim[i] >= 1 && trim[i + 1] > 0);
+          walls++;
+          if (trim[i + 3] > trim[i + 2]) withBelts++;
+        }
+      }
+    }
+  }
+  assert.ok(walls > 50000 && withBelts > 1000 && caps > 1000 && degenerate < 100);
 });
