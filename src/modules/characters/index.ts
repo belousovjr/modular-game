@@ -5,11 +5,13 @@ import { CharacterPanel } from './panel.tsx';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
+import { trackLocalCheckpoint } from '../../core/local-checkpoint.ts';
+import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
-import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
+import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
@@ -17,9 +19,18 @@ export const charactersModule = defineModule({
   requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule },
   setup({ core, deps, scope }) {
     let stopped=false;
-    const authority = createCharacterAuthority(deps.world.collision, deps.simulation.snapshot().tick);
+    const createAuthority = createCharacterAuthorityFactory(deps.world.collision);
+    const start = deps.simulation.snapshot().tick;
+    const position = readLocalPosition();
+    const authority = createAuthority(start, undefined, position);
     const connection = createLocalConnection(authority);
     scope.onDispose(connection.close);
+    let saved=connection.snapshot();
+    trackLocalCheckpoint(core.onFrame,scope,()=>{
+      const next=connection.snapshot();
+      if (next.x===saved.x && next.y===saved.y && next.z===saved.z) return;
+      if (saveLocalPosition(next)) saved=next;
+    });
     let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
     deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);

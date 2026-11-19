@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
-import { createCharacterAuthority, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
+import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
 import { createCollisionWorld, type CollisionWorld } from '../src/modules/world/headless.ts';
 import { generateWorldRegions } from '../src/modules/world-generation/headless.ts';
 import { scheme,regions,insertions } from '../src/modules/world/scheme.ts';
@@ -9,6 +9,19 @@ import { scheme,regions,insertions } from '../src/modules/world/scheme.ts';
 const world: CollisionWorld = { bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},baseHeight:0,slopeX:0.015,spawn:{x:0,z:0},
   blockers:[{id:'wall',minX:2,maxX:3,minZ:-5,maxZ:5,minY:-2,maxY:10}],floors:[{minX:-10,maxX:1,minZ:1,maxZ:5,elevation:0.2}] };
 const command = (sequence=1,x=0,z=1,run=false): MoveCommand => ({type:'move',characterId:'local-player',sequence,tick:sequence-1,x,z,run,jump:false});
+
+test('local resume uses a valid XYZ and falls back if saved coordinates are unsafe', () => {
+  const create = createCharacterAuthorityFactory(world);
+  const restored = create(20,undefined,{x:-4,y:5,z:4});
+  assert.deepEqual([restored.snapshot().x,restored.snapshot().y,restored.snapshot().z],[-4,5,4]);
+  assert.equal(restored.snapshot().grounded,false);
+  restored.step(21);
+  assert.ok(restored.snapshot().y<5);
+  for (const position of [{x:2.5,y:0,z:0},{x:101,y:0,z:0},{x:0,y:-5,z:0},{x:0,y:NaN,z:0}]) {
+    const fallback = create(20,undefined,position).snapshot();
+    assert.deepEqual([fallback.x,fallback.y,fallback.z],[0,0,0]);
+  }
+});
 
 test('crouch and crawl use posture speeds and clearance, and prone turns only when moving',()=>{
   const flat={...world,slopeX:0,floors:[],blockers:[{id:'low-ceiling',minX:.6,maxX:3,minZ:-1,maxZ:1,minY:.96,maxY:2.4}]};

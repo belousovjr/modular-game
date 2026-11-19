@@ -44,7 +44,7 @@ void main(){
  gl_FragColor=vec4(color,1.);
 }`;
 
-export function createAtmosphere(scene:Scene,lighting:ReturnType<typeof lightingModule.setup>,materials:ReturnType<typeof materialsModule.setup>,scope:Scope){
+export function createAtmosphere(scene:Scene,lighting:Pick<ReturnType<typeof lightingModule.setup>,'getSettings'|'getSunLight'|'subscribe'>,materials:ReturnType<typeof materialsModule.setup>,scope:Scope){
   const old={mode:scene.fogMode,density:scene.fogDensity,color:scene.fogColor.clone(),clear:scene.clearColor.clone()};
   scope.onDispose(()=>{scene.fogMode=old.mode;scene.fogDensity=old.density;scene.fogColor.copyFrom(old.color);scene.clearColor.copyFrom(old.clear);materials.setNightFactor(null);});
   const sky=MeshBuilder.CreateSphere('atmosphere/sky',{diameter:20000,segments:16},scene);scope.onDispose(()=>sky.dispose());

@@ -113,7 +113,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  return (startTick=0,spawn=defaultSpawn)=>{
+  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
@@ -193,7 +193,11 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       if(top>=y-.3&&top<=y+.3){y=top;grounded=true;}
     }
   }
-  if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
+  if (resume && [resume.x,resume.y,resume.z].every(Number.isFinite) && Math.abs(resume.y)<=10000 &&
+      !freeBlocked(resume.x,resume.z,resume.y) && Number.isFinite(ground(resume.x,resume.z,resume.y+1e-7))) {
+    ({x,y,z}=resume);
+    grounded=Math.abs(y-support(x,z))<1e-7;
+  } else if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
   return {
     setVehicleFrame(frame:VehicleCharacterFrame|null){
       if(frame){
