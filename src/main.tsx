@@ -1,7 +1,7 @@
 import '@radix-ui/themes/styles.css';
 import './style.css';
 import { ChevronDown, ChevronRight, Info, Layers, MoreHorizontal, Play, RotateCcw } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Observable } from '@babylonjs/core/Misc/observable';
 import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip, Tabs, DropdownMenu } from '@radix-ui/themes';
@@ -65,6 +65,8 @@ function App() {
     return { ids: selectModules(modules, readSelection(raw, modules, defaultModules), preferences.statuses), status };
   });
   const [selected, setSelected] = useState(initial.ids);
+  const [pendingSelection, setPendingSelection] = useState<readonly string[] | null>(null);
+  const deferredSelection = useDeferredValue(pendingSelection);
   const [status, setStatus] = useState(initial.status);
   const [modulesOpen, setModulesOpen] = useState(() => readWindow('modules').open);
   const [ready, setReady] = useState(false);
@@ -73,7 +75,8 @@ function App() {
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<ReturnType<typeof createViewport> | null>(null);
-  const enabled = new Set(selectModules(modules, selected, preferences.statuses));
+  const enabled = new Set(selectModules(modules, pendingSelection ?? selected, preferences.statuses));
+  const changingModules = pendingSelection !== null;
 
 
   useEffect(() => {
@@ -97,6 +100,7 @@ function App() {
   }, [initial, panels, fpsUpdates, testUpdates]);
 
   async function runTests(ids?: readonly string[]) {
+    if (changingModules) return;
     try { await viewport.current?.tests.run(ids); }
     catch (error) { setStatus(`Не удалось запустить тест: ${error instanceof Error ? error.message : String(error)}`); }
   }
@@ -115,12 +119,14 @@ function App() {
   function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
     const currentViewport = viewport.current;
     if (!currentViewport || testRunning) return;
+    setPendingSelection(null);
+    const applied = new Set(selected);
     try { settingsHistory.transaction(() => {
       const next = selectModules(modules, ids, nextPreferences.statuses);
-      if (resetCamera || next.length !== enabled.size || next.some(id => !enabled.has(id))) {
+      if (resetCamera || next.length !== applied.size || next.some(id => !applied.has(id))) {
         try { currentViewport.restart(modules, next, resetCamera); }
         catch (error) {
-          try { currentViewport.restart(modules, [...enabled]); }
+          try { currentViewport.restart(modules, selected); }
           catch { setReady(false); }
           throw error;
         }
@@ -133,11 +139,28 @@ function App() {
     }); } catch (error) { setStatus(`Не удалось изменить набор: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
+  const applyDeferredSelection = useEffectEvent((ids: readonly string[]) => {
+    if (pendingSelection === ids && ready && !testRunning) syncModules(ids);
+  });
+  useEffect(() => {
+    if (!deferredSelection || deferredSelection !== pendingSelection || !ready || testRunning) return;
+    // Give the checkbox a paint before synchronous Babylon scene creation.
+    let applyFrame: number | undefined;
+    const paintFrame = requestAnimationFrame(() => {
+      applyFrame = requestAnimationFrame(() => applyDeferredSelection(deferredSelection));
+    });
+    return () => {
+      cancelAnimationFrame(paintFrame);
+      if (applyFrame !== undefined) cancelAnimationFrame(applyFrame);
+    };
+  }, [deferredSelection, pendingSelection, ready, testRunning]);
+
   function restoreSettings() {
     if (!viewport.current) return;
+    setPendingSelection(null);
     const nextPreferences = readModulePreferences(localStorage.getItem(PREFERENCES_STORAGE_KEY), modules);
     const ids = selectModules(modules, readSelection(localStorage.getItem(STORAGE_KEY), modules, defaultModules), nextPreferences.statuses);
-    if (ids.length !== enabled.size || ids.some(id => !enabled.has(id))) viewport.current.restart(modules, ids);
+    if (ids.length !== selected.length || ids.some(id => !selected.includes(id))) viewport.current.restart(modules, ids);
     setPreferences(nextPreferences);
     setSelected(ids);
   }
@@ -153,7 +176,7 @@ function App() {
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
       <FpsDisplay updates={fpsUpdates} />
       <Box className="module-panel">
-        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testRunning} restore={restoreSettings} /></Flex>
+        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testRunning || changingModules} restore={restoreSettings} /></Flex>
         <Box id="status" role="status" aria-live="polite">
           {status && <Callout.Root size="1" mt="2"><Callout.Text>{status}</Callout.Text></Callout.Root>}
         </Box>
@@ -161,7 +184,7 @@ function App() {
           <section id="modules-window" className="module-list" hidden={!modulesOpen} aria-label="Модули">
           <Flex direction="column" gap="3">
             <Flex align="center" justify="between" gap="2">
-            <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
+            <Button id="test-all" size="1" variant="soft" disabled={!ready || changingModules || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
               <Tooltip content="Вернуть стартовый набор, статусы и камеру"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить модули к дефолтам" disabled={!ready} onClick={() => syncModules(defaultModules, { tab: 'working', statuses: {} }, true)}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
             </Flex>
             <Tabs.Root activationMode="manual" value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
@@ -203,7 +226,11 @@ function App() {
                     <Flex align="center" gap="2">
                       <Checkbox checked={enabled.has(module.id)} disabled={!ready || preferences.tab !== 'working' || !!module.required || consumers.length > 0 || unavailable}
                         onCheckedChange={checked => {
-                          syncModules(checked === true ? [...enabled, module.id] : [...enabled].filter(id => id !== module.id));
+                          setPendingSelection(previous => {
+                            const current = previous ?? selected;
+                            const next = checked === true ? [...current, module.id] : current.filter(id => id !== module.id);
+                            return selectModules(modules, next, preferences.statuses);
+                          });
                         }} />
                       <span className="module-title">{module.title}</span>
                     </Flex>
@@ -211,7 +238,7 @@ function App() {
                   </Tooltip>
                   </Flex>
                   <Flex className="module-actions" align="center" gap="2">
-                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
+                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || changingModules || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   {panel && <Tooltip content={`Детали: ${module.title}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${module.title}`}
                     aria-expanded={panel.open} onClick={() => panels.toggle(module.id)}><Info size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   <DropdownMenu.Root>
