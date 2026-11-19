@@ -121,15 +121,32 @@ export const buildingInteriorsModule = defineModule({
           } else if (!shell) {
             const resources = createScope();
             try {
-              const {positions,indices,slabs} = buildInterior(source);
+              const {positions,indices,slabs,elevatorDoors} = buildInterior(source);
               const mesh = deps.geometry.createSurfaceMesh(`building-interiors/${id}`, 'interior-concrete', positions, indices, resources);
               mesh.metadata = {...mesh.metadata, buildingInterior:true, shadowCaster:false, shadowReceiver:false};
               mesh.freezeWorldMatrix();
               if (slabs.indices.length) {
                 floors = deps.geometry.createSurfaceMesh(`building-interiors/${id}/floors`,
                   'interior-concrete', slabs.positions, slabs.indices, resources);
+                if (slabs.stairRims.length) {
+                  const colors=new Float32Array(floors.getTotalVertices()*4).fill(1);
+                  for (const start of slabs.stairRims) {
+                    for (let i=start*4;i<(start+16)*4;i+=4) {
+                      colors[i]=.57;
+                      colors[i+1]=.58;
+                      colors[i+2]=.60;
+                    }
+                  }
+                  floors.setVerticesData('color',colors,false,4);
+                }
                 floors.metadata = {...mesh.metadata, buildingInteriorFloors:true};
                 floors.freezeWorldMatrix();
+              }
+              if (elevatorDoors.indices.length) {
+                const doors = deps.geometry.createSurfaceMesh(`building-interiors/${id}/elevators`,
+                  'interior-door',elevatorDoors.positions,elevatorDoors.indices,resources,elevatorDoors.uvs);
+                doors.metadata = {...mesh.metadata};
+                doors.freezeWorldMatrix();
               }
               shell = resources;
             } catch (error) {

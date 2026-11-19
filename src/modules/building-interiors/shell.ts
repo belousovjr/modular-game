@@ -1,6 +1,6 @@
 import { DOOR_FRAME_TRIM, type BuildingProfile, type BuildingInteriorSource } from '../world/index.ts';
 
-type Point = readonly [number, number];
+import { cutFloor, floorOpenings, openingCorners, type Point } from './floor-openings.ts';
 const WALL_DEPTH = .25;
 const SLAB_DEPTH = .25;
 export const ENTRANCE_FLOOR_OFFSET = .01; // Avoid a coplanar surface with the terrain at the threshold.
@@ -58,8 +58,8 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     const scale = Math.min(WALL_DEPTH / Math.max(.5, 1+a[0]*b[0]+a[1]*b[1]), limit / (Math.hypot(x,z) || 1));
     return [point[0] + x*scale, point[1] + z*scale];
   }
-  function vertex(point: readonly number[], y: number) {
-    positions.push(ox + point[0]*cos + point[1]*sin, oy + y, oz - point[0]*sin + point[1]*cos);
+  function vertex(point: readonly number[], y: number, target = positions) {
+    target.push(ox + point[0]*cos + point[1]*sin, oy + y, oz - point[0]*sin + point[1]*cos);
   }
   function quad(a: readonly number[], ay: number, b: readonly number[], by: number,
     c: readonly number[], cy: number, d: readonly number[], dy: number) {
@@ -127,21 +127,89 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     }
   }
 
-  const ceilingStart = indices.length;
-  cap({positions,indices}, top, false);
-  const slabs = {positions:[] as number[], indices:[] as number[]};
-  function slab(height: number, depth: number) {
-    cap(slabs, height, true);
-    cap(slabs, height-depth, false);
-  }
-  let floor = profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
-  slab(floor, SLAB_DEPTH);
+  const slabs = {positions:[] as number[], indices:[] as number[], stairRims:[] as number[]};
+  const ground = profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
+  let floor = ground;
+  cap(slabs, floor, true);
+  cap(slabs, floor-SLAB_DEPTH, false);
+  const upperFloors: {height:number;depth:number}[] = [];
   for (let row = 1; row < profile.floorCount; row++) {
     const next = profile.facadeBase + row*profile.floorHeight;
     const depth = Math.min(SLAB_DEPTH, next-floor-MIN_HEADROOM);
     if (depth <= 0 || top-next < MIN_HEADROOM) continue;
-    slab(next, depth);
+    upperFloors.push({height:next,depth});
     floor = next;
   }
-  return {positions, indices, ceilingStart, slabs};
+  const localFootprint: Point[] = [];
+  for (const i of footprint) {
+    const x=facade.positions[i*3]-ox, z=facade.positions[i*3+2]-oz;
+    localFootprint[i]=[x*cos-z*sin,x*sin+z*cos];
+  }
+  const openings = upperFloors.length ? floorOpenings(profile,localFootprint,footprint) : [];
+  const cut = openings.length ? cutFloor(localFootprint,footprint,openings) : [];
+  const slabVertex = (point: Point, y: number) => vertex(point,y,slabs.positions);
+  for (const {height,depth} of upperFloors) {
+    if (!openings.length) {
+      cap(slabs,height,true);
+      cap(slabs,height-depth,false);
+      continue;
+    }
+    for (let i=0; i<cut.length; i+=3) {
+      const first=slabs.positions.length/3;
+      const [a,b,c]=cut.slice(i,i+3);
+      slabVertex(a,height); slabVertex(b,height); slabVertex(c,height);
+      slabVertex(a,height-depth); slabVertex(c,height-depth); slabVertex(b,height-depth);
+      slabs.indices.push(first,first+1,first+2,first+3,first+4,first+5);
+    }
+    for (const opening of openings) {
+      const corners = openingCorners(opening);
+      if (opening.kind==='staircase') slabs.stairRims.push(slabs.positions.length/3);
+      for (let i=0; i<4; i++) {
+        const a=corners[i], b=corners[(i+1)%4], first=slabs.positions.length/3;
+        slabVertex(a,height-depth); slabVertex(a,height); slabVertex(b,height); slabVertex(b,height-depth);
+        slabs.indices.push(first,first+1,first+2,first,first+2,first+3);
+      }
+    }
+  }
+  const elevatorDoors = {positions:[] as number[], indices:[] as number[], uvs:[] as number[]};
+  function doorLeaf(a: Point, b: Point, low: number, high: number) {
+    const first=elevatorDoors.positions.length/3;
+    const width=Math.hypot(b[0]-a[0],b[1]-a[1])/2, height=(high-low)/2;
+    vertex(a,low,elevatorDoors.positions); vertex(b,low,elevatorDoors.positions);
+    vertex(b,high,elevatorDoors.positions); vertex(a,high,elevatorDoors.positions);
+    elevatorDoors.indices.push(first,first+1,first+2,first,first+2,first+3);
+    elevatorDoors.uvs.push(0,0,width,0,width,height,0,height);
+  }
+  const levels = [ground,...upperFloors.map(({height})=>height)];
+  for (const opening of openings) {
+    if (opening.front === undefined) continue;
+    const corners=openingCorners(opening);
+    for (let side=0;side<4;side++) {
+      const a=corners[side], b=corners[(side+1)%4];
+      const wall = (left: Point, right: Point, low: number, high: number) => {
+        if (high>low) quad(left,low,right,low,right,high,left,high);
+      };
+      if (side!==opening.front) {
+        wall(a,b,ground,top);
+        continue;
+      }
+      const span=Math.hypot(b[0]-a[0],b[1]-a[1]);
+      const halfDoor=Math.min(.55,span/2-.15)/span;
+      const left=mix(a,b,.5-halfDoor), right=mix(a,b,.5+halfDoor);
+      for (const [i,low] of levels.entries()) {
+        const high=levels[i+1]??top;
+        const head=high-(upperFloors[i]?.depth??0);
+        const lintel=Math.min(low+2.1,head-.03);
+        wall(a,left,low,high);
+        wall(right,b,low,high);
+        wall(left,right,lintel,high);
+        doorLeaf(left,mix(a,b,.5-.006/span),low,lintel);
+        doorLeaf(mix(a,b,.5+.006/span),right,low,lintel);
+      }
+    }
+  }
+
+  const ceilingStart = indices.length;
+  cap({positions,indices}, top, false);
+  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors};
 }

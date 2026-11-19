@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import {floorOpenings, type Point} from '../src/modules/building-interiors/floor-openings.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
@@ -91,13 +92,88 @@ test('floor slabs start at the door threshold and leave walking clearance across
   VertexData.ComputeNormals(slabs.positions,slabs.indices,normals);
   const up = new Set<number>(), down = new Set<number>();
   for (let i=1;i<slabs.positions.length;i+=3) {
-    (normals[i]>0?up:down).add(slabs.positions[i]);
+    if (normals[i]>.99) up.add(slabs.positions[i]);
+    if (normals[i]<-.99) down.add(slabs.positions[i]);
   }
   assert.deepEqual([...up],[threshold+.01,4]);
   assert.deepEqual([...down],[threshold+.01-.25,3.75]);
   assert.ok(3.75-threshold >= 2);
   const cramped = {...profile, floorHeight:1.1, height:2.7};
   assert.equal(buildInterior({...source, profile:cramped}).slabs.indices.length,12);
+});
+
+test('slab cutouts match the profile, stay aligned and keep the ground floor closed', () => {
+  const profile = {...source.profile, floorCount:3, height:12, elevatorCount:1};
+  const {openings,slabs} = buildInterior({...source,profile});
+  assert.deepEqual(openings.map(opening=>opening.kind),['staircase','elevator']);
+  assert.equal(slabs.stairRims.length,2);
+  let area = 0;
+  for (let i=0; i<slabs.indices.length; i+=3) {
+    const [a,b,c] = slabs.indices.slice(i,i+3).map(index=>index*3);
+    if (slabs.positions[a+1]!==4 || slabs.positions[b+1]!==4 || slabs.positions[c+1]!==4) continue;
+    const [ax,,az] = slabs.positions.slice(a,a+3);
+    const [bx,,bz] = slabs.positions.slice(b,b+3);
+    const [cx,,cz] = slabs.positions.slice(c,c+3);
+    area += Math.abs((bx-ax)*(cz-az)-(bz-az)*(cx-ax))/2;
+  }
+  const cutArea = openings.reduce((sum,o)=>sum+(o.maxX-o.minX)*(o.maxZ-o.minZ),0);
+  assert.ok(Math.abs(area-(100-cutArea))<1e-6);
+  assert.equal(slabs.positions.slice(0,18).filter((value,i)=>i%3===1&&value===.01).length,6);
+  for (const opening of openings) {
+    for (const height of [4,7.5]) {
+      for (const y of [height,height-.25]) {
+        assert.ok(slabs.indices.some(index=>{
+          const [x,vertexY,z]=slabs.positions.slice(index*3,index*3+3);
+          return x===opening.minX && z===opening.minZ && vertexY===y;
+        }));
+      }
+    }
+  }
+});
+
+test('elevator walls reach the first floor and each landing door is flush with its shaft wall', () => {
+  const profile = {...source.profile, floorCount:3, height:12, elevatorCount:1};
+  const {positions,openings,elevatorDoors} = buildInterior({...source,profile});
+  const shaft = openings.find(opening=>opening.kind==='elevator');
+  assert.ok(shaft?.front!==undefined);
+  const axis = shaft.front%2===0 ? 2 : 0;
+  const plane = [shaft.minZ,shaft.maxX,shaft.maxZ,shaft.minX][shaft.front];
+  assert.ok(elevatorDoors.positions.every((value,i)=>i%3!==axis || Math.abs(value-plane)<1e-9));
+  assert.equal(elevatorDoors.indices.length,3*12);
+  const thresholds = new Set<number>();
+  for (let i=1; i<elevatorDoors.positions.length; i+=12) thresholds.add(elevatorDoors.positions[i]);
+  assert.deepEqual([...thresholds],[.01,4,7.5]);
+  const shaftWall = (height:number) => positions.some((x,i)=>i%3===0 &&
+    Math.abs(x-shaft.minX)<1e-9 && Math.abs(positions[i+2]-shaft.minZ)<1e-9 && positions[i+1]===height);
+  assert.ok(shaftWall(.01) && shaftWall(11.5));
+});
+
+test('the landing door faces across the floor rather than back toward a nearby window', () => {
+  const profile = {
+    ...source.profile, elevatorCount:1, staircaseCount:0,
+    entrance:{...source.profile.entrance,center:[5,0],wallIndex:3},
+    facades:source.profile.facades.map((wall,i)=>({...wall,windowColumns:i===3?3:0})),
+  };
+  const {openings} = buildInterior({...source,profile});
+  assert.equal(openings.length,1);
+  assert.ok(openings[0].front===1 || openings[0].front===2);
+});
+
+test('lifts form a row near a corner and keep both staircase reservations', () => {
+  const footprint: Point[] = [[0,0],[24,0],[24,18],[0,18]];
+  const profile = {
+    ...source.profile, elevatorCount:4, staircaseCount:2,
+    entrance:{...source.profile.entrance,center:[12,0]},
+    facades:footprint.map((start,i)=>({start,end:footprint[(i+1)%4],windowColumns:0})),
+  };
+  const openings = floorOpenings(profile,footprint,[0,1,2,0,2,3]);
+  assert.deepEqual(openings.map(o=>o.kind),['staircase','staircase',...Array(4).fill('elevator')]);
+  const [anchor,...lifts]=openings.slice(2);
+  assert.ok(anchor.minX<1 || anchor.maxX>23);
+  assert.ok(anchor.minZ<1 || anchor.maxZ>17);
+  const alongX = anchor.front===0 || anchor.front===2;
+  assert.ok(lifts.some(lift=>lift.front===anchor.front &&
+    Math.abs(alongX ? lift.minZ-anchor.minZ : lift.minX-anchor.minX)<1e-8));
 });
 
 test('character authority enters through a real doorway and is stopped by the wall beside it', async () => {
