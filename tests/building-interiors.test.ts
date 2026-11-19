@@ -55,3 +55,20 @@ test('the largest prepared shell fits one surface mesh and retains its ceiling',
   assert.ok(shell.indices.length > shell.ceilingStart && shell.indices.length<=1800000);
   assert.ok(shell.positions.every(Number.isFinite));
 });
+
+test('floor slabs start at the door threshold and leave walking clearance across the window grid', () => {
+  const threshold = -.25;
+  const profile = {...source.profile, entrance:{...source.profile.entrance,base:threshold}};
+  const {slabs} = buildInterior({...source,profile});
+  const normals: number[] = [];
+  VertexData.ComputeNormals(slabs.positions,slabs.indices,normals);
+  const up = new Set<number>(), down = new Set<number>();
+  for (let i=1;i<slabs.positions.length;i+=3) {
+    (normals[i]>0?up:down).add(slabs.positions[i]);
+  }
+  assert.deepEqual([...up],[threshold+.01,4]);
+  assert.deepEqual([...down],[threshold+.01-.25,3.75]);
+  assert.ok(3.75-threshold >= 2);
+  const cramped = {...profile, floorHeight:1.1, height:2.7};
+  assert.equal(buildInterior({...source, profile:cramped}).slabs.indices.length,12);
+});

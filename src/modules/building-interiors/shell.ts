@@ -2,6 +2,8 @@ import type { BuildingProfile, BuildingInteriorSource } from '../world/index.ts'
 
 type Point = readonly [number, number];
 const WALL_DEPTH = .25;
+const SLAB_DEPTH = .25;
+const MIN_HEADROOM = 2; // Standing character: 1.8 m.
 
 function mix(a: readonly number[], b: readonly number[], t: number): Point {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -9,7 +11,7 @@ function mix(a: readonly number[], b: readonly number[], t: number): Point {
 
 export function nearInterior(profile: BuildingProfile, point: {x:number; y:number; z:number}, reach: number) {
   const [ox, oy, oz] = profile.origin;
-  const dy = Math.max(oy - point.y, 0, point.y - oy - profile.height);
+  const dy = Math.max(oy + Math.min(0, profile.entrance.base) - point.y, 0, point.y - oy - profile.height);
   const limit = reach ** 2 - dy ** 2;
   if (limit < 0) return false;
   const cos = Math.cos(profile.yaw), sin = Math.sin(profile.yaw);
@@ -103,14 +105,36 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     panel(0, 1, bandBottom, top);
   }
 
-  const ceilingStart = indices.length;
-  // Reuse the prepared roof triangulation, including its existing courtyard cutouts.
+  // Reuse the roof triangulation for every horizontal surface, including courtyard cutouts.
+  const footprint: number[] = [];
+  const {uvs} = facade;
   for (let i = 0; i < facade.indices.length; i += 3) {
     const a = facade.indices[i], b = facade.indices[i+1], c = facade.indices[i+2];
-    if (facade.uvs?.[a*2] !== -2 || facade.uvs[b*2] !== -2 || facade.uvs[c*2] !== -2) continue;
-    const first = positions.length / 3;
-    for (const vertex of [a, c, b]) positions.push(facade.positions[vertex*3], oy + top, facade.positions[vertex*3+2]);
-    indices.push(first, first+1, first+2);
+    if (uvs?.[a*2] === -2 && uvs[b*2] === -2 && uvs[c*2] === -2) footprint.push(a,b,c);
   }
-  return {positions, indices, ceilingStart};
+  function cap(geometry: {positions:number[]; indices:number[]}, height: number, up: boolean) {
+    const first = geometry.positions.length / 3;
+    for (const i of footprint) geometry.positions.push(facade.positions[i*3], oy+height, facade.positions[i*3+2]);
+    for (let i = first; i < first+footprint.length; i += 3) {
+      geometry.indices.push(i, i+(up?1:2), i+(up?2:1));
+    }
+  }
+
+  const ceilingStart = indices.length;
+  cap({positions,indices}, top, false);
+  const slabs = {positions:[] as number[], indices:[] as number[]};
+  function slab(height: number, depth: number) {
+    cap(slabs, height, true);
+    cap(slabs, height-depth, false);
+  }
+  let floor = profile.entrance.base + .01; // Avoid a coplanar surface with the terrain at the threshold.
+  slab(floor, SLAB_DEPTH);
+  for (let row = 1; row < profile.floorCount; row++) {
+    const next = profile.facadeBase + row*profile.floorHeight;
+    const depth = Math.min(SLAB_DEPTH, next-floor-MIN_HEADROOM);
+    if (depth <= 0 || top-next < MIN_HEADROOM) continue;
+    slab(next, depth);
+    floor = next;
+  }
+  return {positions, indices, ceilingStart, slabs};
 }
