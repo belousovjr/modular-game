@@ -131,6 +131,15 @@ test('slab cutouts match the profile, stay aligned and keep the ground floor clo
   }
 });
 
+test('the nearest stair edge stays six metres from the entrance in a typical footprint', () => {
+  const {openings} = buildInterior(source);
+  const stair = openings.find(opening=>opening.kind==='staircase');
+  assert.ok(stair);
+  // Fixture entry is at X=0, facing +X, centered at Z=5.
+  const sideGap = Math.max(3.25-stair.maxZ,stair.minZ-6.75,0);
+  assert.ok(Math.hypot(stair.minX,sideGap)>=6);
+});
+
 test('elevator walls reach the first floor and each landing door is flush with its shaft wall', () => {
   const profile = {...source.profile, floorCount:3, height:12, elevatorCount:1};
   const {positions,openings,elevatorDoors} = buildInterior({...source,profile});
@@ -152,11 +161,11 @@ test('the landing door faces across the floor rather than back toward a nearby w
   const profile = {
     ...source.profile, elevatorCount:1, staircaseCount:0,
     entrance:{...source.profile.entrance,center:[5,0],wallIndex:3},
-    facades:source.profile.facades.map((wall,i)=>({...wall,windowColumns:i===3?3:0})),
+    facades:source.profile.facades.map((wall,i)=>({...wall,windowColumns:i===1?3:0})),
   };
   const {openings} = buildInterior({...source,profile});
   assert.equal(openings.length,1);
-  assert.ok(openings[0].front===1 || openings[0].front===2);
+  assert.notEqual(openings[0].front,2);
 });
 
 test('lifts form a row near a corner and keep both staircase reservations', () => {
@@ -164,13 +173,29 @@ test('lifts form a row near a corner and keep both staircase reservations', () =
   const profile = {
     ...source.profile, elevatorCount:4, staircaseCount:2,
     entrance:{...source.profile.entrance,center:[12,0]},
-    facades:footprint.map((start,i)=>({start,end:footprint[(i+1)%4],windowColumns:0})),
+    facades:footprint.map((_,i)=>({start:footprint[(i+1)%4],end:footprint[i],windowColumns:0})),
   };
   const openings = floorOpenings(profile,footprint,[0,1,2,0,2,3]);
   assert.deepEqual(openings.map(o=>o.kind),['staircase','staircase',...Array(4).fill('elevator')]);
+  const [first,second]=openings;
+  const gap=Math.hypot(Math.max(first.minX-second.maxX,second.minX-first.maxX,0),
+    Math.max(first.minZ-second.maxZ,second.minZ-first.maxZ,0));
+  assert.ok(gap>=10);
+  for (const stair of [first,second]) {
+    const x=(stair.minX+stair.maxX)/2, z=(stair.minZ+stair.maxZ)/2;
+    const approaches=[
+      [x-.5,x+.5,stair.minZ-1.15,stair.minZ],
+      [stair.maxX,stair.maxX+1.15,z-.5,z+.5],
+      [x-.5,x+.5,stair.maxZ,stair.maxZ+1.15],
+      [stair.minX-1.15,stair.minX,z-.5,z+.5],
+    ];
+    assert.ok(approaches.some(([minX,maxX,minZ,maxZ])=>minX>=0 && maxX<=24 && minZ>=0 && maxZ<=18 &&
+      openings.every(other=>other===stair || maxX<=other.minX || minX>=other.maxX || maxZ<=other.minZ || minZ>=other.maxZ)));
+  }
   const [anchor,...lifts]=openings.slice(2);
   assert.ok(anchor.minX<1 || anchor.maxX>23);
-  assert.ok(anchor.minZ<1 || anchor.maxZ>17);
+  assert.ok(anchor.maxZ>17);
+  assert.ok(openings.every(opening=>opening.minZ>=8));
   const alongX = anchor.front===0 || anchor.front===2;
   assert.ok(lifts.some(lift=>lift.front===anchor.front &&
     Math.abs(alongX ? lift.minZ-anchor.minZ : lift.minX-anchor.minX)<1e-8));
