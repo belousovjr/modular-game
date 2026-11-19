@@ -3,6 +3,7 @@ import { DOOR_FRAME_TRIM, type BuildingProfile, type BuildingInteriorSource } fr
 import { cutFloor, floorOpenings, openingCorners, type Point } from './floor-openings.ts';
 const WALL_DEPTH = .25;
 const SLAB_DEPTH = .25;
+const SHAFT_WALL_DEPTH = .12;
 export const ENTRANCE_FLOOR_OFFSET = .01; // Avoid a coplanar surface with the terrain at the threshold.
 const MIN_HEADROOM = 2; // Standing character: 1.8 m.
 
@@ -183,8 +184,10 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
       slabs.indices.push(first,first+1,first+2,first+3,first+4,first+5);
     }
     for (const opening of openings) {
+      // The shaft walls already close the perimeter of their slab cutout.
+      if (opening.kind!=='staircase') continue;
       const corners = openingCorners(opening);
-      if (opening.kind==='staircase') slabs.stairRims.push(slabs.positions.length/3);
+      slabs.stairRims.push(slabs.positions.length/3);
       for (let i=0; i<4; i++) {
         const a=corners[i], b=corners[(i+1)%4], first=slabs.positions.length/3;
         slabVertex(a,height-depth); slabVertex(a,height); slabVertex(b,height); slabVertex(b,height-depth);
@@ -205,25 +208,38 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
   for (const opening of openings) {
     if (opening.front === undefined) continue;
     const corners=openingCorners(opening);
+    const inside=openingCorners({
+      minX:opening.minX+SHAFT_WALL_DEPTH, minZ:opening.minZ+SHAFT_WALL_DEPTH,
+      maxX:opening.maxX-SHAFT_WALL_DEPTH, maxZ:opening.maxZ-SHAFT_WALL_DEPTH,
+    });
     for (let side=0;side<4;side++) {
-      const a=corners[side], b=corners[(side+1)%4];
-      const wall = (left: Point, right: Point, low: number, high: number) => {
-        if (high>low) quad(left,low,right,low,right,high,left,high);
+      const next=(side+1)%4;
+      const a=corners[side], b=corners[next], innerA=inside[side], innerB=inside[next];
+      const wall = (left:Point,right:Point,inLeft:Point,inRight:Point,low:number,high:number) => {
+        if (high<=low) return;
+        quad(left,low,right,low,right,high,left,high);
+        quad(inRight,low,inLeft,low,inLeft,high,inRight,high);
       };
       if (side!==opening.front) {
-        wall(a,b,ground,top);
+        wall(a,b,innerA,innerB,ground,top);
         continue;
       }
       const span=Math.hypot(b[0]-a[0],b[1]-a[1]);
       const halfDoor=Math.min(.55,span/2-.15)/span;
       const left=mix(a,b,.5-halfDoor), right=mix(a,b,.5+halfDoor);
+      const insetX=(a[1]-b[1])/span*SHAFT_WALL_DEPTH, insetZ=(b[0]-a[0])/span*SHAFT_WALL_DEPTH;
+      const innerLeft:Point=[left[0]+insetX,left[1]+insetZ];
+      const innerRight:Point=[right[0]+insetX,right[1]+insetZ];
       for (const [i,low] of levels.entries()) {
         const high=levels[i+1]??top;
         const head=high-(upperFloors[i]?.depth??0);
         const lintel=Math.min(low+2.1,head-.03);
-        wall(a,left,low,high);
-        wall(right,b,low,high);
-        wall(left,right,lintel,high);
+        wall(a,left,innerA,innerLeft,low,high);
+        wall(right,b,innerRight,innerB,low,high);
+        wall(left,right,innerLeft,innerRight,lintel,high);
+        quad(left,low,innerLeft,low,innerLeft,lintel,left,lintel);
+        quad(right,low,right,lintel,innerRight,lintel,innerRight,low);
+        quad(left,lintel,innerLeft,lintel,innerRight,lintel,right,lintel);
         doorLeaf(left,mix(a,b,.5-.006/span),low,lintel);
         doorLeaf(mix(a,b,.5+.006/span),right,low,lintel);
       }

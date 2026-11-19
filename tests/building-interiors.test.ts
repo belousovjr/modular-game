@@ -198,9 +198,9 @@ test('the nearest stair edge stays six metres from the entrance in a typical foo
   assert.ok(Math.hypot(stair.minX,sideGap)>=6);
 });
 
-test('elevator walls reach the first floor and each landing door is flush with its shaft wall', () => {
+test('elevator shafts have inward and outward wall faces and flush landing doors', () => {
   const profile = {...source.profile, floorCount:3, height:12, elevatorCount:1};
-  const {positions,openings,elevatorDoors} = buildInterior({...source,profile});
+  const {positions,indices,openings,elevatorDoors} = buildInterior({...source,profile});
   const shaft = openings.find(opening=>opening.kind==='elevator');
   assert.ok(shaft?.front!==undefined);
   const axis = shaft.front%2===0 ? 2 : 0;
@@ -213,6 +213,16 @@ test('elevator walls reach the first floor and each landing door is flush with i
   const shaftWall = (height:number) => positions.some((x,i)=>i%3===0 &&
     Math.abs(x-shaft.minX)<1e-9 && Math.abs(positions[i+2]-shaft.minZ)<1e-9 && positions[i+1]===height);
   assert.ok(shaftWall(.01) && shaftWall(11.5));
+  const normals: number[] = [];
+  VertexData.ComputeNormals(positions,indices,normals);
+  // Pick a solid wall opposite to the landing if its door faces negative Z.
+  const direction=shaft.front===0 ? 1 : -1;
+  const outerZ=direction===1 ? shaft.maxZ : shaft.minZ;
+  const innerZ=outerZ-direction*.12;
+  const face = (z:number,sign:number) => positions.some((x,i)=>i%3===0 &&
+    x>=shaft.minX && x<=shaft.maxX && Math.abs(positions[i+2]-z)<1e-9 &&
+    positions[i+1]===.01 && normals[i+2]*sign>.99);
+  assert.ok(face(outerZ,direction) && face(innerZ,-direction));
 });
 
 test('the landing door faces across the floor rather than back toward a nearby window', () => {
