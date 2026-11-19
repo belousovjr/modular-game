@@ -41,6 +41,22 @@ test('interior has inward walls, a real window opening with sills, and a down-fa
   assert.ok(indices.slice(ceilingStart).every(v => normals[v*3+1]<-.99 && positions[v*3+1]===7.5));
 });
 
+test('window reveal edges are perpendicular to the inner face at either end of a wall', () => {
+  const profile = {...source.profile, entrance:{...source.profile.entrance,wallIndex:1}};
+  const {positions,ceilingStart} = buildInterior({...source,profile});
+  let depthEdges=0;
+  for (let face=0;face<ceilingStart/6;face++) {
+    for (let side=0;side<4;side++) {
+      const a=(face*4+side)*3, b=(face*4+(side+1)%4)*3;
+      const lo=Math.min(positions[a],positions[b]), hi=Math.max(positions[a],positions[b]);
+      if (lo!==0 || hi!==.25 || positions[a+1]!==positions[b+1]) continue;
+      assert.ok(Math.abs(positions[a+2]-positions[b+2])<1e-9);
+      depthEdges++;
+    }
+  }
+  assert.equal(depthEdges,32);
+});
+
 test('entrance frame suppresses the entire intersecting window on the facade and in the interior', () => {
   const profile = {...source.profile, entrance:{...source.profile.entrance,offset:3}};
   const {positions,indices,ceilingStart} = buildInterior({...source,profile});
@@ -64,6 +80,39 @@ test('entrance frame suppresses the entire intersecting window on the facade and
   assert.ok(rect);
   assert.ok(rect[0]>128 && rect[2]<129 && rect[1]<0 && rect[3]>0 && rect[3]<1);
   assert.deepEqual(rect.slice(0,4),rect.slice(12,16));
+});
+
+test('inset walls and reveals stay inside a complex authored facade', () => {
+  const source = getBuildingInteriorSources(citySource).find(source=>source.profile.shape==='complex' &&
+    source.profile.facades.length>=20);
+  assert.ok(source);
+  const facade=source.facade;
+  const roof: number[][] = [];
+  for (let i=0;i<facade.indices.length;i+=3) {
+    const triangle=facade.indices.slice(i,i+3);
+    if (triangle.every(vertex=>facade.uvs?.[vertex*2]===-2)) roof.push(triangle.map(vertex=>vertex*3));
+  }
+  assert.ok(roof.length>0);
+  const {positions,indices,ceilingStart}=buildInterior(source);
+  const contains = (x:number,z:number) => roof.some(([a,b,c])=>{
+    const edge = (from:number,to:number) => {
+      const dx=facade.positions[to]-facade.positions[from], dz=facade.positions[to+2]-facade.positions[from+2];
+      return dx*(z-facade.positions[from+2])-dz*(x-facade.positions[from])>=-.0025*Math.hypot(dx,dz);
+    };
+    return edge(a,b)&&edge(b,c)&&edge(c,a);
+  });
+  const inspected=new Set<string>();
+  for (let i=0;i<ceilingStart;i+=3) for (let edge=0;edge<3;edge++) {
+    const a=indices[i+edge]*3, b=indices[i+(edge+1)%3]*3;
+    for (const fraction of [0,.5]) {
+      const x=positions[a]+(positions[b]-positions[a])*fraction;
+      const z=positions[a+2]+(positions[b+2]-positions[a+2])*fraction;
+      const key=`${x}/${z}`;
+      if (inspected.has(key)) continue;
+      inspected.add(key);
+      assert.ok(contains(x,z),`Interior edge outside the facade at ${key}`);
+    }
+  }
 });
 
 test('interior proximity keeps an occupied shell and avoids loading distant or overflown buildings', () => {

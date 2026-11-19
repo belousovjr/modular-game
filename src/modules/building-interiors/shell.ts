@@ -75,7 +75,16 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
       const a = mix(start, end, left), b = mix(start, end, right);
       quad(a, low, b, low, b, high, a, high);
     };
-    if (!wall.windowColumns) {
+    const dx=end[0]-start[0], dz=end[1]-start[1];
+    const lengthSquared=dx*dx+dz*dz;
+    if (!wall.windowColumns || lengthSquared<1e-10) {
+      panel(0, 1, bottom, top);
+      continue;
+    }
+    const innerAlong=(point:readonly number[])=>
+      ((point[0]-start[0])*dx+(point[1]-start[1])*dz)/lengthSquared;
+    const outerStart=innerAlong(wall.start), outerSpan=innerAlong(wall.end)-outerStart;
+    if (outerSpan<=0) {
       panel(0, 1, bottom, top);
       continue;
     }
@@ -98,10 +107,16 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
         const right = (column + .5 + halfWidth)/wall.windowColumns;
         if (entranceWall && high > entrance.base && low < entrance.base+entrance.height+DOOR_FRAME_TRIM &&
             right*span > entrance.offset-doorHalf && left*span < entrance.offset+doorHalf) continue;
-        panel(pier, left, low, high);
-        pier = right;
-        const il = mix(start, end, left), ir = mix(start, end, right);
-        const ol = mix(wall.start, wall.end, left), or = mix(wall.start, wall.end, right);
+        // Project the exterior opening onto the actual inner wall. Limit it to the joined wall segment.
+        const outerLeft=Math.max(left,-outerStart/outerSpan);
+        const outerRight=Math.min(right,(1-outerStart)/outerSpan);
+        if (outerRight-outerLeft<1e-8) continue;
+        const innerLeft=Math.max(0,outerStart+outerLeft*outerSpan);
+        const innerRight=Math.min(1,outerStart+outerRight*outerSpan);
+        panel(pier, innerLeft, low, high);
+        pier = innerRight;
+        const il = mix(start, end, innerLeft), ir = mix(start, end, innerRight);
+        const ol = mix(wall.start, wall.end, outerLeft), or = mix(wall.start, wall.end, outerRight);
         quad(il, low, ir, low, or, low, ol, low);
         quad(il, high, ol, high, or, high, ir, high);
         quad(il, low, ol, low, ol, high, il, high);
