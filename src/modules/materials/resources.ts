@@ -1,3 +1,4 @@
+import { WindowGlass } from './window-glass.ts';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js';
@@ -88,6 +89,11 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     // Polygon offset keeps paint above the road without changing physical geometry or occlusion.
     if(surface==='marking'){material.zOffset=-1;material.zOffsetUnits=-2;}
     if(surface==='road'){material.zOffset=-1;material.zOffsetUnits=-1;}
+    if (surface==='interior-glass') {
+      material.alpha=.16;
+      material.backFaceCulling=false;
+      new WindowGlass(material);
+    }
     if(surface==='bank')material.backFaceCulling=false;
     if (surface==='water') { material.alpha=.88;material.specularColor=Color3.FromHexString('#a3c2c2');material.specularPower=80;material.backFaceCulling=false;new WaterSurface(material); }
     if (surface.startsWith('city-')) facades.push(new CityFacade(material));

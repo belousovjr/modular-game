@@ -33,6 +33,7 @@ export function nearInterior(profile: BuildingProfile, point: {x:number; y:numbe
 
 export function buildInterior({profile, facade}: BuildingInteriorSource) {
   const positions: number[] = [], indices: number[] = [];
+  const glazing = {positions:[] as number[],indices:[] as number[]};
   const [ox, oy, oz] = profile.origin;
   const cos = Math.cos(profile.yaw), sin = Math.sin(profile.yaw);
   const bottom = Math.min(0, profile.entrance.base), top = profile.height - .5;
@@ -121,6 +122,11 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
         quad(il, high, ol, high, or, high, ir, high);
         quad(il, low, ol, low, ol, high, il, high);
         quad(ir, low, ir, high, or, high, or, low);
+        const first=glazing.positions.length/3;
+        const gl=mix(il,ol,.55), gr=mix(ir,or,.55);
+        vertex(gl,low,glazing.positions); vertex(gr,low,glazing.positions);
+        vertex(gr,high,glazing.positions); vertex(gl,high,glazing.positions);
+        glazing.indices.push(first,first+1,first+2,first,first+2,first+3);
       }
       panel(pier, 1, low, high);
     }
@@ -226,5 +232,5 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
 
   const ceilingStart = indices.length;
   cap({positions,indices}, top, false);
-  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors};
+  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors, glazing};
 }

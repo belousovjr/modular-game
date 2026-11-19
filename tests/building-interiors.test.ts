@@ -41,6 +41,15 @@ test('interior has inward walls, a real window opening with sills, and a down-fa
   assert.ok(indices.slice(ceilingStart).every(v => normals[v*3+1]<-.99 && positions[v*3+1]===7.5));
 });
 
+test('each surviving window has one pane inside the reveal and door openings have none', () => {
+  const {glazing} = buildInterior(source);
+  assert.equal(glazing.indices.length,2*6);
+  for (let i=0;i<glazing.positions.length;i+=3) {
+    assert.ok(glazing.positions[i]>0 && glazing.positions[i]<.25);
+    assert.ok(glazing.positions[i+1]>4);
+  }
+});
+
 test('window reveal edges are perpendicular to the inner face at either end of a wall', () => {
   const profile = {...source.profile, entrance:{...source.profile.entrance,wallIndex:1}};
   const {positions,ceilingStart} = buildInterior({...source,profile});

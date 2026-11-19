@@ -50,7 +50,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 27);
+    assert.equal(api.getSnapshot().materials, 28);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
@@ -58,7 +58,14 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(api.getSnapshot().loading, 0);
     assert.equal(api.getSnapshot().failed, 0);
-    for(const material of scene.materials)if(material instanceof StandardMaterial&&material.name.startsWith('materials/')&&material.emissiveColor.r===0&&material.emissiveColor.g===0&&material.emissiveColor.b===0){
+    const glass=geometry.getSurfaceMaterial('interior-glass');
+    assert.ok(glass instanceof StandardMaterial);
+    assert.equal(glass.needAlphaBlending(),true);
+    assert.equal(glass.alpha,.16);
+    assert.equal(glass.backFaceCulling,false);
+    assert.equal(glass.diffuseTexture,null);
+    assert.ok(glass.pluginManager?.getPlugin('WindowGlass'));
+    for(const material of scene.materials)if(material!==glass&&material instanceof StandardMaterial&&material.name.startsWith('materials/')&&material.emissiveColor.r===0&&material.emissiveColor.g===0&&material.emissiveColor.b===0){
       assert.ok(material.diffuseTexture,`Missing texture: ${material.name}`);
       assert.ok(material.bumpTexture,`Missing normal map: ${material.name}`);
     }

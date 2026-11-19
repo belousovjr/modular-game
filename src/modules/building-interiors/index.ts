@@ -121,7 +121,7 @@ export const buildingInteriorsModule = defineModule({
           } else if (!shell) {
             const resources = createScope();
             try {
-              const {positions,indices,slabs,elevatorDoors} = buildInterior(source);
+              const {positions,indices,slabs,elevatorDoors,glazing} = buildInterior(source);
               const mesh = deps.geometry.createSurfaceMesh(`building-interiors/${id}`, 'interior-concrete', positions, indices, resources);
               mesh.metadata = {...mesh.metadata, buildingInterior:true, shadowCaster:false, shadowReceiver:false};
               mesh.freezeWorldMatrix();
@@ -147,6 +147,12 @@ export const buildingInteriorsModule = defineModule({
                   'interior-door',elevatorDoors.positions,elevatorDoors.indices,resources,elevatorDoors.uvs);
                 doors.metadata = {...mesh.metadata};
                 doors.freezeWorldMatrix();
+              }
+              if (glazing.indices.length) {
+                const glass = deps.geometry.createSurfaceMesh(`building-interiors/${id}/glass`,
+                  'interior-glass',glazing.positions,glazing.indices,resources);
+                glass.metadata = {...mesh.metadata};
+                glass.freezeWorldMatrix();
               }
               shell = resources;
             } catch (error) {
