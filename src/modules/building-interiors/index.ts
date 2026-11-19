@@ -1,3 +1,4 @@
+import { floorInRange, partitionInterior } from './floor-lod.ts';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
 import { defineModule } from '../../core/context.ts';
@@ -109,61 +110,77 @@ export const buildingInteriorsModule = defineModule({
       deps.streaming.registerSection(`building-interiors/${id}`, bounds, owner => {
         const door = doors.get(id);
         const leaves = door ? createDoor(door,profile,owner) : [];
-        let shell: ReturnType<typeof createScope> | undefined;
-        let floors: Mesh | undefined;
-        const update = (point: Point | undefined, opacity: number, actor: Point | null) => {
-          const reach = shell ? 4 : 2;
-          const visible = (point && nearInterior(profile, point, reach)) || (actor && nearInterior(profile, actor, reach));
-          if (!visible) {
-            shell?.dispose();
-            shell = undefined;
-            floors = undefined;
-          } else if (!shell) {
-            const resources = createScope();
-            try {
-              const {positions,indices,slabs,elevatorDoors,glazing} = buildInterior(source);
-              const mesh = deps.geometry.createSurfaceMesh(`building-interiors/${id}`, 'interior-concrete', positions, indices, resources);
-              mesh.metadata = {...mesh.metadata, buildingInterior:true, shadowCaster:false, shadowReceiver:false};
-              mesh.freezeWorldMatrix();
-              if (slabs.indices.length) {
-                floors = deps.geometry.createSurfaceMesh(`building-interiors/${id}/floors`,
-                  'interior-concrete', slabs.positions, slabs.indices, resources);
-                if (slabs.stairRims.length) {
-                  const colors=new Float32Array(floors.getTotalVertices()*4).fill(1);
-                  for (const start of slabs.stairRims) {
-                    for (let i=start*4;i<(start+16)*4;i+=4) {
-                      colors[i]=.57;
-                      colors[i+1]=.58;
-                      colors[i+2]=.60;
-                    }
+        let layout: ReturnType<typeof partitionInterior> | undefined;
+        const rendered = new Map<number,{owner:ReturnType<typeof createScope>;slab:Mesh | undefined}>();
+        function releaseFloors() {
+          for (const {owner} of rendered.values()) owner.dispose();
+          rendered.clear();
+          layout=undefined;
+        }
+        function loadFloor(level:number,floor:ReturnType<typeof partitionInterior>[number]) {
+          const resources=createScope();
+          const prefix=`building-interiors/${id}/floor/${level}`;
+          const metadata={buildingInterior:true,buildingInteriorLevel:level,shadowCaster:false,shadowReceiver:false};
+          const mesh=(name:string,material:string,geometry:{positions:number[];indices:number[];uvs?:number[]})=>{
+            if (!geometry.indices.length) return;
+            const result=deps.geometry.createSurfaceMesh(prefix+name,material,geometry.positions,geometry.indices,resources,geometry.uvs);
+            result.metadata={...result.metadata,...metadata};
+            result.freezeWorldMatrix();
+            return result;
+          };
+          try {
+            mesh('','interior-concrete',floor.walls);
+            const slab=mesh('/slab','interior-concrete',floor.slab);
+            if (slab) {
+              slab.metadata.buildingInteriorFloors=true;
+              if (floor.stairRims.length) {
+                const colors=new Float32Array(slab.getTotalVertices()*4).fill(1);
+                for (const start of floor.stairRims) {
+                  for (let i=start*4;i<(start+16)*4;i+=4) {
+                    colors[i]=.57;
+                    colors[i+1]=.58;
+                    colors[i+2]=.60;
                   }
-                  floors.setVerticesData('color',colors,false,4);
                 }
-                floors.metadata = {...mesh.metadata, buildingInteriorFloors:true};
-                floors.freezeWorldMatrix();
+                slab.setVerticesData('color',colors,false,4);
               }
-              if (elevatorDoors.indices.length) {
-                const doors = deps.geometry.createSurfaceMesh(`building-interiors/${id}/elevators`,
-                  'interior-door',elevatorDoors.positions,elevatorDoors.indices,resources,elevatorDoors.uvs);
-                doors.metadata = {...mesh.metadata};
-                doors.freezeWorldMatrix();
-              }
-              if (glazing.indices.length) {
-                const glass = deps.geometry.createSurfaceMesh(`building-interiors/${id}/glass`,
-                  'interior-glass',glazing.positions,glazing.indices,resources);
-                glass.metadata = {...mesh.metadata};
-                glass.freezeWorldMatrix();
-              }
-              shell = resources;
-            } catch (error) {
-              resources.dispose();
-              throw error;
             }
+            mesh('/elevators','interior-door',floor.doors);
+            mesh('/glass','interior-glass',floor.glass);
+            const loaded={owner:resources,slab};
+            rendered.set(level,loaded);
+            return loaded;
+          } catch (error) {
+            resources.dispose();
+            throw error;
           }
-          if (floors && floors.visibility !== opacity) floors.visibility = opacity;
+        }
+        const update = (point: Point | undefined, opacity: number, actor: Point | null) => {
+          const reach = layout ? 4 : 2;
+          const cameraY=point && nearInterior(profile,point,reach) ? point.y : undefined;
+          const actorY=actor && nearInterior(profile,actor,reach) ? actor.y : undefined;
+          if (cameraY===undefined && actorY===undefined) {
+            releaseFloors();
+            return;
+          }
+          layout ??= partitionInterior(buildInterior(source));
+          for (const [level,floor] of layout.entries()) {
+            const visible=(cameraY!==undefined && floorInRange(floor,cameraY,profile.floorHeight)) ||
+              (actorY!==undefined && floorInRange(floor,actorY,profile.floorHeight));
+            const loaded=rendered.get(level);
+            if (!visible) {
+              if (loaded) {
+                rendered.delete(level);
+                loaded.owner.dispose();
+              }
+              continue;
+            }
+            const {slab}=loaded??loadFloor(level,floor);
+            if (slab && slab.visibility!==opacity) slab.visibility=opacity;
+          }
         };
         active.set(id,{profile,leaves,update});
-        owner.onDispose(() => { active.delete(id); shell?.dispose(); });
+        owner.onDispose(() => { active.delete(id); releaseFloors(); });
       }, scope, deps.world.buildingDetailRange);
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {

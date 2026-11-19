@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
 import {floorOpenings, type Point} from '../src/modules/building-interiors/floor-openings.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
@@ -196,6 +197,35 @@ test('the nearest stair edge stays six metres from the entrance in a typical foo
   // Fixture entry is at X=0, facing +X, centered at Z=5.
   const sideGap = Math.max(3.25-stair.maxZ,stair.minZ-6.75,0);
   assert.ok(Math.hypot(stair.minX,sideGap)>=6);
+});
+
+test('floor LOD partitions the walls, windows, landing doors and complete slabs by actual floor', () => {
+  const profile={...source.profile, floorCount:7,height:25.5,elevatorCount:1};
+  const interior=buildInterior({...source,profile});
+  const floors=partitionInterior(interior);
+  assert.equal(floors.length,7);
+  const area=({positions,indices}:{positions:number[];indices:number[]})=>{
+    let result=0;
+    for (let i=0;i<indices.length;i+=3) {
+      const a=indices[i]*3,b=indices[i+1]*3,c=indices[i+2]*3;
+      const x=positions[b]-positions[a],y=positions[b+1]-positions[a+1],z=positions[b+2]-positions[a+2];
+      const u=positions[c]-positions[a],v=positions[c+1]-positions[a+1],w=positions[c+2]-positions[a+2];
+      result+=Math.hypot(y*w-z*v,z*u-x*w,x*v-y*u)/2;
+    }
+    return result;
+  };
+  assert.ok(Math.abs(floors.reduce((sum,floor)=>sum+area(floor.walls),0)-area(interior))<1e-6);
+  for (const [index,floor] of floors.entries()) {
+    assert.ok(floor.walls.positions.every((value,i)=>i%3!==1 || (value>=floor.minY && value<=floor.maxY)));
+    assert.equal(floor.stairRims.length,index===0?0:1);
+    assert.equal(floor.doors.indices.length,12);
+    assert.equal(floor.doors.uvs?.length,floor.doors.positions.length/3*2);
+    assert.equal(floor.glass.indices.length,index===0?0:12);
+    assert.equal(floor.slab.indices.length,(interior.slabs.floorStarts[index+1]??interior.slabs.indices.length)-interior.slabs.floorStarts[index]);
+  }
+  assert.equal(floorInRange(floors[0],floors[0].maxY+7,3.5),true);
+  assert.equal(floorInRange(floors[0],floors[0].maxY+7.001,3.5),false);
+  assert.equal(floorInRange(floors[6],1,3.5),false);
 });
 
 test('elevator shafts have inward and outward wall faces and flush landing doors', () => {

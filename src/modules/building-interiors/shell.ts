@@ -149,7 +149,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     }
   }
 
-  const slabs = {positions:[] as number[], indices:[] as number[], stairRims:[] as number[]};
+  const slabs = {positions:[] as number[], indices:[] as number[], stairRims:[] as number[], floorStarts:[0]};
   const ground = profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
   let floor = ground;
   cap(slabs, floor, true);
@@ -171,6 +171,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
   const cut = openings.length ? cutFloor(localFootprint,footprint,openings) : [];
   const slabVertex = (point: Point, y: number) => vertex(point,y,slabs.positions);
   for (const {height,depth} of upperFloors) {
+    slabs.floorStarts.push(slabs.indices.length);
     if (!openings.length) {
       cap(slabs,height,true);
       cap(slabs,height-depth,false);
@@ -248,5 +249,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
 
   const ceilingStart = indices.length;
   cap({positions,indices}, top, false);
-  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors, glazing};
+  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors, glazing,
+    floorBounds:[oy+Math.min(bottom,ground-SLAB_DEPTH),...upperFloors.map(({height})=>oy+height),oy+top],
+  };
 }
