@@ -2,7 +2,7 @@ import type {BuildingProfile} from '../world/index.ts';
 
 export type Point = readonly [number, number];
 type Rectangle = {minX:number; minZ:number; maxX:number; maxZ:number};
-export type Opening = Rectangle & {kind:'elevator'|'staircase'; front?:number};
+export type Opening = Rectangle & {kind:'elevator'|'staircase'; front?:number; stairFront?:number};
 
 export function openingCorners({minX,minZ,maxX,maxZ}: Rectangle): Point[] {
   return [[minX,minZ],[maxX,minZ],[maxX,maxZ],[minX,maxZ]];
@@ -157,8 +157,11 @@ export function floorOpenings(profile: BuildingProfile, footprint: readonly Poin
     const distance = (landing:Rectangle) =>
       Math.hypot((landing.minX+landing.maxX)/2-entryX,(landing.minZ+landing.maxZ)/2-entryZ);
     for (const depth of [2.5,1.5,1.15]) {
-      const approach=freeLandings(box,depth).sort((a,b)=>distance(a.landing)-distance(b.landing))[0];
-      if (approach) return approach.landing;
+      const longZ=box.maxZ-box.minZ>=box.maxX-box.minX;
+      const alongRun=(front:number)=>(front%2===0)===longZ;
+      const approach=freeLandings(box,depth).sort((a,b)=>
+        Number(alongRun(b.front))-Number(alongRun(a.front)) || distance(a.landing)-distance(b.landing))[0];
+      if (approach) return approach;
     }
   }
   function place(kind: Opening['kind'], sizes: readonly Point[], centers: readonly Point[], rowFront?:number, entryClearance=0) {
@@ -177,7 +180,8 @@ export function floorOpenings(profile: BuildingProfile, footprint: readonly Poin
         } else {
           const approach=stairLanding(box);
           if (!approach) continue;
-          landings.push(approach);
+          box.stairFront=approach.front;
+          landings.push(approach.landing);
         }
         openings.push(box);
         return box;

@@ -1,3 +1,4 @@
+import { buildStairs } from './stairs.ts';
 import { floorInRange, partitionInterior } from './floor-lod.ts';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
@@ -110,7 +111,7 @@ export const buildingInteriorsModule = defineModule({
       deps.streaming.registerSection(`building-interiors/${id}`, bounds, owner => {
         const door = doors.get(id);
         const leaves = door ? createDoor(door,profile,owner) : [];
-        let layout: ReturnType<typeof partitionInterior> | undefined;
+        let layout: {floors: ReturnType<typeof partitionInterior>;openings: ReturnType<typeof buildInterior>['openings']} | undefined;
         const rendered = new Map<number,{owner:ReturnType<typeof createScope>;slab:Mesh | undefined}>();
         function releaseFloors() {
           for (const {owner} of rendered.values()) owner.dispose();
@@ -129,7 +130,16 @@ export const buildingInteriorsModule = defineModule({
             return result;
           };
           try {
-            mesh('','interior-concrete',floor.walls);
+            const low=level===0 ? profile.origin[1]+profile.entrance.base+ENTRANCE_FLOOR_OFFSET : floor.minY;
+            const stairs=layout && level+1<layout.floors.length ? buildStairs(profile,layout.openings,low,floor.maxY) : undefined;
+            if (stairs?.steps.indices.length) {
+              const first=floor.walls.positions.length/3;
+              mesh('','interior-concrete',{
+                positions:floor.walls.positions.concat(stairs.steps.positions),
+                indices:floor.walls.indices.concat(stairs.steps.indices.map(index=>first+index)),
+              });
+              mesh('/rails','interior-door-frame',stairs.rails);
+            } else mesh('','interior-concrete',floor.walls);
             const slab=mesh('/slab','interior-concrete',floor.slab);
             if (slab) {
               slab.metadata.buildingInteriorFloors=true;
@@ -163,8 +173,11 @@ export const buildingInteriorsModule = defineModule({
             releaseFloors();
             return;
           }
-          layout ??= partitionInterior(buildInterior(source));
-          for (const [level,floor] of layout.entries()) {
+          if (!layout) {
+            const interior=buildInterior(source);
+            layout={floors:partitionInterior(interior),openings:interior.openings};
+          }
+          for (const [level,floor] of layout.floors.entries()) {
             const visible=(cameraY!==undefined && floorInRange(floor,cameraY,profile.floorHeight)) ||
               (actorY!==undefined && floorInRange(floor,actorY,profile.floorHeight));
             const loaded=rendered.get(level);

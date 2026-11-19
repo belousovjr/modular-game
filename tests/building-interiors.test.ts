@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
-import {floorOpenings, type Point} from '../src/modules/building-interiors/floor-openings.ts';
+import {floorOpenings, openingCorners, type Point} from '../src/modules/building-interiors/floor-openings.ts';
+import {buildStairs} from '../src/modules/building-interiors/stairs.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
@@ -197,6 +198,30 @@ test('the nearest stair edge stays six metres from the entrance in a typical foo
   // Fixture entry is at X=0, facing +X, centered at Z=5.
   const sideGap = Math.max(3.25-stair.maxZ,stair.minZ-6.75,0);
   assert.ok(Math.hypot(stair.minX,sideGap)>=6);
+});
+
+test('stairs fit their reserved opening and meet both floors with raised railings', () => {
+  const {openings}=buildInterior(source);
+  const stair=openings.find(opening=>opening.kind==='staircase');
+  assert.ok(stair && stair.stairFront!==undefined);
+  const {steps,rails}=buildStairs(source.profile,openings,.01,4);
+  assert.ok(steps.indices.length>0 && rails.indices.length>0);
+  assert.equal(rails.uvs.length,rails.positions.length/3*2);
+  for (const geometry of [steps,rails]) for (let i=0;i<geometry.positions.length;i+=3) {
+    assert.ok(geometry.positions[i]>=stair.minX-1e-9 && geometry.positions[i]<=stair.maxX+1e-9);
+    assert.ok(geometry.positions[i+2]>=stair.minZ-1e-9 && geometry.positions[i+2]<=stair.maxZ+1e-9);
+  }
+  const corners=openingCorners(stair);
+  for (const [x,z] of corners) for (const y of [.01,4]) {
+    assert.ok(steps.positions.some((px,i)=>i%3===0 && Math.abs(px-x)<1e-9 &&
+      steps.positions[i+1]===y && Math.abs(steps.positions[i+2]-z)<1e-9));
+  }
+  const normals: number[] = [];
+  VertexData.ComputeNormals(steps.positions,steps.indices,normals);
+  const surfaces=steps.positions.filter((_,i)=>i%3===1 && normals[i]>.99);
+  assert.ok(surfaces.includes(4));
+  assert.ok(surfaces.some(y=>Math.abs(y-2.005)<1e-9));
+  assert.ok(rails.positions.some((y,i)=>i%3===1 && y>4.5));
 });
 
 test('floor LOD partitions the walls, windows, landing doors and complete slabs by actual floor', () => {
