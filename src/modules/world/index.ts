@@ -11,6 +11,8 @@ import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
 import {getWorldMap} from './map.ts';
+import {getBuildingInteriorSources, getBuildingProfile} from './building-profiles.ts';
+export type {BuildingInteriorSource, BuildingProfile, BuildingShape} from './building-profiles.ts';
 export type {WorldMap} from './map.ts';
 import {createTreeBatch,createTreeMaterial,createTreeShadowBatch,groupTrees,treeLodBounds} from './trees.ts';
 import {createGrass, GRASS_DISTANCE, grassPatchDistance, groupGrass, groupGrassSections} from './grass.ts';
@@ -232,6 +234,8 @@ export const worldModule = defineModule({
     return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
       collision,streetLights,
       getMap: () => getWorldMap(city),
+      getBuildingProfile,
+      getBuildingInteriorSources: () => getBuildingInteriorSources(city),
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,
       visibility() {

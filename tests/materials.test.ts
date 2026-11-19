@@ -50,7 +50,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 24);
+    assert.equal(api.getSnapshot().materials, 25);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
@@ -90,6 +90,10 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     assert.equal(door.diffuseTexture,metal.diffuseTexture);
     assert.notDeepEqual(door.diffuseColor.asArray(),metal.diffuseColor.asArray());
     assert.equal(sidewalk.bumpTexture, foundation.bumpTexture);
+    const interior = geometry.getSurfaceMaterial('interior-concrete');
+    assert.ok(interior instanceof StandardMaterial && interior !== foundation);
+    assert.equal(interior.diffuseTexture, foundation.diffuseTexture);
+    assert.equal(interior.bumpTexture, foundation.bumpTexture);
     assert.ok(sidewalk.bumpTexture instanceof Texture);
     assert.equal(sidewalk.bumpTexture.gammaSpace, false);
     assert.equal(sidewalk.diffuseTexture?.gammaSpace, true);

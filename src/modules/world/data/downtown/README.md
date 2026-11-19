@@ -101,3 +101,7 @@ Mapped `landuse=railway` polygons replace the corresponding urban ground with lo
 ## Door addresses
 
 Run `python3 scripts/prepare-downtown-addresses.py` after preparing `city.json`. The script uses the pinned OSM snapshot and the generated facade door panels. Tagged building addresses and address nodes inside their footprints take precedence. For an untagged door, the nearest named road on the approach side supplies the street, and addresses on that street guide an approximate unique number. Without address samples, numbering is local to the street. The minimap marks estimated numbers with `≈`. Address metadata inherits the OSM attribution and license above.
+
+## Building profiles
+
+After generating `city.json`, run `python3 scripts/prepare-downtown-building-profiles.py`. The resulting `building-profiles.json` indexes generated entrances by the same building ID as the address layer. It stores the outer outline and facade segments in local X/Z metres, origin and yaw, footprint class, dimensions, facade bands and entrance placement. Floors and window slots are estimated from the game's prepared window grid. Slots may be covered by architectural details. The data describes the building shell and leaves floor plans unspecified.

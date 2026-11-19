@@ -79,7 +79,7 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     const material = new StandardMaterial(`materials/${surface}`, scene);
     scope.onDispose(() => material.dispose());
     material.diffuseColor = Color3.FromHexString(style.color);
-    const tinted=surface.startsWith('city-')||['curb','sidewalk','park-path','rail-ballast','water','marking','signal-body','signal-off','riverbed','facade','metal'].includes(surface);
+    const tinted=surface.startsWith('city-')||['curb','sidewalk','park-path','rail-ballast','water','marking','signal-body','signal-off','riverbed','facade','metal','interior-concrete'].includes(surface);
     tints.set(material,tinted?material.diffuseColor.clone():Color3.White());
     material.specularColor = Color3.Black();
     // Polygon offset keeps paint above the road without changing physical geometry or occlusion.
