@@ -235,7 +235,11 @@ function App() {
           </section>
         </Card>
       </Box>
-      {entries.map(panel => <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
+      {entries.map(panel => panel.overlay
+        ? <aside key={panel.id} id={`${panel.id}-window`} className="scene-overlay" aria-label={panel.title} hidden={!panel.open}>
+            {panel.open && panel.content}
+          </aside>
+        : <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
       </div>
       <TestDisplay updates={testUpdates} stop={() => viewport.current?.tests.stop()} />
     </main>

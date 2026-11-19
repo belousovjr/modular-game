@@ -5,8 +5,8 @@ export interface WindowSettings {
 
 const key = (id: string) => `modular-game.window.${id}`;
 
-export function readWindow(id: string): WindowSettings {
-  const defaults = { open: false, position: { left: 16, top: 48 } };
+export function readWindow(id: string, defaultOpen = false): WindowSettings {
+  const defaults = { open: defaultOpen, position: { left: 16, top: 48 } };
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key(id)) ?? 'null');
     if (!value || typeof value !== 'object' || !('version' in value) || value.version !== 1) return defaults;
