@@ -11,7 +11,7 @@ const source: BuildingInteriorSource = {
   id:'test', bounds:{minX:0,maxX:10,minZ:0,maxZ:10},
   profile:{
     shape:'rectangular', width:10, depth:10, height:8, aspectRatio:1, origin:[0,0,0], yaw:0, outline,
-    floorCount:2, floorHeight:3.5, facadeBase:.5, windowSlots:4,
+    floorCount:2, elevatorCount:0, staircaseCount:1, floorHeight:3.5, facadeBase:.5, windowSlots:4,
     facades:outline.map((start,i)=>({start,end:outline[(i+1)%4],windowColumns:i===0?2:0})),
     entrance:{wallIndex:0,offset:5,center:[0,5],base:0,width:2.5,height:2.75},
   },

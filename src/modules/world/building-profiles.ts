@@ -14,6 +14,8 @@ export interface BuildingProfile {
   readonly yaw: number;
   readonly outline: readonly (readonly number[])[];
   readonly floorCount: number;
+  readonly elevatorCount: number;
+  readonly staircaseCount: number;
   readonly floorHeight: number;
   readonly facadeBase: number;
   readonly windowSlots: number;

@@ -6,9 +6,12 @@ from pathlib import Path
 DATA = Path(__file__).resolve().parents[1] / 'src/modules/world/data/downtown'
 
 
-def footprint_shape(outline, width, depth):
-    edges = list(zip(outline, outline[1:] + outline[:1]))
-    area = abs(sum(ax * bz - bx * az for (ax, az), (bx, bz) in edges)) / 2
+def footprint_area(outline):
+    edges = zip(outline, outline[1:] + outline[:1])
+    return abs(sum(ax * bz - bx * az for (ax, az), (bx, bz) in edges)) / 2
+
+
+def footprint_shape(outline, width, depth, area):
     fill = area / (width * depth)
     if fill >= .9:
         return 'rectangular'
@@ -88,12 +91,17 @@ def prepare_profiles(city):
                 if nearest is None or candidate < nearest:
                     nearest = candidate
             _, wall, offset = nearest
+            area = footprint_area(outline)
+            # shortcut: size the circulation from the footprint and floor count until floor plans exist.
+            elevators = min(8, max(1, math.ceil(area * floors / 8000))) if floors >= 5 else 0
+            stairs = 0 if floors == 1 else 1 + int(area >= 1500 or elevators >= 4)
             profiles[ident] = {
-                'shape': footprint_shape(outline, width, depth),
+                'shape': footprint_shape(outline, width, depth, area),
                 'width': round(width, 3), 'depth': round(depth, 3), 'height': round(height, 3),
                 'aspectRatio': round(max(width, depth) / min(width, depth), 3),
                 'origin': placement['position'], 'yaw': yaw, 'outline': outline,
                 'floorCount': floors, 'floorHeight': round((top - bottom) / floors, 4), 'facadeBase': round(bottom - oy, 3),
+                'elevatorCount': elevators, 'staircaseCount': stairs,
                 'windowSlots': floors * sum(wall['windowColumns'] for wall in facades),
                 'facades': facades,
                 'entrance': {
