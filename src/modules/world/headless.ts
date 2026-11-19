@@ -1,4 +1,44 @@
-import type { Rectangle, WorldPlacement, CitySource } from '../world-generation/headless.ts';
+import type { Rectangle, WorldPlacement, CitySource, CityMesh } from '../world-generation/headless.ts';
+
+export type BuildingShape = 'rectangular' | 'round' | 'oval' | 'complex';
+
+export interface BuildingProfile {
+  readonly shape: BuildingShape;
+  readonly width: number;
+  readonly depth: number;
+  readonly height: number;
+  readonly aspectRatio: number;
+  /** World X/Y/Z and Babylon yaw. Local points below use X/Z in metres. */
+  readonly origin: readonly number[];
+  readonly yaw: number;
+  readonly outline: readonly (readonly number[])[];
+  readonly floorCount: number;
+  readonly elevatorCount: number;
+  readonly staircaseCount: number;
+  readonly floorHeight: number;
+  readonly facadeBase: number;
+  readonly windowSlots: number;
+  readonly facades: readonly {
+    readonly start: readonly number[];
+    readonly end: readonly number[];
+    readonly windowColumns: number;
+  }[];
+  readonly entrance: {
+    readonly wallIndex: number;
+    readonly offset: number;
+    readonly center: readonly number[];
+    readonly base: number;
+    readonly width: number;
+    readonly height: number;
+  };
+}
+
+export interface BuildingInteriorSource {
+  readonly id: string;
+  readonly bounds: CitySource['bounds'];
+  readonly profile: BuildingProfile;
+  readonly facade: CityMesh;
+}
 
 export interface CollisionBox extends Rectangle { readonly id: string; readonly minY: number; readonly maxY: number; readonly outline?: readonly (readonly number[])[] }
 export interface BuildingDoor {
@@ -132,10 +172,10 @@ function pedestrianShells(city: CitySource, blockers: readonly CollisionBox[]) {
       function wall(from:number,to:number,minY:number){
         const x1=ax+dx*from,z1=az+dz*from,x2=ax+dx*to,z2=az+dz*to;
         const nx=dz*.125,nz=-dx*.125;
-        const outline=[[x1+nx,z1+nz],[x2+nx,z2+nz],[x2-nx,z2-nz],[x1-nx,z1-nz]];
+        const outline=[[x1+2*nx,z1+2*nz],[x2+2*nx,z2+2*nz],[x2-nx,z2-nz],[x1-nx,z1-nz]];
         walls.push({id:`${id}/wall/${index}/${from}`,outline,minY,maxY,
-          minX:Math.min(x1,x2)-Math.abs(nx), maxX:Math.max(x1,x2)+Math.abs(nx),
-          minZ:Math.min(z1,z2)-Math.abs(nz), maxZ:Math.max(z1,z2)+Math.abs(nz)});
+          minX:Math.min(...outline.map(p=>p[0])), maxX:Math.max(...outline.map(p=>p[0])),
+          minZ:Math.min(...outline.map(p=>p[1])), maxZ:Math.max(...outline.map(p=>p[1]))});
       }
       if(index!==doorEdge){wall(0,length,minY);continue;}
       const along=(x-ax)*dx+(z-az)*dz, left=along-width/2, right=along+width/2;

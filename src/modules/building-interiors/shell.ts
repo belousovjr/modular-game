@@ -1,11 +1,8 @@
 import { DOOR_FRAME_TRIM, type BuildingProfile, type BuildingInteriorSource } from '../world/index.ts';
 
-import { cutFloor, floorOpenings, openingCorners, type Point } from './floor-openings.ts';
+import { cutFloor, interiorLayout, SLAB_DEPTH, SHAFT_WALL_DEPTH, openingCorners, type Point } from './headless.ts';
+export { ENTRANCE_FLOOR_OFFSET } from './headless.ts';
 const WALL_DEPTH = .25;
-const SLAB_DEPTH = .25;
-const SHAFT_WALL_DEPTH = .12;
-export const ENTRANCE_FLOOR_OFFSET = .01; // Avoid a coplanar surface with the terrain at the threshold.
-const MIN_HEADROOM = 2; // Standing character: 1.8 m.
 
 function mix(a: readonly number[], b: readonly number[], t: number): Point {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -135,12 +132,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
   }
 
   // Reuse the roof triangulation for every horizontal surface, including courtyard cutouts.
-  const footprint: number[] = [];
-  const {uvs} = facade;
-  for (let i = 0; i < facade.indices.length; i += 3) {
-    const a = facade.indices[i], b = facade.indices[i+1], c = facade.indices[i+2];
-    if (uvs?.[a*2] === -2 && uvs[b*2] === -2 && uvs[c*2] === -2) footprint.push(a,b,c);
-  }
+  const {footprint,ground,upperFloors,localFootprint,openings}=interiorLayout({profile,facade});
   function cap(geometry: {positions:number[]; indices:number[]}, height: number, up: boolean) {
     const first = geometry.positions.length / 3;
     for (const i of footprint) geometry.positions.push(facade.positions[i*3], oy+height, facade.positions[i*3+2]);
@@ -150,24 +142,8 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
   }
 
   const slabs = {positions:[] as number[], indices:[] as number[], stairRims:[] as number[], floorStarts:[0]};
-  const ground = profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
-  let floor = ground;
-  cap(slabs, floor, true);
-  cap(slabs, floor-SLAB_DEPTH, false);
-  const upperFloors: {height:number;depth:number}[] = [];
-  for (let row = 1; row < profile.floorCount; row++) {
-    const next = profile.facadeBase + row*profile.floorHeight;
-    const depth = Math.min(SLAB_DEPTH, next-floor-MIN_HEADROOM);
-    if (depth <= 0 || top-next < MIN_HEADROOM) continue;
-    upperFloors.push({height:next,depth});
-    floor = next;
-  }
-  const localFootprint: Point[] = [];
-  for (const i of footprint) {
-    const x=facade.positions[i*3]-ox, z=facade.positions[i*3+2]-oz;
-    localFootprint[i]=[x*cos-z*sin,x*sin+z*cos];
-  }
-  const openings = upperFloors.length ? floorOpenings(profile,localFootprint,footprint) : [];
+  cap(slabs, ground, true);
+  cap(slabs, ground-SLAB_DEPTH, false);
   const cut = openings.length ? cutFloor(localFootprint,footprint,openings) : [];
   const slabVertex = (point: Point, y: number) => vertex(point,y,slabs.positions);
   for (const {height,depth} of upperFloors) {

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
-import {floorOpenings, openingCorners, type Point} from '../src/modules/building-interiors/floor-openings.ts';
-import {buildStairs} from '../src/modules/building-interiors/stairs.ts';
+import {floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
+import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
@@ -224,6 +224,85 @@ test('stairs fit their reserved opening and meet both floors with raised railing
   assert.ok(rails.positions.some((y,i)=>i%3===1 && y>4.5));
 });
 
+test('authority climbs both flights and lands on the upper slab independently of rendering', () => {
+  const {openings}=buildInterior(source);
+  const stair=openings.find(o=>o.kind==='staircase');
+  assert.ok(stair?.stairFront!==undefined);
+  const corners=openingCorners(stair), front=stair.stairFront;
+  const a=corners[front],b=corners[(front+1)%4];
+  const width=Math.hypot(b[0]-a[0],b[1]-a[1]);
+  const length=front%2===0 ? stair.maxZ-stair.minZ : stair.maxX-stair.minX;
+  const tx=(b[0]-a[0])/width,tz=(b[1]-a[1])/width;
+  const at=(u:number,d:number)=>({x:a[0]+tx*u-tz*d,z:a[1]+tz*u+tx*d});
+  const left=.05+(width/2-.03)/2,right=width-left;
+  const start=at(left,-.65);
+  const world={bounds:{minX:-5,maxX:15,minZ:-5,maxZ:15},baseHeight:0,slopeX:0,spawn:start,blockers:[],floors:[]};
+  const actor=createCharacterAuthorityFactory(world,[source])(0);
+  let tick=0;
+  const walk=(point:{x:number;z:number})=>{
+    for(let i=0;i<500;i++){
+      const s=actor.snapshot(),x=point.x-s.x,z=point.z-s.z,d=Math.hypot(x,z);
+      if(d<.04)return;
+      assert.ok(actor.receive({type:'move',characterId:s.id,sequence:tick+1,tick,x:x/d,z:z/d,run:false,jump:false},'local').accepted);
+      actor.step(++tick);
+    }
+    assert.fail('Could not reach stair waypoint '+JSON.stringify({point,actor:actor.snapshot()}));
+  };
+  const landing=length-(Math.min(.9,Math.max(.62,length*.34))*.5);
+  walk(at(left,landing));
+  assert.ok(actor.snapshot().y>1.9);
+  walk(at(right,landing));
+  walk(at(right,-.6));
+  assert.ok(Math.abs(actor.snapshot().y-4)<.01);
+});
+
+test('local collision cache can revisit an evicted building and preserves its floor contacts', () => {
+  const buildings=Array.from({length:13},(_,index)=>{
+    const x=index*40;
+    return {...source,id:`fixture/${index}`,bounds:{minX:x,maxX:x+10,minZ:0,maxZ:10},
+      profile:{...source.profile,origin:[x,0,0]},
+      facade:{...source.facade,positions:source.facade.positions.map((value,i)=>i%3===0?value+x:value)}};
+  });
+  const collision=createInteriorCollision(buildings);
+  const first=collision.at(5,5,3,5);
+  assert.ok(first.slabs.some(slab=>slab.maxY===4));
+  assert.equal(collision.at(5,5,3,5),first);
+  for(let i=1;i<buildings.length;i++)assert.ok(collision.at(i*40+5,5,3,5).slabs.some(slab=>slab.maxY===4));
+  const revisited=collision.at(5,5,3,5);
+  assert.deepEqual(revisited,first);
+  assert.notEqual(revisited.slabs[0],first.slabs[0]);
+});
+
+test('lift landing doors and walls are solid while the upper shaft cutout has no slab', () => {
+  const profile={...source.profile,elevatorCount:1};
+  const building={...source,profile};
+  const shaft=buildInterior(building).openings.find(o=>o.kind==='elevator');
+  assert.ok(shaft?.front!==undefined);
+  const corners=openingCorners(shaft),a=corners[shaft.front],b=corners[(shaft.front+1)%4];
+  const collision=createInteriorCollision([building]);
+  const doorway=collision.at((a[0]+b[0])/2,(a[1]+b[1])/2,0,2.1);
+  assert.ok(doorway.boxes.some(box=>box.id.endsWith('/elevator-door')));
+  const center=collision.at((shaft.minX+shaft.maxX)/2,(shaft.minZ+shaft.maxZ)/2,3,5);
+  assert.equal(center.slabs.length,0);
+  assert.ok(collision.at(5,5,3,5).slabs.some(slab=>slab.maxY===4));
+});
+
+test('entrance doors halt against a blocker and continue after it clears', () => {
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const motion=createEntranceMotion([door]);
+  const actor={x:0,y:0,z:2}, away={x:0,y:0,z:5};
+  const blocker={id:'crate',minX:-.9,maxX:-.45,minZ:-1,maxZ:-.45,minY:0,maxY:1};
+  for(let i=0;i<30;i++)motion.step(actor,.35,1.8,()=>[blocker]);
+  const stalled=motion.snapshot()[0];
+  assert.ok(stalled.left<1 && stalled.right===1);
+  for(let i=0;i<30;i++)motion.step(actor,.35,1.8,()=>[]);
+  assert.equal(motion.snapshot()[0].left,1);
+  for(let i=0;i<30;i++)motion.step(away,.35,1.8,()=>[blocker]);
+  assert.ok(motion.snapshot()[0].left>0);
+  for(let i=0;i<30;i++)motion.step(away,.35,1.8,()=>[]);
+  assert.equal(motion.snapshot().length,0);
+});
+
 test('floor LOD partitions the walls, windows, landing doors and complete slabs by actual floor', () => {
   const profile={...source.profile, floorCount:7,height:25.5,elevatorCount:1};
   const interior=buildInterior({...source,profile});
@@ -326,11 +405,12 @@ test('lifts form a row near a corner and keep both staircase reservations', () =
 
 test('character authority enters through a real doorway and is stopped by the wall beside it', async () => {
   const {cityCollision} = await import('../src/modules/world/headless.ts');
-  const {createCharacterAuthorityFactory} = await import('../src/modules/characters/headless.ts');
   const world = cityCollision(citySource);
-  const factory = createCharacterAuthorityFactory(world);
   const door = world.doors?.find(door=>door.id==='osm/w1176482819/0/0/1');
   assert.ok(door);
+  const interior=getBuildingInteriorSources(citySource).find(source=>source.id===door.id);
+  assert.ok(interior);
+  const factory=createCharacterAuthorityFactory(world,[interior]);
   const {x,y,z,tx,tz} = door;
   const nx=tz, nz=-tx;
   function walk(offset: number) {

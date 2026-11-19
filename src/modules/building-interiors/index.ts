@@ -1,4 +1,4 @@
-import { buildStairs } from './stairs.ts';
+import { buildStairs, doorFrameParts, doorLeafParts, ENTRANCE_SWING, type DoorPose } from './headless.ts';
 import { floorInRange, partitionInterior } from './floor-lod.ts';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
@@ -8,12 +8,13 @@ import { createScope } from '../../core/scope.ts';
 import { geometryModule } from '../geometry/index.ts';
 import { materialsModule } from '../materials/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
-import { DOOR_FRAME_TRIM, worldModule, type BuildingDoor, type BuildingProfile } from '../world/index.ts';
+import { worldModule, type BuildingDoor, type BuildingProfile } from '../world/index.ts';
 import { worldStreamingModule } from '../world-streaming/index.ts';
 import { buildInterior, ENTRANCE_FLOOR_OFFSET, nearInterior } from './shell.ts';
 
 type Leaf = {mesh:Mesh; direction:number};
 type Box = readonly [number,number,number,number,number,number];
+export type {DoorPose} from './headless.ts';
 type Point = {x:number; y:number; z:number};
 
 export const buildingInteriorsModule = defineModule({
@@ -26,6 +27,8 @@ export const buildingInteriorsModule = defineModule({
       update:(point:Point | undefined,opacity:number,actor:Point | null)=>void;
     }>();
     const doors = new Map(deps.world.collision.doors?.map(door=>[door.id,door]));
+    let presentedDoors:readonly DoorPose[]|undefined;
+    let presentedById=new Map<string,DoorPose>();
     let doorway: BuildingDoor | undefined;
     let leaves: Leaf[] = [], open = 0, opening = false;
     scope.onDispose(() => deps.materials.setDoorway(null));
@@ -69,27 +72,17 @@ export const buildingInteriorsModule = defineModule({
       };
 
       // Match the baked entrance: 25 cm trim, 12.5 cm meeting stile and 6.25 cm handles.
-      const half=door.width/2, trim=DOOR_FRAME_TRIM, top=door.height;
+      const half=door.width/2;
       const floorY = profile.origin[1] + profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
       // Keep the foot of each jamb above the translucent floor and clear of its depth plane.
       const jambBottom = Math.max(0, floorY - door.y + .002);
-      const frame=part('frame','interior-door-frame',[
-        [-half-trim,-half,jambBottom,top+trim,-.09375,.86],
-        [half,half+trim,jambBottom,top+trim,-.09375,.86],
-        [-half,half,top,top+trim,-.09375,.86],
-      ]);
+      const frame=part('frame','interior-door-frame',doorFrameParts(door,jambBottom));
       frame.position.set(door.x,door.y,door.z);
       frame.freezeWorldMatrix();
       const leaves: Leaf[] = [];
       for(const sign of [-1,1]){
-        const hinge=sign*half, meeting=-hinge, gap=.004;
-        const left=Math.min(0,meeting+sign*gap), right=Math.max(0,meeting+sign*gap);
-        const handle=meeting+sign*.25;
-        const mesh=part(String(sign),'interior-door',[
-          [left,right,0,top,-.004,.076],
-          [Math.max(left,meeting-.0625),Math.min(right,meeting+.0625),0,top,-.03,.10],
-          [handle-.03125,handle+.03125,1,1.5,-.0625,.135],
-        ]);
+        const hinge=sign*half;
+        const mesh=part(String(sign),'interior-door',doorLeafParts(door,sign));
         const colors = new Float32Array(mesh.getTotalVertices()*4).fill(1);
         for (let i=24*4; i<colors.length; i+=4) {
           colors[i]=.55;
@@ -217,14 +210,30 @@ export const buildingInteriorsModule = defineModule({
         insideSelected=inside;
       }
       selectDoor(selected);
+      if (presentedDoors) {
+        for (const [id,{leaves:current}] of active) {
+          const state=presentedById.get(id);
+          for (const {mesh,direction} of current) {
+            const angle=direction>0 ? state?.left : state?.right;
+            mesh.rotation.y=direction*ENTRANCE_SWING*(angle??0);
+          }
+        }
+        return;
+      }
       if(!selected)return;
       const actorDistance=actor?doorDistance(selected,actor):Infinity;
       opening=actorDistance<=(opening?3:2.5);
       const step=Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
       open=opening?Math.min(1,open+step):Math.max(0,open-step);
-      for (const {mesh,direction} of leaves) mesh.rotation.y=direction*(5*Math.PI/12)*open;
+      for (const {mesh,direction} of leaves) mesh.rotation.y=direction*ENTRANCE_SWING*open;
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
-    return {};
+    return {
+      presentDoorSnapshot(snapshot:readonly DoorPose[]|undefined) {
+        if (snapshot===presentedDoors) return;
+        presentedDoors=snapshot;
+        presentedById=new Map(snapshot?.map(door=>[door.id,door]));
+      },
+    };
   },
 });

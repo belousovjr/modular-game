@@ -10,16 +10,17 @@ import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
+import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
 import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
   id: 'characters', title: 'Персонаж', category: 'Игра',
-  requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule },
+  requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule, interiors: buildingInteriorsModule },
   setup({ core, deps, scope }) {
     let stopped=false;
-    const createAuthority = createCharacterAuthorityFactory(deps.world.collision);
+    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources());
     const start = deps.simulation.snapshot().tick;
     const position = readLocalPosition();
     const authority = createAuthority(start, undefined, position);
@@ -37,7 +38,12 @@ export const charactersModule = defineModule({
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
     const createView=(owner: Scope)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner);};
     const render = createView(scope);
-    const update = () => render(connection.snapshot());
+    const update = () => {
+      const snapshot=connection.snapshot();
+      deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
+      render(snapshot);
+    };
+    scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));
     update();
     const observer = core.scene.onBeforeRenderObservable.add(update, -1, true);
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));

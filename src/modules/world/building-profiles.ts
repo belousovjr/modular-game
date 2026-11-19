@@ -1,38 +1,7 @@
-import type { CityMesh, CitySource } from '../world-generation/index.ts';
+import type { CitySource } from '../world-generation/index.ts';
+import type { BuildingProfile, BuildingInteriorSource } from './headless.ts';
+export type { BuildingShape, BuildingProfile, BuildingInteriorSource } from './headless.ts';
 import data from './data/downtown/building-profiles.json' with {type:'json'};
-
-export type BuildingShape = 'rectangular' | 'round' | 'oval' | 'complex';
-
-export interface BuildingProfile {
-  readonly shape: BuildingShape;
-  readonly width: number;
-  readonly depth: number;
-  readonly height: number;
-  readonly aspectRatio: number;
-  /** World X/Y/Z and Babylon yaw. Local points below use X/Z in metres. */
-  readonly origin: readonly number[];
-  readonly yaw: number;
-  readonly outline: readonly (readonly number[])[];
-  readonly floorCount: number;
-  readonly elevatorCount: number;
-  readonly staircaseCount: number;
-  readonly floorHeight: number;
-  readonly facadeBase: number;
-  readonly windowSlots: number;
-  readonly facades: readonly {
-    readonly start: readonly number[];
-    readonly end: readonly number[];
-    readonly windowColumns: number;
-  }[];
-  readonly entrance: {
-    readonly wallIndex: number;
-    readonly offset: number;
-    readonly center: readonly number[];
-    readonly base: number;
-    readonly width: number;
-    readonly height: number;
-  };
-}
 
 const profiles: Readonly<Record<string, (Omit<BuildingProfile, 'shape'> & {readonly shape: string}) | undefined>> = data;
 
@@ -43,13 +12,6 @@ export function getBuildingProfile(id: string): BuildingProfile | undefined {
   if (shape === 'rectangular' || shape === 'round' || shape === 'oval' || shape === 'complex') return {...profile, shape};
 }
 
-
-export interface BuildingInteriorSource {
-  readonly id: string;
-  readonly bounds: CitySource['bounds'];
-  readonly profile: BuildingProfile;
-  readonly facade: CityMesh;
-}
 
 export function getBuildingInteriorSources(city: CitySource): BuildingInteriorSource[] {
   const results: BuildingInteriorSource[] = [];

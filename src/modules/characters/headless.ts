@@ -1,4 +1,5 @@
-import { pedestrianBlockers, type CollisionWorld, type CollisionBox } from '../world/headless.ts';
+import { pedestrianBlockers, type CollisionWorld, type CollisionBox, type BuildingInteriorSource } from '../world/headless.ts';
+import {createEntranceMotion,createInteriorCollision,type DoorPose} from '../building-interiors/headless.ts';
 
 export type LocomotionMode = 'walk' | 'fly' | 'swim';
 export type CharacterStance = 'standing' | 'crouching' | 'prone';
@@ -12,6 +13,7 @@ export interface VehicleCharacterFrame {
   readonly release: {readonly x:number;readonly y:number;readonly z:number;readonly yaw:number} | null;
 }
 export interface CharacterSnapshot {
+  readonly entranceDoors?:readonly DoorPose[];
   readonly tick: number; readonly id: string; readonly ownerId: string;
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
   readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting'|'crawling';
@@ -36,7 +38,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
   return createCharacterAuthorityFactory(world)(startTick);
 }
 
-export function createCharacterAuthorityFactory(world: CollisionWorld) {
+export function createCharacterAuthorityFactory(world: CollisionWorld, interiorSources:readonly BuildingInteriorSource[] = []) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
@@ -113,6 +115,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
+  const interiors=createInteriorCollision(interiorSources);
   return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
@@ -121,28 +124,46 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
   let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
   let stance:CharacterStance='standing',stanceRequest:CharacterStance|undefined;
   let vx=0,vy=0,vz=0;
+  const entrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  function sample(px:number,pz:number,low:number,high:number) {
+    return interiors.at(px,pz,low,high);
+  }
   function support(px: number,pz: number) {
     let height=ground(px,pz);
-    for(const b of obstacles(px,pz)) if(px>b.minX-RADIUS && px<b.maxX+RADIUS && pz>b.minZ-RADIUS && pz<b.maxZ+RADIUS && b.maxY<=y+.3 && touches(b,px,pz)) height=Math.max(height,b.maxY);
+    const area=sample(px,pz,y-.5,y+.3);
+    for(const slab of area.slabs) if(slab.maxY<=y+.3)height=Math.max(height,slab.maxY);
+    for(const b of obstacles(px,pz,y,area.boxes)) {
+      const radius=b.id==='stair-tread' ? 0 : area.onStairs ? .215 : RADIUS;
+      if(b.maxY<=y+.3 && overlapsAt(b,px,pz,radius))height=Math.max(height,b.maxY);
+    }
     return height;
   }
   let vehicleFrame:VehicleCharacterFrame|null=null;
-  const obstacles=(px:number,pz:number)=>vehicleFrame?[...query(cells,px,pz),vehicleFrame.blocker]:query(cells,px,pz);
+  const obstacles=(px:number,pz:number,py:number,inside:readonly CollisionBox[])=>[
+    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame?[vehicleFrame.blocker]:[]),
+  ];
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
-  function touches(b:CollisionBox,px:number,pz:number) {
+  function touches(b:CollisionBox,px:number,pz:number,radius=RADIUS) {
     if(!b.outline)return true;
     let inside=false;
     for(let i=0,j=b.outline.length-1;i<b.outline.length;j=i++) {
       const a=b.outline[j],c=b.outline[i];
       if((a[1]>pz)!==(c[1]>pz)&&px<(c[0]-a[0])*(pz-a[1])/(c[1]-a[1])+a[0])inside=!inside;
       const dx=c[0]-a[0],dz=c[1]-a[1],t=Math.max(0,Math.min(1,((px-a[0])*dx+(pz-a[1])*dz)/(dx*dx+dz*dz||1)));
-      if((px-a[0]-dx*t)**2+(pz-a[1]-dz*t)**2<RADIUS*RADIUS)return true;
+      if((px-a[0]-dx*t)**2+(pz-a[1]-dz*t)**2<radius*radius)return true;
     }
     return inside;
   }
+  function overlapsAt(b:CollisionBox,px:number,pz:number,radius:number){
+    return px>=b.minX-radius && px<=b.maxX+radius && pz>=b.minZ-radius && pz<=b.maxZ+radius && touches(b,px,pz,radius);
+  }
   function blocked(px: number, pz: number, py: number, checkStep=true,height=HEIGHT[stance]) {
     if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || (checkStep&&py-y>.3)) return true;
-    return obstacles(px,pz).some(b => py < b.maxY && py + height > b.minY && px > b.minX - RADIUS && px < b.maxX + RADIUS && pz > b.minZ - RADIUS && pz < b.maxZ + RADIUS && touches(b,px,pz));
+    const area=sample(px,pz,py,py+height);
+    if(area.slabs.some(s=>py<s.maxY-1e-7&&py+height>s.minY+1e-7))return true;
+    const radius=area.onStairs ? .215 : RADIUS;
+    return obstacles(px,pz,py,area.boxes).some(b=>
+      py < b.maxY-1e-7 && py+height > b.minY+1e-7 && overlapsAt(b,px,pz,b.id==='stair-tread'&&checkStep?0:radius));
   }
   function freeBlocked(px:number,pz:number,py:number){
     if(blocked(px,pz,py,false))return true;
@@ -193,11 +214,22 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       if(top>=y-.3&&top<=y+.3){y=top;grounded=true;}
     }
   }
-  if (resume && [resume.x,resume.y,resume.z].every(Number.isFinite) && Math.abs(resume.y)<=10000 &&
-      !freeBlocked(resume.x,resume.z,resume.y) && Number.isFinite(ground(resume.x,resume.z,resume.y+1e-7))) {
-    ({x,y,z}=resume);
-    grounded=Math.abs(y-support(x,z))<1e-7;
-  } else if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
+  if (interiorSources.length) {
+    for(const slab of sample(x,z,y-.03,y+.3).slabs) {
+      if(slab.maxY>=y && slab.maxY<=y+.03)y=slab.maxY;
+    }
+  }
+  if (resume && [resume.x,resume.y,resume.z].every(Number.isFinite) && Math.abs(resume.y)<=10000) {
+    let savedY=resume.y;
+    for(const slab of sample(resume.x,resume.z,savedY,savedY+.03).slabs) {
+      if(slab.maxY>=savedY&&slab.maxY<=savedY+.03)savedY=slab.maxY;
+    }
+    if(!freeBlocked(resume.x,resume.z,savedY)&&Number.isFinite(ground(resume.x,resume.z,savedY+1e-7))){
+      x=resume.x;y=savedY;z=resume.z;
+      grounded=Math.abs(y-support(x,z))<1e-7;
+    }
+  }
+  if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
   return {
     setVehicleFrame(frame:VehicleCharacterFrame|null){
       if(frame){
@@ -239,6 +271,11 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       if (nextTick !== tick + 1) throw new Error('Character ticks must be consecutive');
       tick = nextTick;
       moving = false;
+      entrances?.step({x,y,z},RADIUS,HEIGHT[stance],door=>[
+        ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
+        ...sample(door.x,door.z,door.y,door.y+door.height).boxes,
+        ...(vehicleFrame?[vehicleFrame.blocker]:[]),
+      ]);
       if(vehicleFrame?.pose)return;
       if(vehicleFrame?.approach){resetMotion();stanceRequest='standing';const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
       if(stanceRequest&&stanceRequest!==stance&&grounded&&mode==='walk'&&!blocked(x,z,y,false,HEIGHT[stanceRequest]))stance=stanceRequest;
@@ -276,17 +313,25 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
         verticalSpeed -= 16 / 60;
         let nextY = y + verticalSpeed / 60;
         let support=ground(x,z,overWater(x,z)?y+.3:Infinity);
-        for (const b of query(cells,x,z)) {
-          if (x <= b.minX-RADIUS || x >= b.maxX+RADIUS || z <= b.minZ-RADIUS || z >= b.maxZ+RADIUS || !touches(b,x,z)) continue;
+        const height=HEIGHT[stance];
+        const area=sample(x,z,Math.min(y,nextY),Math.max(y,nextY)+height);
+        for(const slab of area.slabs){
+          if(verticalSpeed<=0&&y>=slab.maxY-1e-7)support=Math.max(support,slab.maxY);
+          if(verticalSpeed>0&&y+height<=slab.minY+1e-7&&nextY+height>=slab.minY){
+            nextY=slab.minY-height;verticalSpeed=0;
+          }
+        }
+        for (const b of obstacles(x,z,y,area.boxes)) {
+          const radius=b.id==='stair-tread'?0:area.onStairs?.215:RADIUS;
+          if(!overlapsAt(b,x,z,radius))continue;
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
-          const height=HEIGHT[stance];
           if (verticalSpeed > 0 && y+height <= b.minY && nextY+height >= b.minY) { nextY=b.minY-height;verticalSpeed=0; }
         }
         if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;landedTick=tick; }
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
   };
   };
 }
