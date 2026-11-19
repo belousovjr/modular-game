@@ -1,4 +1,4 @@
-import type { CollisionWorld, CollisionBox } from '../world/headless.ts';
+import { pedestrianBlockers, type CollisionWorld, type CollisionBox } from '../world/headless.ts';
 
 export type LocomotionMode = 'walk' | 'fly' | 'swim';
 export type CharacterStance = 'standing' | 'crouching' | 'prone';
@@ -52,7 +52,8 @@ export function createCharacterAuthorityFactory(world: CollisionWorld) {
       if (list) list.push(item); else map.set(key, [item]);
     }
   }
-  for (const b of world.blockers) {
+  if ((world.pedestrianWalls?.length??0) > 100000) throw new Error('Too many pedestrian walls');
+  for (const b of pedestrianBlockers(world)) {
     if (![b.minY,b.maxY].every(Number.isFinite) || b.maxY <= b.minY) throw new Error('Invalid collision height');
     if(b.outline && (b.outline.length<3||b.outline.length>256||b.outline.some(p=>p.length!==2||!p.every(Number.isFinite))))throw new Error('Invalid collision outline');
     index(cells, Object.freeze({ ...b,outline:b.outline?.map(p=>Object.freeze([...p])) }));

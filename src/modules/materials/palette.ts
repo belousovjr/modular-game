@@ -20,6 +20,8 @@ export const surfaces = {
   walls: { color: '#ad8d72', texture: 'brick' },
   roof: { color: '#575d63', texture: 'roof' },
   foundation: { color: '#777b81', texture: 'concrete' },
+  'interior-door-frame': { color: '#394452', texture: 'metal' },
+  'interior-door': { color: '#677b86', texture: 'metal' },
   'interior-concrete': { color: '#c9c2b2', texture: 'concrete' },
   facade: { color: '#677b86', texture: 'metal' },
   metal: { color: '#394452', texture: 'metal' },

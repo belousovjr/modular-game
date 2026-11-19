@@ -8,7 +8,7 @@ import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
 import { defineModule } from '../../core/context.ts';
 import { charactersModule,type CharacterStance } from '../characters/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
-import { worldModule } from '../world/index.ts';
+import { pedestrianBlockers, worldModule } from '../world/index.ts';
 
 export const playerControlModule = defineModule({
   id: 'player-control', title: 'Управление персонажем', category: 'Игра',
@@ -38,7 +38,7 @@ export const playerControlModule = defineModule({
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
-    const obstacleSweep=createCameraObstacleSweep(deps.world.collision.blockers);
+    const obstacleSweep=createCameraObstacleSweep(pedestrianBlockers(deps.world.collision));
     const arm=Vector3.Zero();
     let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();

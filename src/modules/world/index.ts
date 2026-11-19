@@ -1,3 +1,5 @@
+import {facadeDoorWindows} from './facade-door-windows.ts';
+export {DOOR_FRAME_TRIM} from './facade-door-windows.ts';
 import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 import {StandardMaterial} from '@babylonjs/core/Materials/standardMaterial.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
@@ -25,7 +27,7 @@ import {geometryModule} from '../geometry/index.ts';
 import {distantSurfaces,groupDistantSurfaces,groupStreetSurfaces} from './distant-surfaces.ts';
 import {createElement} from 'react';
 import {Link} from '@radix-ui/themes';
-export type { CollisionWorld, CollisionBox } from './headless.ts';
+export { pedestrianBlockers, type BuildingDoor, type CollisionWorld, type CollisionBox } from './headless.ts';
 export interface StreetLightAnchor {readonly id:string;readonly street:string;readonly x:number;readonly y:number;readonly z:number}
 
 export const worldModule = defineModule({
@@ -175,6 +177,7 @@ export const worldModule = defineModule({
         for(const surface of surfaces) {
           const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
+          if ('doorWindows' in surface && surface.doorWindows) mesh.setVerticesData('cityDoorWindows', new Float32Array(surface.doorWindows), false, 4);
           if ('trim' in surface && surface.trim) {
             mesh.setVerticesData('cityTrim', new Float32Array(surface.trim), false, 4);
           }
@@ -185,16 +188,24 @@ export const worldModule = defineModule({
       },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
     const detailRange={load:36,unload:46,unloadDelayMs:250};
+    const collision=cityCollision(city);
+    const doorwayIds = new Set(collision.doors?.map(door => door.id));
     const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
     for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
       deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
         const meshes:Mesh[]=[];
         const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
         detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
+        const id=detail.id.split('/detail/')[1];
+        const doorPanel = detail.meshes.find(mesh=>mesh.surface==='facade')?.positions;
         for(const surface of detail.meshes){
           const material=surface.surface.replace(/-detail$/,'');
+          if (doorwayIds.has(id) && (material==='facade' || material==='metal')) continue;
           const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
-          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};mesh.freezeWorldMatrix();
+          const rectangles = doorPanel && facadeDoorWindows(surface,[doorPanel]);
+          if (rectangles) mesh.setVerticesData('cityDoorWindows',rectangles,false,4);
+          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};
+          mesh.freezeWorldMatrix();
           view.meshes.push(mesh);
           for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
         }
@@ -228,7 +239,6 @@ export const worldModule = defineModule({
       }
     });
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
-    const collision=cityCollision(city);
     const streetNames=new Map(city.roads.map(r=>[r.id,r.name||r.id]));
     const streetLights=Object.freeze(city.placements.filter(p=>p.templateId==='world/lamp').map(p=>Object.freeze({id:p.key,street:streetNames.get(p.key.split('/').slice(2,-2).join('/'))??p.key,x:p.position[0]+1.5*Math.cos(p.rotation[1]),y:p.position[1]+4.125,z:p.position[2]-1.5*Math.sin(p.rotation[1])})));
     return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
@@ -236,6 +246,7 @@ export const worldModule = defineModule({
       getMap: () => getWorldMap(city),
       getBuildingProfile,
       getBuildingInteriorSources: () => getBuildingInteriorSources(city),
+      buildingDetailRange: detailRange,
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,
       visibility() {

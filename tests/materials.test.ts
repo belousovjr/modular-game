@@ -50,7 +50,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 25);
+    assert.equal(api.getSnapshot().materials, 27);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));

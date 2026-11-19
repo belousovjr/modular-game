@@ -1,8 +1,9 @@
-import type { BuildingProfile, BuildingInteriorSource } from '../world/index.ts';
+import { DOOR_FRAME_TRIM, type BuildingProfile, type BuildingInteriorSource } from '../world/index.ts';
 
 type Point = readonly [number, number];
 const WALL_DEPTH = .25;
 const SLAB_DEPTH = .25;
+export const ENTRANCE_FLOOR_OFFSET = .01; // Avoid a coplanar surface with the terrain at the threshold.
 const MIN_HEADROOM = 2; // Standing character: 1.8 m.
 
 function mix(a: readonly number[], b: readonly number[], t: number): Point {
@@ -78,6 +79,10 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
       panel(0, 1, bottom, top);
       continue;
     }
+    const entrance = profile.entrance;
+    const entranceWall = wall === profile.facades[entrance.wallIndex];
+    const span = Math.hypot(wall.end[0]-wall.start[0],wall.end[1]-wall.start[1]);
+    const doorHalf = entrance.width/2+DOOR_FRAME_TRIM;
     let bandBottom = bottom;
     for (let row = 0; row < profile.floorCount; row++) {
       // Match the ordinary facade's ground-floor and upper-floor window masks.
@@ -91,6 +96,8 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
       for (let column = 0; column < wall.windowColumns; column++) {
         const left = (column + .5 - halfWidth)/wall.windowColumns;
         const right = (column + .5 + halfWidth)/wall.windowColumns;
+        if (entranceWall && high > entrance.base && low < entrance.base+entrance.height+DOOR_FRAME_TRIM &&
+            right*span > entrance.offset-doorHalf && left*span < entrance.offset+doorHalf) continue;
         panel(pier, left, low, high);
         pier = right;
         const il = mix(start, end, left), ir = mix(start, end, right);
@@ -127,7 +134,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     cap(slabs, height, true);
     cap(slabs, height-depth, false);
   }
-  let floor = profile.entrance.base + .01; // Avoid a coplanar surface with the terrain at the threshold.
+  let floor = profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
   slab(floor, SLAB_DEPTH);
   for (let row = 1; row < profile.floorCount; row++) {
     const next = profile.facadeBase + row*profile.floorHeight;

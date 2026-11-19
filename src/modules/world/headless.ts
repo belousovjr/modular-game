@@ -1,15 +1,30 @@
 import type { Rectangle, WorldPlacement, CitySource } from '../world-generation/headless.ts';
 
 export interface CollisionBox extends Rectangle { readonly id: string; readonly minY: number; readonly maxY: number; readonly outline?: readonly (readonly number[])[] }
+export interface BuildingDoor {
+  readonly id: string;
+  readonly x: number; readonly y: number; readonly z: number;
+  readonly tx: number; readonly tz: number;
+  readonly width: number; readonly height: number;
+}
 export interface CollisionWorld {
   readonly bounds: Rectangle;
   readonly baseHeight: number;
   readonly slopeX: number;
   readonly blockers: readonly CollisionBox[];
+  readonly pedestrianWalls?: readonly CollisionBox[];
+  readonly pedestrianShells?: readonly string[];
+  readonly doors?: readonly BuildingDoor[];
   readonly floors: readonly (Rectangle & { readonly elevation: number })[];
   readonly triangles?: readonly (readonly number[])[];
   readonly water?: {readonly level:number;readonly triangles:readonly (readonly number[])[]};
   readonly spawn: { readonly x: number; readonly z: number };
+}
+
+export function pedestrianBlockers(world: CollisionWorld): readonly CollisionBox[] {
+  if (!world.pedestrianWalls?.length) return world.blockers;
+  const replaced = new Set(world.pedestrianShells);
+  return [...world.blockers.filter(blocker=>!replaced.has(blocker.id)),...world.pedestrianWalls];
 }
 
 const buildingPart=(x:number,y:number,z:number,w:number,h:number,d:number)=>({
@@ -80,6 +95,64 @@ export function createCollisionWorld(placements: readonly WorldPlacement[], boun
     blockers: Object.freeze(blockers), floors: Object.freeze(floors), spawn: Object.freeze(spawn) });
 }
 
+function pedestrianShells(city: CitySource, blockers: readonly CollisionBox[]) {
+  const byId = new Map(city.colliders.map(collider => [collider.id,collider]));
+  const levels = new Map(city.placements.map(placement => [placement.key,placement.position[1]]));
+  const walls: CollisionBox[] = [], doors: BuildingDoor[] = [];
+  const hollow = new Set<string>();
+  for (const chunk of city.chunks) for (const detail of chunk.details ?? []) {
+    const id = detail.id.split('/detail/')[1];
+    const source = byId.get(id), base = levels.get(id);
+    const panel = detail.meshes.find(mesh=>mesh.surface==='facade')?.positions;
+    const skin = detail.meshes.find(mesh=>mesh.surface.endsWith('-detail'));
+    if (!source || base===undefined || !panel || !skin) continue;
+    const x=(panel[0]+panel[9])/2, z=(panel[2]+panel[11])/2, y=panel[1];
+    const width=Math.hypot(panel[9]-panel[0],panel[11]-panel[2]), height=panel[4]-y;
+    const tx=(panel[9]-panel[0])/width, tz=(panel[11]-panel[2])/width;
+    const edges: {ax:number;az:number;bx:number;bz:number;length:number}[] = [];
+    const p=skin.positions;
+    for(let i=0;i+5<skin.indices.length;i+=3) {
+      const [a,b,c,d]=[skin.indices[i],skin.indices[i+1],skin.indices[i+2],skin.indices[i+5]];
+      if(b!==a+1||c!==a+2||d!==a+3||Math.abs(p[a*3+1]-base-.5)>.001||
+        Math.abs(p[b*3+1]-source.maxY+.5)>.001||p[b*3+1]!==p[c*3+1]||p[a*3+1]!==p[d*3+1]) continue;
+      const ax=p[a*3],az=p[a*3+2],bx=p[d*3],bz=p[d*3+2],length=Math.hypot(bx-ax,bz-az);
+      if(length>.001)edges.push({ax,az,bx,bz,length});
+    }
+    const doorEdge=edges.findIndex(({ax,az,bx,bz,length})=>{
+      const dx=(bx-ax)/length,dz=(bz-az)/length, along=(x-ax)*dx+(z-az)*dz;
+      return Math.abs(dx*tx+dz*tz)>.999 && Math.abs((x-ax)*dz-(z-az)*dx)<.6 &&
+        along>width/2 && length-along>width/2;
+    });
+    if (!width || !height || doorEdge<0) continue;
+    const {minY,maxY}=source;
+    doors.push({id,x,y,z,tx,tz,width,height});
+    hollow.add(id);
+    for(const [index,{ax,az,bx,bz,length}] of edges.entries()){
+      const dx=(bx-ax)/length,dz=(bz-az)/length;
+      function wall(from:number,to:number,minY:number){
+        const x1=ax+dx*from,z1=az+dz*from,x2=ax+dx*to,z2=az+dz*to;
+        const nx=dz*.125,nz=-dx*.125;
+        const outline=[[x1+nx,z1+nz],[x2+nx,z2+nz],[x2-nx,z2-nz],[x1-nx,z1-nz]];
+        walls.push({id:`${id}/wall/${index}/${from}`,outline,minY,maxY,
+          minX:Math.min(x1,x2)-Math.abs(nx), maxX:Math.max(x1,x2)+Math.abs(nx),
+          minZ:Math.min(z1,z2)-Math.abs(nz), maxZ:Math.max(z1,z2)+Math.abs(nz)});
+      }
+      if(index!==doorEdge){wall(0,length,minY);continue;}
+      const along=(x-ax)*dx+(z-az)*dz, left=along-width/2, right=along+width/2;
+      wall(0,left,minY);
+      wall(right,length,minY);
+      if (y+height < maxY) wall(left,right,y+height);
+    }
+  }
+  const ids: string[] = [];
+  for (const b of blockers) {
+    if (!hollow.has(b.id.split('/court/')[0])) continue;
+    ids.push(b.id);
+    walls.push({...b,id:`${b.id}/ceiling`,minY:b.maxY-.5});
+  }
+  return {pedestrianWalls:walls,pedestrianShells:ids,doors};
+}
+
 export function cityCollision(city:CitySource):CollisionWorld {
   const triangles:(readonly number[])[]=[],water:(readonly number[])[]=[];
   for(const chunk of city.chunks)for(const mesh of chunk.meshes) {
@@ -147,5 +220,5 @@ export function cityCollision(city:CitySource):CollisionWorld {
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];
   })];
-  return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,floors:[],triangles:Object.freeze(triangles),water:{level:city.waterLevel,triangles:Object.freeze(water)}});
+  return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,...pedestrianShells(city,buildingBlockers),floors:[],triangles:Object.freeze(triangles),water:{level:city.waterLevel,triangles:Object.freeze(water)}});
 }

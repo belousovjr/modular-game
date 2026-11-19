@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
+import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
 import {citySource} from '../src/modules/world/city.ts';
 
 const outline = [[0,0],[0,10],[10,10],[10,0]];
@@ -18,7 +19,8 @@ const source: BuildingInteriorSource = {
 };
 
 test('interior has inward walls, a real window opening with sills, and a down-facing ceiling', () => {
-  const {positions,indices,ceilingStart} = buildInterior(source);
+  const profile = {...source.profile, entrance:{...source.profile.entrance,wallIndex:1}};
+  const {positions,indices,ceilingStart} = buildInterior({...source,profile});
   const normals: number[] = [];
   VertexData.ComputeNormals(positions,indices,normals);
   assert.ok(normals[0] > .99);
@@ -36,6 +38,31 @@ test('interior has inward walls, a real window opening with sills, and a down-fa
   assert.equal(wallCovers(.5,2.625),true);
   assert.ok(positions.some((value,i)=>i%3===0 && value===0 && normals[i+1]>.99));
   assert.ok(indices.slice(ceilingStart).every(v => normals[v*3+1]<-.99 && positions[v*3+1]===7.5));
+});
+
+test('entrance frame suppresses the entire intersecting window on the facade and in the interior', () => {
+  const profile = {...source.profile, entrance:{...source.profile.entrance,offset:3}};
+  const {positions,indices,ceilingStart} = buildInterior({...source,profile});
+  const spans = (y:number,z:number) => {
+    for (let i=0; i<ceilingStart; i+=3) {
+      const vertices = indices.slice(i,i+3).map(v=>v*3);
+      if (!vertices.every(v=>positions[v]===.25)) continue;
+      const ys=vertices.map(v=>positions[v+1]), zs=vertices.map(v=>positions[v+2]);
+      if (y>Math.min(...ys) && y<Math.max(...ys) && z>Math.min(...zs) && z<Math.max(...zs)) return true;
+    }
+    return false;
+  };
+  assert.equal(spans(2.25,1),true); // The affected window is filled even outside the frame.
+  assert.equal(spans(2.25,7.5),false);
+  assert.equal(spans(5.75,2.5),false);
+
+  const wall = {surface:'city-stone',positions:[0,.5,0,0,7.5,0,0,7.5,10,0,.5,10],
+    indices:[0,1,2,0,2,3],uvs:[128,0,128,2,130,2,130,0]};
+  const panel = [-.25,0,1.75,-.25,2.75,1.75,-.25,2.75,4.25,-.25,0,4.25];
+  const rect=facadeDoorWindows(wall,[panel]);
+  assert.ok(rect);
+  assert.ok(rect[0]>128 && rect[2]<129 && rect[1]<0 && rect[3]>0 && rect[3]<1);
+  assert.deepEqual(rect.slice(0,4),rect.slice(12,16));
 });
 
 test('interior proximity keeps an occupied shell and avoids loading distant or overflown buildings', () => {
@@ -71,4 +98,28 @@ test('floor slabs start at the door threshold and leave walking clearance across
   assert.ok(3.75-threshold >= 2);
   const cramped = {...profile, floorHeight:1.1, height:2.7};
   assert.equal(buildInterior({...source, profile:cramped}).slabs.indices.length,12);
+});
+
+test('character authority enters through a real doorway and is stopped by the wall beside it', async () => {
+  const {cityCollision} = await import('../src/modules/world/headless.ts');
+  const {createCharacterAuthorityFactory} = await import('../src/modules/characters/headless.ts');
+  const world = cityCollision(citySource);
+  const factory = createCharacterAuthorityFactory(world);
+  const door = world.doors?.find(door=>door.id==='osm/w1176482819/0/0/1');
+  assert.ok(door);
+  const {x,y,z,tx,tz} = door;
+  const nx=tz, nz=-tx;
+  function walk(offset: number) {
+    const actor = factory(0,{x:x-nx*1.5+tx*offset,z:z-nz*1.5+tz*offset});
+    for(let tick=1;tick<=120;tick++){
+      if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:nx,z:nz,run:false,jump:false},'local').accepted);
+      actor.step(tick);
+    }
+    const p=actor.snapshot();
+    assert.ok(Math.abs(p.y-y)<.3);
+    return (p.x-x)*nx+(p.z-z)*nz;
+  }
+  assert.ok(walk(0)>1);
+  assert.ok(walk(2)<0);
+  assert.ok(world.blockers.some(b=>b.id===door.id));
 });

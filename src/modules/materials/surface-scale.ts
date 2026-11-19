@@ -111,6 +111,10 @@ export class SurfaceScale extends MaterialPluginBase {
         #ifdef CITY_FACADE_TRIM
         varying vec4 vCityTrim;
         float cityTrimRole; // Selected once before both normal and albedo sampling.
+        #ifdef CITY_DOOR_WINDOWS
+        vec2 cityDoorUV;
+        bool cityDoorPatch;
+        #endif
         float selectCityTrimRole() {
           float v = vSurfaceAtlasUV.y;
           float pixelHeight = fwidth(v) * vCityTrim.y;
@@ -156,6 +160,9 @@ export class SurfaceScale extends MaterialPluginBase {
         float role = vSurfaceAtlasUV.x;
         #endif
         bool marker=role<-2.5;
+        #if defined(CITY_FACADE_TRIM) && defined(CITY_DOOR_WINDOWS)
+        marker=marker||cityDoorPatch;
+        #endif
         bool roofRole=role<-1.5 && role>-2.5;
         bool baseRole=role<-.5 && role>-1.5;
         #else
@@ -191,6 +198,12 @@ export class SurfaceScale extends MaterialPluginBase {
       CUSTOM_FRAGMENT_MAIN_BEGIN: `
         #ifdef CITY_FACADE_TRIM
         cityTrimRole = selectCityTrimRole();
+        #ifdef CITY_DOOR_WINDOWS
+        vec2 doorSpan = vCityDoorWindows.zw - vCityDoorWindows.xy;
+        cityDoorUV = (vSurfaceAtlasUV - vCityDoorWindows.xy) / max(doorSpan, vec2(.0001));
+        cityDoorPatch = doorSpan.x > fwidth(vSurfaceAtlasUV.x) && vSurfaceAtlasUV.x >= 0. &&
+          all(greaterThanEqual(cityDoorUV, vec2(0.))) && all(lessThanEqual(cityDoorUV, vec2(1.)));
+        #endif
         #endif`,
       '!baseColor=TEXRD\\(diffuseSampler,vDiffuseUV\\+uvOffset\\);': `
         #ifdef SURFACE_ATLAS
