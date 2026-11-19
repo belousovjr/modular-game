@@ -11,6 +11,7 @@ import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
 import {createTreeBatch,createTreeMaterial,createTreeShadowBatch,groupTrees,treeLodBounds} from './trees.ts';
+import {createGrass, GRASS_DISTANCE, grassPatchDistance, groupGrass, groupGrassSections} from './grass.ts';
 import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
@@ -121,6 +122,25 @@ export const worldModule = defineModule({
         },scope,{load:210,unload:225});
       }
     }
+    const grassViews = new Set<(camera?: Vector3) => void>();
+    const createGrassPatch = createGrass(core.scene, scope);
+    for (const [key, section] of groupGrassSections(groupGrass(city).values())) {
+      const id = `${city.id}/grass/${key}`;
+      deps.streaming.registerSection(id, section.bounds, owner => {
+        const updates = section.patches.map((patch, index) => {
+          let updatePatch: ReturnType<typeof createGrassPatch> | undefined;
+          return (camera?: Vector3) => {
+            if (!updatePatch && camera && grassPatchDistance(patch.bounds, camera) < GRASS_DISTANCE) {
+              updatePatch = createGrassPatch(`${id}/${index}`, patch, owner, deps.geometry.registerMeshes);
+            }
+            updatePatch?.(camera);
+          };
+        });
+        const update = (camera?: Vector3) => { for (const updatePatch of updates) updatePatch(camera); };
+        grassViews.add(update);
+        owner.onDispose(() => grassViews.delete(update));
+      }, scope, { load: GRASS_DISTANCE + 12, unload: GRASS_DISTANCE + 20 });
+    }
     for(const band of [{meshes:groupDistantSurfaces(city),load:1200,unload:1400},{meshes:groupStreetSurfaces(city),load:192,unload:256}])for(const surface of band.meshes){
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
       for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
@@ -178,6 +198,11 @@ export const worldModule = defineModule({
       const point=deps.rendering.getDistanceOrigin();
       updateAviationLights(point);
       for(const update of treeViews)update(point);
+      if (grassViews.size) {
+        const camera = core.scene.activeCamera;
+        camera?.getViewMatrix();
+        for (const update of grassViews) update(camera?.globalPosition);
+      }
       for(const view of surfaceViews){
         const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
         view.visibility.setVisible(distance<=(view.visibility.isVisible()?view.unload:view.load),!point);

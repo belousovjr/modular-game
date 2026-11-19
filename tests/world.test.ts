@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { Observable } from '@babylonjs/core/Misc/observable.js';
@@ -198,4 +199,65 @@ test('distant ground batches preserve canonical geometry and avoid per-tile draw
   assert.ok(street.every(m=>m.positions.every((v,i)=>i%3!==1||Math.abs(v)<1e-9)));
   const curb=groupDistantSurfaces({...citySource,chunks:[{...chunk,meshes:[{surface:'curb',positions:[0,.25,0,1,.25,0,0,.25,1,0,0,0],indices:[0,1,2,0,3,1]}]}]});
   assert.equal(curb[0].indices.length,3);assert.ok(curb[0].positions.every((v,i)=>i%3!==1||v===0));
+});
+
+test('grass follows authored slopes, keeps stable roots and reduces geometry with distance', async t => {
+  const { createGrass, groupGrass, sampleGrass } = await import('../src/modules/world/grass.ts');
+  const positions = [-2, -2, 0, 2, 2, 0, -2, -2, 4];
+  const patches = groupGrass({
+    ...citySource,
+    chunks: [{
+      ...citySource.chunks[0],
+      meshes: [
+        { surface: 'terrain', positions, indices: [0, 1, 2] },
+        { surface: 'road', positions: positions.map((v, i) => i % 3 === 0 ? v + 32 : v), indices: [0, 1, 2] },
+      ],
+    }],
+  });
+  assert.equal(patches.size, 2);
+  const roots = [...patches.values()].flatMap(sampleGrass);
+  assert.ok(roots.length > 100);
+  assert.ok(roots.every(({x, y, z}) => x >= -2 && z >= 0 && x + z <= 2 && Math.abs(x - y) < 1e-9));
+  assert.deepEqual(roots, [...patches.values()].flatMap(sampleGrass));
+
+  const engine = new NullEngine();
+  const scene = new Scene(engine);
+  const owner = createScope();
+  t.after(() => { owner.dispose(); scene.dispose(); engine.dispose(); });
+  const createPatch = createGrass(scene, owner);
+  const active = () => scene.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.isEnabled());
+  const updates = [...patches.values()].map((patch, index) => createPatch(`test/grass/${index}`, patch, owner, () => {}));
+  const move = (x: number, y: number) => updates.forEach(update => update(new Vector3(x, y, 2)));
+  move(0, 3);
+  const near = active();
+  assert.equal(near.length, 2);
+  assert.ok(near.every(mesh => mesh.getTotalIndices() === 9 && mesh.thinInstanceCount > 0));
+  for (const mesh of near) {
+    const normals = mesh.getVerticesData('normal');
+    assert.ok(normals && normals.filter((_, index) => index % 3 === 1).every(y => y > 0));
+  }
+  assert.notEqual(near[0].getVertexBuffer('world3'), near[1].getVertexBuffer('world3'));
+  const colors = (mesh: Mesh) => mesh.getVertexBuffer('instanceColor')?.getFloatData(mesh.thinInstanceCount);
+  const nearColors = colors(near[0]);
+  assert.ok(nearColors && nearColors[1] > nearColors[0] && nearColors[0] > nearColors[2]);
+  assert.ok(new Set(nearColors).size > 4);
+  assert.ok(near[0].getBoundingInfo().boundingBox.centerWorld.x < 0);
+  assert.ok(near[1].getBoundingInfo().boundingBox.centerWorld.x > 0);
+  move(45, 3);
+  const far = active();
+  assert.equal(far.length, 2);
+  assert.ok(far.every((mesh, index) => mesh.getTotalIndices() === 3 && mesh.thinInstanceCount < near[index].thinInstanceCount));
+  const farColors = colors(far[0]);
+  assert.ok(farColors && farColors.length > 0);
+  assert.deepEqual(Array.from(farColors), Array.from(nearColors.slice(0, farColors.length)));
+  for (const axis of ['world0', 'world1']) {
+    const farAxis = far[0].getVertexBuffer(axis)?.getFloatData(far[0].thinInstanceCount);
+    const nearAxis = near[0].getVertexBuffer(axis)?.getFloatData(near[0].thinInstanceCount);
+    assert.ok(farAxis && nearAxis);
+    assert.deepEqual(Array.from(farAxis), Array.from(nearAxis.slice(0, farAxis.length)));
+  }
+  move(100, 3);
+  assert.equal(active().length, 0);
+  move(0, 3);
+  assert.deepEqual(active(), near);
 });
