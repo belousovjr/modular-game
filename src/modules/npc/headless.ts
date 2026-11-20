@@ -13,7 +13,8 @@ export const downtownPatrols: readonly Patrol[] = [
   { id:'daley',bounds:{minX:6,maxX:85,minZ:-74,maxZ:-44},points:[[24,-71],[32,-71],[44,-71],[56,-71],[64,-71],[70,-63],[70,-57],[64,-47],[56,-47],[44,-47],[32,-47],[24,-47],[18,-57],[18,-63]] },
 ];
 
-function navigationBlocked(o:CollisionWorld['blockers'][number],x:number,z:number,radius=.6){
+function navigationBlocked(o:NavigationBox,x:number,z:number,radius=.6){
+  radius+=o.clearance??0;
   if(x<=o.minX-radius||x>=o.maxX+radius||z<=o.minZ-radius||z>=o.maxZ+radius)return false;
   if(!o.outline)return true;
   let inside=false;
@@ -26,8 +27,9 @@ function navigationBlocked(o:CollisionWorld['blockers'][number],x:number,z:numbe
 }
 
 type Waypoint={readonly x:number;readonly z:number};
-type NavigationBox=CollisionWorld['blockers'][number];
+type NavigationBox=CollisionWorld['blockers'][number]&{readonly clearance?:number};
 type Bounds=CollisionWorld['bounds'];
+const STATIC_DETOUR_CLEARANCE=.05; // Leave room for separate X/Z steps at a prop's edge.
 
 function segmentClear(blockers:readonly NavigationBox[],a:Waypoint,b:Waypoint,radius:number){
   const steps=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/.125));
@@ -41,8 +43,11 @@ function createGrid(bounds:Bounds, obstacles:readonly NavigationBox[], cell:numb
   const width=Math.floor((bounds.maxX-bounds.minX)/cell)+1,depth=Math.floor((bounds.maxZ-bounds.minZ)/cell)+1;
   const size=width*depth;
   if(width<1||depth<1||size>20000)throw new Error('NPC navigation budget exceeded');
-  const blockers=obstacles.filter(box=>box.maxX>=bounds.minX-radius&&box.minX<=bounds.maxX+radius&&
-    box.maxZ>=bounds.minZ-radius&&box.minZ<=bounds.maxZ+radius);
+  const blockers=obstacles.filter(box=>{
+    const margin=radius+(box.clearance??0);
+    return box.maxX>=bounds.minX-margin&&box.minX<=bounds.maxX+margin&&
+      box.maxZ>=bounds.minZ-margin&&box.minZ<=bounds.maxZ+margin;
+  });
   const point=(id:number):Waypoint=>({x:bounds.minX+(id%width)*cell,z:bounds.minZ+Math.floor(id/width)*cell});
   const free=new Uint8Array(size);
   for(let id=0;id<size;id++){
@@ -211,8 +216,11 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
               const dx=target.x-s.x,dz=target.z-s.z,scale=Math.min(1,5/(Math.hypot(dx,dz)||1));
               const rejoin={x:s.x+dx*scale,z:s.z+dz*scale};
               const bounds=localBounds(world.bounds,s,rejoin,2);
-              const staticBoxes=world.blockers.filter(box=>box.maxY>s.y+.3&&box.minY<s.y+1.8&&
-                box.maxX>=bounds.minX-.35&&box.minX<=bounds.maxX+.35&&box.maxZ>=bounds.minZ-.35&&box.minZ<=bounds.maxZ+.35);
+              const margin=.35+STATIC_DETOUR_CLEARANCE;
+              const staticBoxes=world.blockers.filter(box=>box.maxY>s.y+1e-7&&box.minY<s.y+1.8&&
+                box.maxX>=bounds.minX-margin&&box.minX<=bounds.maxX+margin&&
+                box.maxZ>=bounds.minZ-margin&&box.minZ<=bounds.maxZ+margin)
+                .map(box=>({...box,clearance:STATIC_DETOUR_CLEARANCE}));
               actor.detour=localPath(bounds,[...staticBoxes,...obstacles],s,rejoin,.25)??[];
               steering=actor.detour[0];
             }

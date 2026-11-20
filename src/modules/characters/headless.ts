@@ -267,6 +267,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       if(slab.maxY>=y && slab.maxY<=y+.03)y=slab.maxY;
     }
   }
+  const initialPosition={x,y,z};
   if (resume && [resume.x,resume.y,resume.z].every(Number.isFinite) && Math.abs(resume.y)<=10000) {
     let savedY=resume.y;
     for(const slab of sample(resume.x,resume.z,savedY,savedY+.03).slabs) {
@@ -284,6 +285,16 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       if(closed)return;
       closed=true;
       if(member){people.delete(id);vehicleBlockers.delete(id);}
+    },
+    resetPosition(){
+      if(closed)throw new Error('Character authority disposed');
+      const start=initialPosition;
+      if(blocked(start.x,start.z,start.y,false,HEIGHT.standing))throw new Error('Стартовая точка персонажа занята');
+      x=start.x;y=start.y;z=start.z;yaw=0;
+      dx=dz=0;run=false;facing=null;expiry=tick;stance='standing';stanceRequest=undefined;
+      grounded=true;moving=false;jump=false;verticalSpeed=0;airborneTicks=0;landedTick=-100;
+      resetMotion();
+      if(vehicleFrame)vehicleFrame={blocker:vehicleFrame.blocker,pose:null,release:null};
     },
     navigationObstacles():readonly CollisionBox[]{
       const height=HEIGHT[stance];
@@ -443,6 +454,10 @@ export function createLocalConnection(authority: ReturnType<typeof createCharact
       authority.step(tick);
     },
     snapshot: authority.snapshot,
+    resetPosition() {
+      authority.resetPosition();
+      for(const item of queue.splice(0))item.resolve({accepted:false,reason:'reset'});
+    },
     close() { stopped = true; for (const item of queue.splice(0)) item.resolve({ accepted: false, reason: 'closed' }); },
   };
 }

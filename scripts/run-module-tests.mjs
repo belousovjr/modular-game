@@ -119,7 +119,18 @@ try {
         if (!checkboxes.length || checkboxes.some(checkbox => checkbox.getAttribute('aria-checked') !== 'true')) throw new Error('Could not enable the entire module registry');
       }
       if (!${fpsMode}) {
+        const extra = document.querySelector('#modules [data-module-id="render-resolution"] [role="checkbox"]');
+        const enabledExtra = extra.getAttribute('aria-checked') === 'true';
+        if (!enabledExtra) { extra.click(); await nextPaint(); await nextPaint(); }
+        const keys = ['modular-game.modules', 'modular-game.module-preferences', 'modular-game.history'];
+        const beforeReset = keys.map(key => localStorage.getItem(key));
+        const playerKey = 'modular-game.local-player-position';
+        const playerEnabled = document.querySelector('#modules [data-module-id="characters"] [role="checkbox"]')?.getAttribute('aria-checked') === 'true';
+        if (!playerEnabled) localStorage.setItem(playerKey, JSON.stringify({version:1,x:10,y:20,z:30}));
         document.getElementById('reset').click(); await nextPaint();
+        if (extra.getAttribute('aria-checked') !== 'true' || beforeReset.some((value, index) => value !== localStorage.getItem(keys[index]))) throw new Error('Reset changed module settings or history');
+        if (!playerEnabled && localStorage.getItem(playerKey) !== null) throw new Error('Reset kept an inactive character checkpoint');
+        if (!enabledExtra) { extra.click(); await nextPaint(); await nextPaint(); }
         const camera = JSON.parse(localStorage.getItem('modular-game.camera'));
         if (camera.version !== 2 || camera.position.x !== 0 || Math.abs(camera.position.y - (1 + 12 * Math.cos(1.05))) > 1e-9 || Math.abs(camera.position.z + 12 * Math.sin(1.05)) > 1e-9 || Math.abs(camera.rotation.x - (Math.PI / 2 - 1.05)) > 1e-9 || camera.rotation.y !== 0 || camera.rotation.z !== 0) throw new Error('Reset did not restore the default camera');
       }

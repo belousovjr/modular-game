@@ -121,3 +121,22 @@ test('a patrol turns by command and takes a local detour around a stationary pla
   assert.ok(npc.snapshot().arrivals>=1);
   npc.dispose();player.dispose();
 });
+
+
+test('local detours go around low props without stepping onto them',()=>{
+  const flat={...world,spawn:{x:0,z:0},blockers:[
+    {id:'low-north',minX:-.6,maxX:.6,minZ:.65,maxZ:1.4,minY:0,maxY:.24},
+    {id:'low-south',minX:-.6,maxX:.6,minZ:-1.4,maxZ:-.65,minY:0,maxY:.24},
+  ]};
+  const create=createCharacterAuthorityFactory(flat);
+  const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
+  const npc=createNpcAuthority(flat,[patrol],1,0,'npc',(tick,spawn,identity)=>create(tick,spawn,undefined,identity));
+  for(let tick=1;tick<=600;tick++){
+    player.step(tick);npc.step(tick);
+    const actor=npc.snapshot().actors[0];
+    assert.equal(actor.y,0);
+    assert.equal(actor.grounded,true);
+  }
+  assert.ok(npc.snapshot().arrivals>=1);
+  npc.dispose();player.dispose();
+});

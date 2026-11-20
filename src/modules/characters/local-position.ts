@@ -19,3 +19,8 @@ export function saveLocalPosition({x,y,z}: Position): boolean {
     return true;
   } catch { return false; }
 }
+
+export function clearLocalPosition() {
+  try { localStorage.removeItem(KEY); }
+  catch { /* Personal checkpoints are optional. */ }
+}

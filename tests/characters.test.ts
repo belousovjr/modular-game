@@ -362,3 +362,30 @@ test('a fast flying character must clear another pedestrian vertically before cr
   }
   assert.ok(pilot.snapshot().x>1);
 });
+
+test('local position reset restores spawn, clears queued input and keeps authority tick and identity',async()=>{
+  const actor=createCharacterAuthorityFactory(world)(20,undefined,{x:-4,y:5,z:4});
+  const connection=createLocalConnection(actor,{latencyTicks:3});
+  assert.ok(actor.receive({...command(),tick:20},'local').accepted);
+  connection.step(21);
+  const queued=connection.send({...command(2),tick:21});
+  connection.resetPosition();
+  assert.equal((await queued).reason,'reset');
+  const initial=createCharacterAuthority(world,21).snapshot();
+  assert.deepEqual(actor.snapshot(),{...initial,lastSequence:1});
+  for(let tick=22;tick<=26;tick++)connection.step(tick);
+  assert.equal(actor.snapshot().z,initial.z);
+  assert.ok(actor.receive({...command(2,-1,0),tick:26},'local').accepted);
+});
+
+test('position reset leaves the actor in place if another body occupies the spawn',()=>{
+  const create=createCharacterAuthorityFactory(world);
+  const actor=create(0,undefined,{x:-4,y:5,z:4},{id:'local-player',ownerId:'local'});
+  const npc=create(0,undefined,undefined,{id:'npc/0',ownerId:'npc'});
+  const previous=actor.snapshot();
+  assert.throws(()=>actor.resetPosition(),/Стартовая точка/);
+  assert.deepEqual(actor.snapshot(),previous);
+  npc.dispose();
+  actor.resetPosition();
+  assert.equal(actor.snapshot().x,0);
+});

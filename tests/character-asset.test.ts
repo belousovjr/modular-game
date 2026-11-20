@@ -183,3 +183,48 @@ test('animation visibility ignores distant and offscreen avatars without changin
   camera.setTarget(new Vector3(0,1,-40));camera.getViewMatrix(true);engine.endFrame();assert.equal(assets.shouldAnimate(0,0,-30),true);assert.equal(assets.shouldAnimate(0,0,20),false);await assets.ready;
  }finally{owner.dispose();scene.dispose();engine.dispose();}
 });
+
+test('starting a phased NPC clip keeps the outgoing pose until the fade begins',async()=>{
+  const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
+  const {Scene}=await import('@babylonjs/core/scene.js');
+  const {AnimationGroup}=await import('@babylonjs/core/Animations/animationGroup.js');
+  const {Animation}=await import('@babylonjs/core/Animations/animation.js');
+  const {TransformNode}=await import('@babylonjs/core/Meshes/transformNode.js');
+  const {blendAnimations,startAvatarClip}=await import('../src/modules/characters/assets.ts');
+  const engine=new NullEngine(),scene=new Scene(engine);
+  try {
+    const target=new TransformNode('target',scene);
+    const [walking,idle]=[2,10].map(value=>{
+      const group=new AnimationGroup(String(value),scene);
+      const clip=new Animation('pose','position.x',30,Animation.ANIMATIONTYPE_FLOAT);
+      clip.setKeys([{frame:0,value},{frame:30,value:value+1}]);
+      group.addTargetedAnimation(clip,target);
+      return group;
+    });
+    startAvatarClip(walking,1,0);
+    assert.equal(target.position.x,2);
+    scene._animate(0);
+    const before=target.position.x;
+    startAvatarClip(idle,0,.6);
+    assert.equal(target.position.x,before);
+    blendAnimations([walking,idle],idle,16);
+    scene._animate(16);
+    assert.ok(target.position.x>before&&target.position.x<10);
+  } finally {scene.dispose();engine.dispose();}
+});
+
+test('ground animation ignores isolated steps and keeps the sprint clip during a brief blockage',async()=>{
+  const {createGroundMotion}=await import('../src/modules/characters/assets.ts');
+  const sample=createGroundMotion();
+  const walk={moving:true,running:false,boosted:false},stop={...walk,moving:false};
+  const frame=1000/60;
+  sample(stop,0,0,true);
+  for(let i=0;i<48;i++)assert.equal(sample(walk,i%8===0?1.8:.03,frame,false).moving,false);
+  const sprint={moving:true,running:true,boosted:true};
+  for(let i=0;i<8;i++)sample(sprint,22,frame,false);
+  const blocked=sample(stop,0,frame,false);
+  assert.equal(blocked.moving,true);
+  assert.equal(blocked.boosted,true);
+  for(let i=0;i<20;i++)sample(stop,0,frame,false);
+  assert.equal(sample(stop,0,frame,false).moving,false);
+});

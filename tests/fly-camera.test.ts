@@ -4,7 +4,8 @@ import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js';
 import { Scene } from '@babylonjs/core/scene.js';
 import { KeyboardEventTypes, KeyboardInfo, KeyboardInfoPre } from '@babylonjs/core/Events/keyboardEvents.js';
 import { FreeCameraMouseInput } from '@babylonjs/core/Cameras/Inputs/freeCameraMouseInput.js';
-import { createFlyCamera, FLIGHT_SPEED } from '../src/core/fly-camera.ts';
+import { createFlyCamera, FLIGHT_SPEED, resetFlyCamera } from '../src/core/fly-camera.ts';
+import { DEFAULT_CAMERA_SETTINGS } from '../src/core/camera-settings.ts';
 
 test('free flight covers the same distance at different FPS and stops without inertia', t => {
   for (const fps of [15, 30, 60, 144]) {
@@ -46,4 +47,20 @@ test('free flight covers the same distance at different FPS and stops without in
     assert.equal(scene.onPreKeyboardObservable.hasObservers(), false);
     scene.dispose(); engine.dispose();
   }
+});
+
+test('free camera reset restores the original transform and clears motion',()=>{
+  const engine=new NullEngine(),scene=new Scene(engine);
+  try {
+    const camera=createFlyCamera(scene,{onDispose(){}});
+    camera.position.setAll(20);camera.rotation.setAll(.5);
+    camera.cameraDirection.setAll(1);camera.cameraRotation.setAll(1);
+    camera.speed=FLIGHT_SPEED*4;
+    resetFlyCamera(camera);
+    camera._checkInputs();
+    const {position,rotation}=DEFAULT_CAMERA_SETTINGS;
+    assert.deepEqual(camera.position.asArray(),[position.x,position.y,position.z]);
+    assert.deepEqual(camera.rotation.asArray(),[rotation.x,rotation.y,rotation.z]);
+    assert.equal(camera.speed,FLIGHT_SPEED);
+  } finally {scene.dispose();engine.dispose();}
 });

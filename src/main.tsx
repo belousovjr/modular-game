@@ -17,6 +17,7 @@ import type { TestState } from './core/test-runner.ts';
 import { settingsHistory } from './core/settings-history.ts';
 import { SettingsMenu } from './core/settings-menu.tsx';
 import { createViewport } from './core/scene.ts';
+import { charactersModule, clearLocalPosition } from './modules/characters/index.ts';
 
 declare global {
   interface Window { moduleTests?: ReturnType<typeof createViewport>['tests'] }
@@ -116,15 +117,15 @@ function App() {
     catch { setStatus('Браузер не разрешил сохранить статусы модулей.'); }
   }
 
-  function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
+  function syncModules(ids: readonly string[], nextPreferences = preferences) {
     const currentViewport = viewport.current;
     if (!currentViewport || testRunning) return;
     setPendingSelection(null);
     const applied = new Set(selected);
     try { settingsHistory.transaction(() => {
       const next = selectModules(modules, ids, nextPreferences.statuses);
-      if (resetCamera || next.length !== applied.size || next.some(id => !applied.has(id))) {
-        try { currentViewport.restart(modules, next, resetCamera); }
+      if (next.length !== applied.size || next.some(id => !applied.has(id))) {
+        try { currentViewport.restart(modules, next); }
         catch (error) {
           try { currentViewport.restart(modules, selected); }
           catch { setReady(false); }
@@ -154,6 +155,15 @@ function App() {
       if (applyFrame !== undefined) cancelAnimationFrame(applyFrame);
     };
   }, [deferredSelection, pendingSelection, ready, testRunning]);
+
+  function resetView() {
+    if (!viewport.current || testRunning) return;
+    try {
+      viewport.current.resetView();
+      if (!selected.includes(charactersModule.id)) clearLocalPosition();
+      setStatus('');
+    } catch (error) { setStatus(`Не удалось сбросить положение: ${error instanceof Error ? error.message : String(error)}`); }
+  }
 
   function restoreSettings() {
     if (!viewport.current) return;
@@ -185,7 +195,7 @@ function App() {
           <Flex direction="column" gap="3">
             <Flex align="center" justify="between" gap="2">
             <Button id="test-all" size="1" variant="soft" disabled={!ready || changingModules || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
-              <Tooltip content="Вернуть стартовый набор, статусы и камеру"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить модули к дефолтам" disabled={!ready} onClick={() => syncModules(defaultModules, { tab: 'working', statuses: {} }, true)}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
+              <Tooltip content="Вернуть персонажа и камеру в исходное положение"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить положение персонажа и камеры" disabled={!ready} onClick={resetView}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
             </Flex>
             <Tabs.Root activationMode="manual" value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
               <Tabs.List aria-label="Статус модулей">

@@ -13,6 +13,18 @@ export class SceneCamera extends FreeCamera {
     return this.speed * this.getEngine().getDeltaTime() / 1000;
   }
 }
+export function resetFlyCamera(camera:SceneCamera) {
+  const {position,rotation}=DEFAULT_CAMERA_SETTINGS;
+  camera.position.set(position.x,position.y,position.z);
+  camera.rotation.set(rotation.x,rotation.y,rotation.z);
+  camera.speed=FLIGHT_SPEED;
+  camera.cameraDirection.setAll(0);
+  camera.cameraRotation.setAll(0);
+  camera.movement.resetPanVelocity();
+  camera.movement.resetRotationVelocity();
+  const keyboard=camera.inputs.attached.keyboard;
+  if(keyboard instanceof FreeCameraKeyboardMoveInput)keyboard._onLostFocus();
+}
 export function createFlyCamera(scene: Scene, scope: Scope) {
   const initial = DEFAULT_CAMERA_SETTINGS;
   const camera = new SceneCamera('camera', new Vector3(initial.position.x, initial.position.y, initial.position.z), scene);

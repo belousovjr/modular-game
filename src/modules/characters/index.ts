@@ -14,6 +14,7 @@ import { geometryModule } from '../geometry/index.ts';
 import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot,CharacterIdentity,CanStand } from './headless.ts';
 import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
+export { clearLocalPosition } from './local-position.ts';
 export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
@@ -34,6 +35,7 @@ export const charactersModule = defineModule({
       if (next.x===saved.x && next.y===saved.y && next.z===saved.z) return;
       if (saveLocalPosition(next)) saved=next;
     });
+    let resetVehicleOccupancy:(()=>void)|undefined;
     let vehicleStep:((tick:number,character:CharacterSnapshot,canStand:CanStand)=>VehicleCharacterFrame)|null=null;
     deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot(),authority.canStandAmongPeople));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);
@@ -43,6 +45,14 @@ export const charactersModule = defineModule({
     const sampleHeight=createDisplayHeight();
     let displayY=sampleHeight(connection.snapshot(),0);
     deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
+    const reset=core.onResetView?.add(()=>{
+      connection.resetPosition();
+      resetVehicleOccupancy?.();
+      const snapshot=connection.snapshot();
+      displayY=sampleHeight(snapshot,0,true);
+      if(saveLocalPosition(snapshot))saved=snapshot;
+    });
+    if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
     const smoothing=core.onFrame.add(delta=>{
       const snapshot=connection.snapshot();
       displayY=sampleHeight(snapshot,delta);
@@ -63,10 +73,11 @@ export const charactersModule = defineModule({
         if(stopped)throw new Error('Персонаж остановлен');
         return createAuthority(tick,spawn,undefined,identity);
       },
-      registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot,canStand:CanStand)=>VehicleCharacterFrame,owner:Scope){
+      registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot,canStand:CanStand)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
         if(stopped)throw new Error('Персонаж остановлен');
         if(vehicleStep)throw new Error('Vehicle authority already connected');
-        vehicleStep=step;owner.onDispose(()=>{vehicleStep=null;authority.setVehicleFrame(null);});
+        vehicleStep=step;resetVehicleOccupancy=resetOccupancy;
+        owner.onDispose(()=>{vehicleStep=null;resetVehicleOccupancy=undefined;authority.setVehicleFrame(null);});
       },
       send: connection.send, snapshot: connection.snapshot, displayHeight:()=>displayY, createView,
       getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe,

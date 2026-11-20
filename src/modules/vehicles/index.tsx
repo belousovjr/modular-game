@@ -25,10 +25,12 @@ export const vehiclesModule=defineModule({
   setup({core,deps,scope}){
     const authority=createVehicleAuthority(deps.world.collision,deps.characters.snapshot().tick);scope.onDispose(authority.dispose);
     const connection=createVehicleConnection(authority);scope.onDispose(connection.close);
-    deps.characters.registerVehicleAuthority(connection.step,scope);
     const view=createCarView(core.scene,deps.geometry,scope);
     const keys=new Set<string>();let sequence=0,lastTick=-1,lastInput='';
     let pendingAction:{action:'enter'|'exit'|'door';side:'left'|'right'}|null=null;
+    deps.characters.registerVehicleAuthority(connection.step,scope,()=>{
+      keys.clear();pendingAction=null;connection.resetOccupancy();
+    });
     const canvas=core.scene.getEngine().getRenderingCanvas();
     const active=()=>!!canvas&&document.activeElement===canvas&&core.scene.activeCamera?.name==='player-camera'&&!document.hidden;
     const clear=()=>keys.clear();window.addEventListener('blur',clear);scope.onDispose(()=>window.removeEventListener('blur',clear));canvas?.addEventListener('blur',clear);scope.onDispose(()=>canvas?.removeEventListener('blur',clear));

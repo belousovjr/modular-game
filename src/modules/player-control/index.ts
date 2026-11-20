@@ -49,6 +49,17 @@ export const playerControlModule = defineModule({
     let stanceIntent:CharacterStance|undefined;
     const clearPointer = () => { leftHeld=false; rightHeld=false; };
     const clear = () => { keys.clear(); jump=false; flightIntent=null; stanceIntent=undefined; clearPointer(); lastInput = ''; };
+    const reset=core.onResetView?.add(()=>{
+      clear();
+      camera.alpha=-Math.PI/2;camera.beta=1.1;
+      camera.radius=desiredRadius=appliedRadius=6;
+      cameraHeight=1.2;
+      camera.inertialAlphaOffset=camera.inertialBetaOffset=camera.inertialRadiusOffset=0;
+      camera.inertialPanningX=camera.inertialPanningY=0;
+      camera.movement.resetPanVelocity();
+      camera.movement.resetRotationVelocity();
+    });
+    if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
     if (canvas) {
       const down=(event:PointerEvent)=>{
         if(core.scene.activeCamera!==camera||document.hidden||event.ctrlKey||event.altKey||event.metaKey)return;

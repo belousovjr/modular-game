@@ -147,6 +147,11 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   }
   function snapshot():VehicleSnapshot{return Object.freeze({id:ID,tick,position:Object.freeze(Object.values(point(0,0,0))),rotation:Object.freeze([body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]),wheels:Object.freeze(car.wheelInfos.map(w=>{const t=w.worldTransform;return Object.freeze({position:Object.freeze([t.position.x,t.position.y,t.position.z]),rotation:Object.freeze([t.quaternion.x,t.quaternion.y,t.quaternion.z,t.quaternion.w])});})),speed:speed(),steering:steeringAngle,driverId,phase,leftDoor,rightDoor,message});}
   return {
+    resetOccupancy(){
+      if(!driverId)return;
+      phase='parked';driverId=null;approachPath=[];release=null;
+      throttle=steering=0;brake=true;coasting=speed()>.6;
+    },
     observeCharacter(s:CharacterSnapshot,clearance:CanStand=()=>true){character=s;canStand=clearance;},
     receive(value:unknown,owner:string):Receipt{
       if(!value||typeof value!=='object'||Array.isArray(value))return denied('invalid');
@@ -254,5 +259,8 @@ export function createVehicleConnection(authority:ReturnType<typeof createVehicl
     count++;if(drop&&count%drop===0)return Promise.resolve({accepted:false,reason:'dropped'});seed=(Math.imul(seed,1664525)+1013904223)>>>0;
     const due=authority.snapshot().tick+1+latency+Math.floor(seed/0x100000000*(jitter*2+1))-jitter;
     return new Promise(resolve=>queue.push({due,command:{...command},resolve}));
-  },step(tick:number,character:CharacterSnapshot,canStand?:CanStand){authority.observeCharacter(character,canStand);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
+  },step(tick:number,character:CharacterSnapshot,canStand?:CanStand){authority.observeCharacter(character,canStand);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,resetOccupancy(){
+    authority.resetOccupancy();
+    for(const packet of queue.splice(0))packet.resolve({accepted:false,reason:'reset'});
+  },close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
 }

@@ -16,7 +16,7 @@ E: автоматический подход с расстояния до 6.5 м
 
 ## Связь с characters
 
-Публичный клиентский characters.registerVehicleAuthority(step,scope) — доверенная сборка **локального server-side адаптера**, не RPC/команда от пользователя. Вызов registered headless vehicle step происходит внутри фиксированной системы characters **до** character step: canonical character snapshot поступает машине вместе с доверенным headless-запросом занятости точки другими пешеходами; сериализуемый VehicleCharacterFrame (blocker, approach, pose, release) применяется character authority. Поэтому положение героя/занятость/выход не определяются мешами. VehicleFrame не принимается через characters.send. При переносе на сервер переносится эта же headless-композиция, клиент оставляет только JSON intents/snapshots. Provider-функция не входит в wire payload. Разрешён только один provider, очистка снимает его.
+Публичный клиентский characters.registerVehicleAuthority(step,scope,resetOccupancy) — доверенная сборка **локального server-side адаптера**, не RPC/команда от пользователя. Вызов registered headless vehicle step происходит внутри фиксированной системы characters **до** character step: canonical character snapshot поступает машине вместе с доверенным headless-запросом занятости точки другими пешеходами; сериализуемый VehicleCharacterFrame (blocker, approach, pose, release) применяется character authority. Поэтому положение героя/занятость/выход не определяются мешами. VehicleFrame не принимается через characters.send. При переносе на сервер переносится эта же headless-композиция, клиент оставляет только JSON intents/snapshots. Provider-функция не входит в wire payload. Разрешён только один provider, очистка снимает его.
 
 Пока on foot, полный динамический car blocker не даёт герою проходить сквозь машину. В салоне character authority блокирует обычные move-команды и возвращает position/yaw/vehicleId/vehicleAnimation/vehicleRotation из проверенного physics frame; release переносит в проверенную authority точку выхода. Snapshot не выдаёт изменяемый controller. Основной порядок: vehicle step, character movement, затем npc по регистрации часов. Устаревшие клиентские команды не меняют занятость/позицию.
 
@@ -72,3 +72,6 @@ Seat y=.47 поднимает водителя на 12 см над прежни�
 Городской authority передаёт отдельные физические объёмы ярусов и выпуклых частей корпусов с дворами через тот же CollisionWorld.blockers. Cannon сохраняет локальный набор и простой narrow phase, без полигональной коллизии render-сетки. tests/vehicles.test.ts включает проезд внутри реального двора Art Institute и контакт с внутренней стеной.
 
 Окраска наружных панелей дверей сведена с кузовом к приглушённому стальному синему. Контраст AO на окраске смягчён, albedo-атлас с разрозненными ячейками фильтруется линейно без mipmaps. Интенсивность общей микрофактуры снижена. Геометрия и привязки дверей, колёс и руля прежние.
+
+
+При локальном сбросе позиции героя resetOccupancy освобождает водительское место, снимает команды двигателя и очищает очередь ввода. Машина сохраняет координаты, скорость и физический мир. Состояние освобождается только после проверки стартовой точки персонажа.

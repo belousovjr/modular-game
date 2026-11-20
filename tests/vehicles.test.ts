@@ -253,3 +253,13 @@ test('a pedestrian occupying the release point prevents exit until it clears',()
     s.car.dispose();
   }
 });
+
+test('position reset frees the vehicle seat without moving or recreating the car',()=>{
+  const s=session();
+  try {
+    board(s);
+    const before=s.car.snapshot();
+    s.car.resetOccupancy();
+    assert.deepEqual(s.car.snapshot(),{...before,phase:'parked',driverId:null});
+  } finally {s.car.dispose();}
+});

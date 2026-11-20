@@ -1,5 +1,5 @@
-import { readCamera, writeCamera } from './camera-settings.ts';
-import { createFlyCamera, FLIGHT_SPEED, SceneCamera } from './fly-camera.ts';
+import { DEFAULT_CAMERA_SETTINGS, readCamera, writeCamera } from './camera-settings.ts';
+import { createFlyCamera, FLIGHT_SPEED, resetFlyCamera, SceneCamera } from './fly-camera.ts';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera';
@@ -13,7 +13,7 @@ import { startModules, type ModuleDefinition } from './modules.ts';
 import type { CoreContext } from './context.ts';
 export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: number) => void, panels: Panels, reportTest: (state: TestState) => void) {
   const engine = new Engine(canvas, true);
-  let session: { scene: Scene; onFrame: Observable<number>; tests: readonly RunnableTest[]; dispose(): void } | undefined;
+  let session: { scene: Scene; camera:SceneCamera; onResetView:Observable<void>; onFrame: Observable<number>; tests: readonly RunnableTest[]; dispose(): void } | undefined;
   let cameraSettings = readCamera();
   let savedCamera = JSON.stringify(cameraSettings);
   let lastCameraSave = 0;
@@ -77,7 +77,15 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
         return runner.run(selected, durationSeconds);
       },
     },
-    restart(registry: readonly ModuleDefinition<CoreContext>[], selected: readonly string[], resetCamera = false) {
+    resetView() {
+      if (!session || runner.getState().running) return;
+      session.onResetView.notifyObservers(undefined);
+      resetFlyCamera(session.camera);
+      cameraSettings=DEFAULT_CAMERA_SETTINGS;
+      savedCamera=JSON.stringify(cameraSettings);
+      writeCamera(cameraSettings);
+    },
+    restart(registry: readonly ModuleDefinition<CoreContext>[], selected: readonly string[]) {
       if (runner.getState().running) throw new Error('Сначала остановите тест');
       saveCamera();
       const old = session;
@@ -87,15 +95,18 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
       try {
         scene.clearColor = new Color4(0.035, 0.055, 0.08, 1);
         const camera = createFlyCamera(scene, { onDispose: cleanup => { scene.onDisposeObservable.addOnce(cleanup); } });
-        if (cameraSettings && !resetCamera) {
+        if (cameraSettings) {
           const { position, rotation } = cameraSettings;
           camera.position.set(position.x, position.y, position.z);
           camera.rotation.set(rotation.x, rotation.y, rotation.z);
         }
         camera.attachControl(canvas, true);
         const onFrame = new Observable<number>();
-        const running = startModules(registry, selected, { scene, onFrame, panels });
-        session = { scene, onFrame, tests: running.tests, dispose() { try { running.dispose(); } finally { onFrame.clear(); scene.dispose(); } } };
+        const onResetView = new Observable<void>();
+        const running = startModules(registry, selected, { scene, onFrame, onResetView, panels });
+        session = { scene, camera, onFrame, onResetView, tests: running.tests,
+          dispose() { try { running.dispose(); } finally { onFrame.clear(); onResetView.clear(); scene.dispose(); } },
+        };
         saveCamera();
         last = performance.now();
       } catch (error) { scene.dispose(); throw error; }
