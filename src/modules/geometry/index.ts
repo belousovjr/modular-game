@@ -155,7 +155,8 @@ export const geometryModule = defineModule({
       const material=getSurfaceMaterial(surface);
       const mesh=new Mesh(name,core.scene);owner.onDispose(()=>mesh.dispose());
       try {
-        const data=new VertexData();data.positions=new Float32Array(positions);data.indices=Array.from(indices);
+        const data=new VertexData();data.positions=new Float32Array(positions);
+        data.indices=positions.length/3<=65536?Uint16Array.from(indices):Uint32Array.from(indices);
         const normals=new Float32Array(positions.length);VertexData.ComputeNormals(data.positions,data.indices,normals);data.normals=normals;
         const uvs=customUVs?new Float32Array(customUVs):new Float32Array(positions.length/3*2);
         if(!customUVs)for(let i=0,j=0;i<positions.length;i+=3){uvs[j++]=positions[i]/2;uvs[j++]=positions[i+2]/2;}

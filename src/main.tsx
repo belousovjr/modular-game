@@ -1,8 +1,9 @@
 import '@radix-ui/themes/styles.css';
 import './style.css';
 import { ChevronDown, ChevronRight, Info, Layers, MoreHorizontal, Play, RotateCcw } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Observable } from '@babylonjs/core/Misc/observable';
 import { Badge, Box, Button, Callout, Card, Checkbox, Flex, IconButton, Text, Theme, Tooltip, Tabs, DropdownMenu } from '@radix-ui/themes';
 import { createPanels, usePanels } from './core/panels.ts';
 import { PanelWindow } from './core/panel-window.tsx';
@@ -16,6 +17,7 @@ import type { TestState } from './core/test-runner.ts';
 import { settingsHistory } from './core/settings-history.ts';
 import { SettingsMenu } from './core/settings-menu.tsx';
 import { createViewport } from './core/scene.ts';
+import { charactersModule, clearLocalPosition } from './modules/characters/index.ts';
 
 declare global {
   interface Window { moduleTests?: ReturnType<typeof createViewport>['tests'] }
@@ -25,8 +27,29 @@ import { isModuleStatus, readModulePreferences, selectModules, PREFERENCES_STORA
 
 const categories = groupModules(modules);
 
+function useDisplayValue<T>(updates: Observable<T>, initial: T) {
+  const [value, setValue] = useState(initial);
+  useEffect(() => {
+    const observer = updates.add(value => setValue(value));
+    return () => { updates.remove(observer); };
+  }, [updates]);
+  return value;
+}
+
+function FpsDisplay({ updates }: { updates: Observable<number> }) {
+  const fps = useDisplayValue(updates, 0);
+  return <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>;
+}
+
+const idleTestState: TestState = { running: false, title: '', progress: 0, index: 0, total: 0, results: [] };
+function TestDisplay({ updates, stop }: { updates: Observable<TestState>; stop(): void }) {
+  return <TestPanel state={useDisplayValue(updates, idleTestState)} stop={stop} />;
+}
+
 function App() {
-  const [testState, setTestState] = useState<TestState>({ running: false, title: '', progress: 0, index: 0, total: 0, results: [] });
+  const [testRunning, setTestRunning] = useState(false);
+  const [testUpdates] = useState(() => new Observable<TestState>());
+  const [fpsUpdates] = useState(() => new Observable<number>());
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => {
     try { return new Set(readCollapsedCategories(localStorage.getItem(CATEGORIES_STORAGE_KEY), categories.map(category => category.title))); }
     catch { return new Set(); }
@@ -43,22 +66,27 @@ function App() {
     return { ids: selectModules(modules, readSelection(raw, modules, defaultModules), preferences.statuses), status };
   });
   const [selected, setSelected] = useState(initial.ids);
+  const [pendingSelection, setPendingSelection] = useState<readonly string[] | null>(null);
+  const deferredSelection = useDeferredValue(pendingSelection);
   const [status, setStatus] = useState(initial.status);
   const [modulesOpen, setModulesOpen] = useState(() => readWindow('modules').open);
-  const [fps, setFps] = useState(0);
   const [ready, setReady] = useState(false);
   const [panels] = useState(createPanels);
   const entries = usePanels(panels);
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const viewport = useRef<ReturnType<typeof createViewport> | null>(null);
-  const enabled = new Set(selectModules(modules, selected, preferences.statuses));
+  const enabled = new Set(selectModules(modules, pendingSelection ?? selected, preferences.statuses));
+  const changingModules = pendingSelection !== null;
 
 
   useEffect(() => {
     if (!canvas.current) return;
     try {
-      viewport.current = createViewport(canvas.current, value => setFps(Math.round(value)), panels, setTestState);
+      viewport.current = createViewport(canvas.current, value => fpsUpdates.notifyObservers(Math.round(value)), panels, state => {
+        setTestRunning(state.running);
+        testUpdates.notifyObservers(state);
+      });
       viewport.current.restart(modules, initial.ids);
       window.moduleTests = viewport.current.tests;
       setReady(true);
@@ -70,9 +98,10 @@ function App() {
     const onPageHide = (event: PageTransitionEvent) => { if (!event.persisted) dispose(); };
     window.addEventListener('pagehide', onPageHide);
     return () => { window.removeEventListener('pagehide', onPageHide); dispose(); };
-  }, [initial, panels]);
+  }, [initial, panels, fpsUpdates, testUpdates]);
 
   async function runTests(ids?: readonly string[]) {
+    if (changingModules) return;
     try { await viewport.current?.tests.run(ids); }
     catch (error) { setStatus(`Не удалось запустить тест: ${error instanceof Error ? error.message : String(error)}`); }
   }
@@ -88,15 +117,17 @@ function App() {
     catch { setStatus('Браузер не разрешил сохранить статусы модулей.'); }
   }
 
-  function syncModules(ids: readonly string[], nextPreferences = preferences, resetCamera = false) {
+  function syncModules(ids: readonly string[], nextPreferences = preferences) {
     const currentViewport = viewport.current;
-    if (!currentViewport || testState.running) return;
+    if (!currentViewport || testRunning) return;
+    setPendingSelection(null);
+    const applied = new Set(selected);
     try { settingsHistory.transaction(() => {
       const next = selectModules(modules, ids, nextPreferences.statuses);
-      if (resetCamera || next.length !== enabled.size || next.some(id => !enabled.has(id))) {
-        try { currentViewport.restart(modules, next, resetCamera); }
+      if (next.length !== applied.size || next.some(id => !applied.has(id))) {
+        try { currentViewport.restart(modules, next); }
         catch (error) {
-          try { currentViewport.restart(modules, [...enabled]); }
+          try { currentViewport.restart(modules, selected); }
           catch { setReady(false); }
           throw error;
         }
@@ -109,11 +140,37 @@ function App() {
     }); } catch (error) { setStatus(`Не удалось изменить набор: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
+  const applyDeferredSelection = useEffectEvent((ids: readonly string[]) => {
+    if (pendingSelection === ids && ready && !testRunning) syncModules(ids);
+  });
+  useEffect(() => {
+    if (!deferredSelection || deferredSelection !== pendingSelection || !ready || testRunning) return;
+    // Give the checkbox a paint before synchronous Babylon scene creation.
+    let applyFrame: number | undefined;
+    const paintFrame = requestAnimationFrame(() => {
+      applyFrame = requestAnimationFrame(() => applyDeferredSelection(deferredSelection));
+    });
+    return () => {
+      cancelAnimationFrame(paintFrame);
+      if (applyFrame !== undefined) cancelAnimationFrame(applyFrame);
+    };
+  }, [deferredSelection, pendingSelection, ready, testRunning]);
+
+  function resetView() {
+    if (!viewport.current || testRunning) return;
+    try {
+      viewport.current.resetView();
+      if (!selected.includes(charactersModule.id)) clearLocalPosition();
+      setStatus('');
+    } catch (error) { setStatus(`Не удалось сбросить положение: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
   function restoreSettings() {
     if (!viewport.current) return;
+    setPendingSelection(null);
     const nextPreferences = readModulePreferences(localStorage.getItem(PREFERENCES_STORAGE_KEY), modules);
     const ids = selectModules(modules, readSelection(localStorage.getItem(STORAGE_KEY), modules, defaultModules), nextPreferences.statuses);
-    if (ids.length !== enabled.size || ids.some(id => !enabled.has(id))) viewport.current.restart(modules, ids);
+    if (ids.length !== selected.length || ids.some(id => !selected.includes(id))) viewport.current.restart(modules, ids);
     setPreferences(nextPreferences);
     setSelected(ids);
   }
@@ -125,11 +182,11 @@ function App() {
 
   return <Theme appearance="dark">
     <main id="game-stage" ref={host}>
-      <div className="game-controls" inert={testState.running}>
+      <div className="game-controls" inert={testRunning}>
       <section className="viewport"><canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} /></section>
-      <Box className="fps"><Badge id="fps" aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>
+      <FpsDisplay updates={fpsUpdates} />
       <Box className="module-panel">
-        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testState.running} restore={restoreSettings} /></Flex>
+        <Flex justify="end" align="center" gap="2"><Button id="modules-trigger" aria-expanded={modulesOpen} aria-controls="modules-window" aria-label="Модули" size="1" variant="soft" onClick={() => showModules(!modulesOpen)}><Layers size={14} aria-hidden="true" />Модули</Button><SettingsMenu disabled={!ready || testRunning || changingModules} restore={restoreSettings} /></Flex>
         <Box id="status" role="status" aria-live="polite">
           {status && <Callout.Root size="1" mt="2"><Callout.Text>{status}</Callout.Text></Callout.Root>}
         </Box>
@@ -137,8 +194,8 @@ function App() {
           <section id="modules-window" className="module-list" hidden={!modulesOpen} aria-label="Модули">
           <Flex direction="column" gap="3">
             <Flex align="center" justify="between" gap="2">
-            <Button id="test-all" size="1" variant="soft" disabled={!ready || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
-              <Tooltip content="Вернуть стартовый набор, статусы и камеру"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить модули к дефолтам" disabled={!ready} onClick={() => syncModules(defaultModules, { tab: 'working', statuses: {} }, true)}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
+            <Button id="test-all" size="1" variant="soft" disabled={!ready || changingModules || !modules.some(module => module.test && enabled.has(module.id))} onClick={() => { void runTests(); }}><Play size={14} aria-hidden="true" />Тест всех включённых модулей</Button>
+              <Tooltip content="Вернуть персонажа и камеру в исходное положение"><IconButton id="reset" size="1" variant="ghost" aria-label="Сбросить положение персонажа и камеры" disabled={!ready} onClick={resetView}><RotateCcw size={16} aria-hidden="true" /></IconButton></Tooltip>
             </Flex>
             <Tabs.Root activationMode="manual" value={preferences.tab} onValueChange={tab => { if (isModuleStatus(tab)) savePreferences({ ...preferences, tab }); }}>
               <Tabs.List aria-label="Статус модулей">
@@ -179,7 +236,11 @@ function App() {
                     <Flex align="center" gap="2">
                       <Checkbox checked={enabled.has(module.id)} disabled={!ready || preferences.tab !== 'working' || !!module.required || consumers.length > 0 || unavailable}
                         onCheckedChange={checked => {
-                          syncModules(checked === true ? [...enabled, module.id] : [...enabled].filter(id => id !== module.id));
+                          setPendingSelection(previous => {
+                            const current = previous ?? selected;
+                            const next = checked === true ? [...current, module.id] : current.filter(id => id !== module.id);
+                            return selectModules(modules, next, preferences.statuses);
+                          });
                         }} />
                       <span className="module-title">{module.title}</span>
                     </Flex>
@@ -187,7 +248,7 @@ function App() {
                   </Tooltip>
                   </Flex>
                   <Flex className="module-actions" align="center" gap="2">
-                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
+                  {module.test && <Tooltip content={`Тест: ${module.title}`}><IconButton id={`test-${module.id}`} size="1" variant="ghost" aria-label={`Запустить тест: ${module.title}`} disabled={!ready || changingModules || !enabled.has(module.id)} onClick={() => { void runTests([module.id]); }}><Play size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   {panel && <Tooltip content={`Детали: ${module.title}`}><IconButton id={`details-${module.id}`} size="1" variant="ghost" aria-label={`Детали: ${module.title}`}
                     aria-expanded={panel.open} onClick={() => panels.toggle(module.id)}><Info size={16} aria-hidden="true" /></IconButton></Tooltip>}
                   <DropdownMenu.Root>
@@ -211,9 +272,13 @@ function App() {
           </section>
         </Card>
       </Box>
-      {entries.map(panel => <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
+      {entries.map(panel => panel.overlay
+        ? <aside key={panel.id} id={`${panel.id}-window`} className="scene-overlay" aria-label={panel.title} hidden={!panel.open}>
+            {panel.open && panel.content}
+          </aside>
+        : <PanelWindow key={panel.id} panel={panel} panels={panels} host={host} />)}
       </div>
-      <TestPanel state={testState} stop={() => viewport.current?.tests.stop()} />
+      <TestDisplay updates={testUpdates} stop={() => viewport.current?.tests.stop()} />
     </main>
   </Theme>;
 }

@@ -44,18 +44,18 @@ void main(){
  gl_FragColor=vec4(color,1.);
 }`;
 
-export function createAtmosphere(scene:Scene,lighting:ReturnType<typeof lightingModule.setup>,materials:ReturnType<typeof materialsModule.setup>,onFrame:Observable<number>,scope:Scope){
+export function createAtmosphere(scene:Scene,lighting:Pick<ReturnType<typeof lightingModule.setup>,'getSettings'|'getSunLight'|'subscribe'>,materials:ReturnType<typeof materialsModule.setup>,scope:Scope){
   const old={mode:scene.fogMode,density:scene.fogDensity,color:scene.fogColor.clone(),clear:scene.clearColor.clone()};
   scope.onDispose(()=>{scene.fogMode=old.mode;scene.fogDensity=old.density;scene.fogColor.copyFrom(old.color);scene.clearColor.copyFrom(old.clear);materials.setNightFactor(null);});
   const sky=MeshBuilder.CreateSphere('atmosphere/sky',{diameter:20000,segments:16},scene);scope.onDispose(()=>sky.dispose());
   sky.infiniteDistance=true;sky.isPickable=false;sky.alwaysSelectAsActiveMesh=true;sky.metadata={shadowCaster:false};
   const shader=new ShaderMaterial('atmosphere/sky',scene,{vertexSource:vertex,fragmentSource:fragment},{attributes:['position'],uniforms:['worldViewProjection','zenith','horizon','sunDirection','daylight'],samplers:['moon']});scope.onDispose(()=>shader.dispose());
   shader.backFaceCulling=false;shader.disableDepthWrite=true;shader.fogEnabled=false;sky.material=shader;
-  const changed=new Observable<void>();let stopped=false,playing=true,elapsed=0,loaded=0;const errors:string[]=[];
+  const changed=new Observable<void>();let stopped=false,loaded=0;const errors:string[]=[];
   scope.onDispose(()=>{stopped=true;changed.clear();});
   const sunDirection=Vector3.Up();
-  let snapshot:Readonly<{playing:boolean;hour:number;night:number;loaded:number;errors:readonly string[]}>=Object.freeze({playing,hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:[] as readonly string[]});
-  function publish(){if(stopped)return;snapshot=Object.freeze({playing,hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:Object.freeze([...errors])});changed.notifyObservers();}
+  let snapshot:Readonly<{hour:number;night:number;loaded:number;errors:readonly string[]}>=Object.freeze({hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:[] as readonly string[]});
+  function publish(){if(stopped)return;snapshot=Object.freeze({hour:lighting.getSettings().hour,night:atmosphereColors(lighting.getSettings().hour).night,loaded,errors:Object.freeze([...errors])});changed.notifyObservers();}
   for(const [name,file]of [['moon','moon.webp']]){
     const texture=new Texture(`${import.meta.env?.BASE_URL??'/'}textures/atmosphere/${file}`,scene,false,true,Texture.TRILINEAR_SAMPLINGMODE,()=>{loaded++;publish();},()=>{errors.push(`Не загрузилась текстура ${file}`);publish();});
     scope.onDispose(()=>texture.dispose());texture.wrapU=texture.wrapV=Texture.CLAMP_ADDRESSMODE;shader.setTexture(name,texture);
@@ -68,6 +68,5 @@ export function createAtmosphere(scene:Scene,lighting:ReturnType<typeof lighting
     materials.setNightFactor(colors.night);publish();
   }
   update();scope.onDispose(lighting.subscribe(update));
-  const frame=onFrame.add(delta=>{if(!playing)return;elapsed+=delta;if(elapsed>=250){const advance=elapsed;elapsed=0;lighting.setSettings({hour:(lighting.getSettings().hour+advance*24/1200000)%24});}});scope.onDispose(()=>onFrame.remove(frame));
-  return {getSnapshot:()=>snapshot,subscribe(listener:()=>void){if(stopped)throw new Error('Атмосфера остановлена');const o=changed.add(listener);return()=>{changed.remove(o);};},setPlaying(value:boolean){if(stopped)throw new Error('Атмосфера остановлена');playing=value;elapsed=0;publish();}};
+  return {getSnapshot:()=>snapshot,subscribe(listener:()=>void){if(stopped)throw new Error('Атмосфера остановлена');const o=changed.add(listener);return()=>{changed.remove(o);};}};
 }

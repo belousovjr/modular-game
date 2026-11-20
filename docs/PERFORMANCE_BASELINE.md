@@ -831,3 +831,39 @@ Production browser route with the existing car, atmosphere, night-lighting modul
 The avatar still uses one skinned primitive, the same 65 joints and shared textures. The exported GLB went from 1,394,688 to 1,258,860 bytes after resampling and deduplicating the expanded clip set. Runtime blends only currently playing groups and keeps the existing distance and frustum animation culling. The collision system reuses the static spatial index, precomputes terrain triangle denominators and skips blocked or idle axes during the high-speed sweep.
 
 Nearby tree shadows use one opaque depth mesh per vegetation section, excluded from the main camera and from the far shadow cascade. The park view verified four active proxies in the shadow list, zero leaf casters, and the compiled foliage contrast adjustment. Three short samples alternating the proxy meshes off and on in the same production scene averaged 62.4 and 59.8 FPS respectively on the RTX 3050 Laptop at 1280×720. The ranges overlapped (55.5–66.6 off, 58.0–61.3 on). Browser errors and cgroup OOM events were zero.
+
+## Expanded Chicago square
+
+Production Chromium with ANGLE/D3D12 on RTX 3050 Laptop, 1280×720 uncapped, daytime, full demo with pedestrians and the vehicle. Each fixed view used about 2.2 s of frame samples after the camera and scene settled. The previous 1.86×1.61 km map measured 65.9–68.5 FPS at the centre and 81.9–82.2 at the river in two passes.
+
+The 3.4×3.4 km build keeps 756 source tiles. Grouping coarse buildings by 512 m cuts skyline meshes from 409 to 151 across the shared source. The far curb underlay reuses indexed vertices and the offshore bed uses flat triangles. The first expanded pass averaged 39.1 FPS at the centre and 47.1 at the river. A separate diagnostic pass with the full scene gave roughly 58–62 at the centre and 60–63 at the river before the final batching change, so the timing ranges overlap. The final pass recorded the following fixed views.
+
+| View | FPS | P95 frame time, ms | Active meshes |
+| --- | ---: | ---: | ---: |
+| Centre | 48.1 | 34.5 | 147 |
+| River | 55.4 | 34.9 | 72 |
+| North | 58.0 | 30.8 | 90 |
+| West | 58.1 | 34.1 | 111 |
+| Grant Park / south | 61.9 | 35.0 | 81 |
+| Lakefront | 64.3 | 33.7 | 41 |
+| Union Station | 50.1 | 41.4 | 87 |
+| Centre return | 48.5 | 34.3 | 143 |
+
+Active meshes at the corresponding centre and river cameras were 171 and 97 before final batching. This is a measure of scene activity, not a draw-call counter. Browser peak was 1.61 GB under the 2 GiB cgroup limit with swap disabled, compared with 1.06 GB on the old map. No OOM or browser errors were recorded. These short samples do not cover an extended drive or memory soak.
+
+### Frame overhead on the expanded map
+
+Compared production builds before (`aec9446`) and after the optimization on RTX 3050 Laptop via ANGLE/D3D12, 1280×720, with Chromium's frame cap and vsync disabled. Eight NPCs, the car, and the same shadow and LOD settings were active in both builds. The clock was held at the selected time and each fixed view was sampled for about 2.45 s after settling.
+
+| View | FPS before → after | P95 frame time before → after, ms |
+| --- | ---: | ---: |
+| Plaza | 41.2 → 107.9 | 36.0 → 13.5 |
+| River | 44.8 → 206.1 | 36.5 → 7.8 |
+| Lakefront | 55.0 → 264.9 | 31.1 → 6.5 |
+| Plaza at night | 49.0 → 186.8 | 37.0 → 8.2 |
+
+Peak cgroup memory dropped from 1.51 to 1.31 GiB with the same 2 GiB cap and swap disabled. Both runs had zero OOM events and browser errors. At each view the active mesh count matched, and the maximum average per-channel image difference across the four screenshots, excluding the HUD, was 0.09 out of 255. These samples measure frame headroom on one GPU at fixed views. They do not estimate the physical display rate or attribute the gain to individual changes.
+
+On the built-in 10 s world flythrough under the same conditions, average FPS rose from 38.3 to 90.0, and P95 frame time fell from 41.4 to 16.0 ms. The slowest frame fell from about 185 to 82 ms. Both runs loaded 223 sections and unloaded 41. Peak cgroup memory fell from 1.52 to 1.31 GiB, with zero OOM events or browser errors.
+
+In a separate browser check, keyboard walking, right-drag camera rotation, and the test panel's start and completion states passed. After three additional west → lakefront → plaza loops, the plaza still held 324 meshes, 210 geometries, 33 materials, 31 textures, and nine skeletons. JS heap after garbage collection went from 255.7 to 256.5 MiB. The peak with the same cap was 1.31 GiB, with zero OOM events or browser errors.

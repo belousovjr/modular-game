@@ -25,3 +25,14 @@ test('panels register, toggle independently and notify until unsubscribed', () =
   assert.equal(panels.getSnapshot()[0].open, false);
   removeNew();
 });
+
+test('a HUD registration opens by default and can be toggled independently', () => {
+  const panels = createPanels();
+  const remove = panels.register('hud', 'HUD', 'map', true);
+  assert.equal(panels.getSnapshot()[0].overlay, true);
+  assert.equal(panels.getSnapshot()[0].open, true);
+  panels.toggle('hud');
+  assert.equal(panels.getSnapshot()[0].open, false);
+  remove();
+  assert.equal(panels.getSnapshot().length, 0);
+});

@@ -17,6 +17,7 @@
     "@babylonjs/loaders": "^9.35.0",
     "@radix-ui/themes": "^3.3.0",
     "cannon-es": "^0.20.0",
+    "javascript-astar": "0.4.1",
     "lucide-react": "^1.72.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

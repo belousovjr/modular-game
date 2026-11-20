@@ -1,15 +1,15 @@
 import { readWindow, writeWindow } from './window-settings.ts';
 import { useSyncExternalStore, type ReactNode } from 'react';
 
-export interface Panel { id: string; title: string; content: ReactNode; open: boolean }
+export interface Panel { id: string; title: string; content: ReactNode; open: boolean; overlay: boolean }
 export function createPanels() {
   let entries: readonly Panel[] = [];
   const listeners = new Set<() => void>();
   function publish(next: readonly Panel[]) { entries = next; listeners.forEach(listener => listener()); }
   return {
-    register(id: string, title: string, content: ReactNode) {
+    register(id: string, title: string, content: ReactNode, overlay = false) {
       if (entries.some(panel => panel.id === id)) throw new Error(`Панель уже зарегистрирована: ${id}`);
-      publish([...entries, { id, title, content, open: readWindow(`details-${id}`).open }]);
+      publish([...entries, { id, title, content, overlay, open: readWindow(`details-${id}`, overlay).open }]);
       return () => publish(entries.filter(panel => panel.id !== id));
     },
     toggle(id: string) {

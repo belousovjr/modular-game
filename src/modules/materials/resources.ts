@@ -1,3 +1,4 @@
+import { WindowGlass } from './window-glass.ts';
 import { Color3 } from '@babylonjs/core/Maths/math.color.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js';
@@ -8,6 +9,8 @@ import type { geometryModule } from '../geometry/index.ts';
 import { SurfaceScale } from './surface-scale.ts';
 import { surfaces } from './palette.ts';
 import { WaterSurface, CityFacade } from './city-surface.ts';
+import {activeStreetLampPhases, StreetLamp} from './street-lamp.ts';
+import { DoorwayCut, type Doorway } from './doorway.ts';
 import {NightField} from './night-field.ts';
 import type {BaseTexture} from '@babylonjs/core/Materials/Textures/baseTexture.js';
 
@@ -23,6 +26,8 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   const materials = new Map<string, readonly StandardMaterial[]>();
   let stopped = false;
   const facades:CityFacade[]=[];
+  const doorwayCuts:DoorwayCut[]=[];
+  let streetLamp: StreetLamp | undefined;
   const nightFields:NightField[]=[];let fieldActive=false;
   let snapshot: MaterialsSnapshot = { materials: 0, textures: 0, loading: 0, failed: 0, estimatedBytes: 0, errors: [] };
   function publish() {
@@ -77,20 +82,32 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
     const material = new StandardMaterial(`materials/${surface}`, scene);
     scope.onDispose(() => material.dispose());
     material.diffuseColor = Color3.FromHexString(style.color);
-    const tinted=surface.startsWith('city-')||['curb','sidewalk','water','marking','signal-body','signal-off','riverbed','facade','metal'].includes(surface);
+    const door=surface.startsWith('interior-door');
+    const tinted=door||surface.startsWith('city-')||['curb','sidewalk','park-path','rail-ballast','water','marking','signal-body','signal-off','riverbed','facade','metal','interior-concrete'].includes(surface);
     tints.set(material,tinted?material.diffuseColor.clone():Color3.White());
     material.specularColor = Color3.Black();
     // Polygon offset keeps paint above the road without changing physical geometry or occlusion.
     if(surface==='marking'){material.zOffset=-1;material.zOffsetUnits=-2;}
     if(surface==='road'){material.zOffset=-1;material.zOffsetUnits=-1;}
+    if (surface==='interior-glass') {
+      material.alpha=.16;
+      material.backFaceCulling=false;
+      new WindowGlass(material);
+    }
     if(surface==='bank')material.backFaceCulling=false;
     if (surface==='water') { material.alpha=.88;material.specularColor=Color3.FromHexString('#a3c2c2');material.specularPower=80;material.backFaceCulling=false;new WaterSurface(material); }
     if (surface.startsWith('city-')) facades.push(new CityFacade(material));
-    if(['road','sidewalk','curb','terrain','urban-ground','marking'].includes(surface))nightFields.push(new NightField(material));
+    if (surface.startsWith('city-') || ['facade','metal','interior-concrete'].includes(surface)) {
+      doorwayCuts.push(new DoorwayCut(material));
+    }
+    if(['road','sidewalk','park-path','rail-ballast','curb','terrain','urban-ground','marking'].includes(surface))nightFields.push(new NightField(material));
     if (surface==='signal-red') material.emissiveColor=Color3.FromHexString('#a3200b');
-    if (surface === 'lamp-head') material.emissiveColor = material.diffuseColor.clone();
+    if (surface === 'lamp-head') {
+      material.emissiveColor = material.diffuseColor.clone();
+      streetLamp = new StreetLamp(material);
+    }
     if (style.texture) {
-      new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'));
+      if (!door) new SurfaceScale(material, style.texture === 'building-shell', readTexture,surface.startsWith('city-'),surface==='terrain');
       const family = style.texture === 'building-shell' ? 'brick' : style.texture;
       useTexture(family, 512, material);
       useTexture(family, 512, material, true);
@@ -103,6 +120,12 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   scope.onDispose(() => { stopped = true; changed.clear(); });
   return {
     getSnapshot: () => snapshot,
+    setDoorway(door:Doorway|null){
+      if(stopped)throw new Error('Материалы остановлены');
+      if(door&&(![door.x,door.y,door.z,door.tx,door.tz,door.width,door.height].every(Number.isFinite)||
+        door.width<=0||door.height<=0||Math.abs(Math.hypot(door.tx,door.tz)-1)>.001))throw new Error('Invalid doorway');
+      for(const cut of doorwayCuts)cut.doorway=door;
+    },
     registerNightField(texture:BaseTexture,bounds:{minX:number;minZ:number;maxX:number;maxZ:number},owner:Scope){
       if(stopped||fieldActive||texture.getScene()!==scene||![bounds.minX,bounds.minZ,bounds.maxX,bounds.maxZ].every(Number.isFinite)||bounds.maxX<=bounds.minX||bounds.maxZ<=bounds.minZ)throw new Error('Invalid or duplicate night field');
       fieldActive=true;let released=false;const values=[bounds.minX,bounds.minZ,bounds.maxX-bounds.minX,bounds.maxZ-bounds.minZ];
@@ -114,7 +137,8 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
       if(stopped)throw new Error('Материалы остановлены');
       if(value!==null&&(!Number.isFinite(value)||value<0||value>1))throw new Error('Night factor must be between 0 and 1');
       for(const facade of facades)facade.night=value??0;
-      const lamp=materials.get('lamp-head')?.[0];if(lamp)lamp.emissiveColor=value===null?Color3.FromHexString(surfaces['lamp-head'].color):Color3.FromHexString('#ffd7a0').scale(.1+.9*value);
+      if (streetLamp) streetLamp.activePhases = value === null ? 3 : activeStreetLampPhases(value);
+      const lamp=materials.get('lamp-head')?.[0];if(lamp)lamp.emissiveColor=value===null?Color3.FromHexString(surfaces['lamp-head'].color):Color3.FromHexString('#ffd7a0');
     },
     subscribe(listener: () => void) {
       if (stopped) throw new Error('Материалы остановлены');

@@ -161,9 +161,12 @@ test('static opaque PBR shadow cache remains conservative for transparency and u
  const engine=new NullEngine(),scene=new Scene(engine),owner=ownerScope();try{
   const lighting=createLighting(scene,owner),camera=new FreeCamera('camera',new Vector3(0,3,-5),scene);scene.activeCamera=camera;
   const box=MeshBuilder.CreateBox('pbr-caster',{size:2},scene),pbr=new PBRMaterial('pbr',scene);box.material=pbr;box.metadata={shadowStaticMaterial:true};
-  const api=createShadows(scene,lighting.getSunLight(),()=>[box],()=>({x:0,y:0,z:0}),owner),frame=()=>scene.onBeforeRenderObservable.notifyObservers(scene);
+  const sun=lighting.getSunLight();
+  const api=createShadows(scene,sun,()=>[box],()=>({x:0,y:0,z:0}),owner),frame=()=>scene.onBeforeRenderObservable.notifyObservers(scene);
   frame();let revision=api.getStats().revision;frame();assert.equal(api.getStats().revision,revision);
+  const casters=sun.getShadowGenerator()?.getShadowMap()?.renderList;
   box.position.x=1;frame();assert.ok(api.getStats().revision>revision);
+  assert.equal(sun.getShadowGenerator()?.getShadowMap()?.renderList,casters);
   pbr.alpha=.5;frame();revision=api.getStats().revision;frame();assert.ok(api.getStats().revision>revision);
   pbr.alpha=1;box.metadata.shadowStaticMaterial=false;frame();revision=api.getStats().revision;frame();assert.ok(api.getStats().revision>revision);
  }finally{owner.dispose();scene.dispose();engine.dispose();}

@@ -1,7 +1,7 @@
 {
   "source": "Quaternius: Modular Character Outfits – Fantasy + Universal Base Characters",
   "license": "CC0-1.0 model/Quaternius clips; Adobe Mixamo terms for Car_Enter/Car_Exit/Crawl_Loop",
-  "triangles": 5970,
+  "triangles": 6054,
   "primitives": 1,
   "joints": 65,
   "textures": [
@@ -146,7 +146,7 @@
       ]
     }
   ],
-  "sha256": "ee94644af9d215f2b5dae77d1cc12f58fb7acee649e19cfbe0871388be5672c2",
+  "sha256": "cc218bf3b7992be65049df1c35556717d8a05feb756d41be077fbea90bd6eba8",
   "vehicleAnimations": [
     {
       "clip": "Car_Enter",

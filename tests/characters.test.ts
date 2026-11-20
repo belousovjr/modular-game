@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createDisplayHeight } from '../src/modules/characters/height-presentation.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
-import { createCharacterAuthority, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
+import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
 import { createCollisionWorld, type CollisionWorld } from '../src/modules/world/headless.ts';
 import { generateWorldRegions } from '../src/modules/world-generation/headless.ts';
 import { scheme,regions,insertions } from '../src/modules/world/scheme.ts';
@@ -9,6 +10,50 @@ import { scheme,regions,insertions } from '../src/modules/world/scheme.ts';
 const world: CollisionWorld = { bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},baseHeight:0,slopeX:0.015,spawn:{x:0,z:0},
   blockers:[{id:'wall',minX:2,maxX:3,minZ:-5,maxZ:5,minY:-2,maxY:10}],floors:[{minX:-10,maxX:1,minZ:1,maxZ:5,elevation:0.2}] };
 const command = (sequence=1,x=0,z=1,run=false): MoveCommand => ({type:'move',characterId:'local-player',sequence,tick:sequence-1,x,z,run,jump:false});
+
+test('display height eases across ground changes in either direction at any frame rate', () => {
+  const level={y:1,grounded:true,mode:'walk' as const};
+  const raised={...level,y:1.2};
+  const smooth=createDisplayHeight(), slow=createDisplayHeight();
+  assert.equal(smooth(level,0),1);
+  slow(level,0);
+  const first=smooth(raised,20);
+  assert.ok(first>1 && first<1.2);
+  for(let i=0;i<4;i++)smooth(raised,20);
+  assert.ok(Math.abs(smooth(raised,0)-slow(raised,100))<1e-9);
+  assert.equal(smooth(raised,1000),1.2);
+  const down=smooth(level,20);
+  assert.ok(down>1 && down<1.2);
+  assert.ok(smooth({...raised,vehicleAnimation:'approaching'},20)<1.2);
+});
+
+test('display height follows airborne and seated poses directly and resets on discontinuities',()=>{
+  const level={y:1,grounded:true,mode:'walk' as const};
+  const smooth=createDisplayHeight();
+  smooth(level,0);
+  assert.equal(smooth({...level,y:1.1,grounded:false},16),1.1);
+  assert.equal(smooth({...level,y:1.25},16),1.25);
+  assert.equal(smooth({...level,y:1.4,mode:'fly'},16),1.4);
+  assert.equal(smooth({...level,y:1.45,mode:'swim'},16),1.45);
+  assert.equal(smooth({...level,y:1.5,vehicleAnimation:'entering'},16),1.5);
+  assert.equal(smooth(level,16),1);
+  assert.equal(smooth({...level,y:2},16),2);
+  assert.equal(smooth({...level,y:2.2},16,true),2.2);
+  assert.ok(smooth({...level,y:2.5},0)>=2.5-.24);
+});
+
+test('local resume uses a valid XYZ and falls back if saved coordinates are unsafe', () => {
+  const create = createCharacterAuthorityFactory(world);
+  const restored = create(20,undefined,{x:-4,y:5,z:4});
+  assert.deepEqual([restored.snapshot().x,restored.snapshot().y,restored.snapshot().z],[-4,5,4]);
+  assert.equal(restored.snapshot().grounded,false);
+  restored.step(21);
+  assert.ok(restored.snapshot().y<5);
+  for (const position of [{x:2.5,y:0,z:0},{x:101,y:0,z:0},{x:0,y:-5,z:0},{x:0,y:NaN,z:0}]) {
+    const fallback = create(20,undefined,position).snapshot();
+    assert.deepEqual([fallback.x,fallback.y,fallback.z],[0,0,0]);
+  }
+});
 
 test('crouch and crawl use posture speeds and clearance, and prone turns only when moving',()=>{
   const flat={...world,slopeX:0,floors:[],blockers:[{id:'low-ceiling',minX:.6,maxX:3,minZ:-1,maxZ:1,minY:.96,maxY:2.4}]};
@@ -53,6 +98,17 @@ test('character ticks and clocks produce the same collision result at different 
   }
   assert.deepEqual(run(30),run(144)); assert.deepEqual(run(60),run(30,true));
   const s=run(60); assert.ok(s.z>5 && s.x>3); assert.ok(Number.isFinite(s.y));
+});
+
+test('terrain reuse requires immutable triangle rows and preserves mutable fixture snapshots',()=>{
+  const plane=[-1,1,-1,2,1,-1,-1,1,2];
+  const collision={...world,baseHeight:-10,slopeX:0,floors:[],triangles:Object.freeze([plane])};
+  const original=createCharacterAuthority(collision);
+  for(const offset of [1,4,7])plane[offset]=2;
+  assert.equal(createCharacterAuthority(collision).snapshot().y,2);
+  original.step(1);assert.equal(original.snapshot().y,1);
+  const frozen={...collision,triangles:Object.freeze([Object.freeze([...plane])])};
+  assert.deepEqual(createCharacterAuthority(frozen).snapshot(),createCharacterAuthority(frozen).snapshot());
 });
 
 test('authority stops at walls, slides, climbs curbs and slopes, prevents diagonal speed boosts and expires stale input', () => {
@@ -288,4 +344,20 @@ test('fractional vertical intent follows a flight vector without increasing its 
   assert.equal(a.receive(invalid,'local').reason,'invalid');
   const descend=locomotionStep(a,{z:.8,locomotion:{boost:false,lift:-.6,flight:null}},60);
   assert.ok(descend.y<later.y-10&&descend.z>later.z);
+});
+
+
+test('local position reset restores spawn, clears queued input and keeps authority tick and identity',async()=>{
+  const actor=createCharacterAuthorityFactory(world)(20,undefined,{x:-4,y:5,z:4});
+  const connection=createLocalConnection(actor,{latencyTicks:3});
+  assert.ok(actor.receive({...command(),tick:20},'local').accepted);
+  connection.step(21);
+  const queued=connection.send({...command(2),tick:21});
+  connection.resetPosition();
+  assert.equal((await queued).reason,'reset');
+  const initial=createCharacterAuthority(world,21).snapshot();
+  assert.deepEqual(actor.snapshot(),{...initial,lastSequence:1});
+  for(let tick=22;tick<=26;tick++)connection.step(tick);
+  assert.equal(actor.snapshot().z,initial.z);
+  assert.ok(actor.receive({...command(2,-1,0),tick:26},'local').accepted);
 });

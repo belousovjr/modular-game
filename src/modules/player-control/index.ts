@@ -1,18 +1,19 @@
 import {createElement} from 'react';
 import {ControlPanel} from './panel.tsx';
-import {cameraObstacleFraction,recoverCameraRadius} from './camera-obstacles.ts';
+import {createCameraObstacleSweep,recoverCameraRadius} from './camera-obstacles.ts';
 import {createCameraGroundSweep} from './camera-ground.ts';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
 import { defineModule } from '../../core/context.ts';
+import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { charactersModule,type CharacterStance } from '../characters/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
-import { worldModule } from '../world/index.ts';
+import { pedestrianBlockers, worldModule } from '../world/index.ts';
 
 export const playerControlModule = defineModule({
   id: 'player-control', title: 'Управление персонажем', category: 'Игра',
-  requires: { characters: charactersModule, rendering: objectRenderingModule, world: worldModule },
+  requires: { characters: charactersModule, interiors: buildingInteriorsModule, rendering: objectRenderingModule, world: worldModule },
   setup({ core, deps, scope }) {
     scope.onDispose(core.panels.register('player-control','Управление',createElement(ControlPanel)));
     const previous = core.scene.activeCamera;
@@ -38,6 +39,7 @@ export const playerControlModule = defineModule({
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
+    const obstacleSweep=createCameraObstacleSweep(pedestrianBlockers(deps.world.collision),deps.interiors.cameraObstacles);
     const arm=Vector3.Zero();
     let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();
@@ -47,6 +49,17 @@ export const playerControlModule = defineModule({
     let stanceIntent:CharacterStance|undefined;
     const clearPointer = () => { leftHeld=false; rightHeld=false; };
     const clear = () => { keys.clear(); jump=false; flightIntent=null; stanceIntent=undefined; clearPointer(); lastInput = ''; };
+    const reset=core.onResetView?.add(()=>{
+      clear();
+      camera.alpha=-Math.PI/2;camera.beta=1.1;
+      camera.radius=desiredRadius=appliedRadius=6;
+      cameraHeight=1.2;
+      camera.inertialAlphaOffset=camera.inertialBetaOffset=camera.inertialRadiusOffset=0;
+      camera.inertialPanningX=camera.inertialPanningY=0;
+      camera.movement.resetPanVelocity();
+      camera.movement.resetRotationVelocity();
+    });
+    if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
     if (canvas) {
       const down=(event:PointerEvent)=>{
         if(core.scene.activeCamera!==camera||document.hidden||event.ctrlKey||event.altKey||event.metaKey)return;
@@ -139,11 +152,11 @@ export const playerControlModule = defineModule({
       const targetHeight=s.mode==='swim'?.95:s.stance==='prone'?.48:s.stance==='crouching'?.86:1.2;
       const deltaMs=core.scene.getEngine().getDeltaTime();
       cameraHeight+=(targetHeight-cameraHeight)*(1-Math.exp(-deltaMs/60));
-      const target=new Vector3(s.x,s.y+cameraHeight,s.z);
+      const target=new Vector3(s.x,deps.characters.displayHeight()+cameraHeight,s.z);
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));
-      const fraction=Math.min(groundSweep(target,arm),cameraObstacleFraction(target,arm,desiredRadius,deps.world.collision.blockers));
+      const fraction=Math.min(groundSweep(target,arm),obstacleSweep(target,arm,desiredRadius));
       // Reconstructing the orbit from a near-zero position can reset alpha and beta.
       const safeRadius=Math.max(.05,desiredRadius*fraction);
       const previousRadius=Math.max(.05,camera.radius);

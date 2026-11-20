@@ -19,6 +19,8 @@ test('import boundaries reject private, core-to-feature and browser dependencies
     const physics=join(cwd,'src/modules/vehicles/headless.ts');
     writeFileSync(physics,'import { World } from \"cannon-es\";');
     assert.equal(run().status,0);rmSync(physics);
+    writeFileSync(physics,'import astar from "javascript-astar";');
+    assert.equal(run().status,0);rmSync(physics);
     const headless = join(cwd, 'src/modules/a/headless.ts');
     for (const [file, source] of [
       [headless, 'export { b } from "../b/headless.ts";'],
@@ -47,6 +49,8 @@ test('import boundaries reject private, core-to-feature and browser dependencies
       [path, 'const module = import("../b/private.ts");'],
       [path, 'import { b } from "../b/headless.ts";'],
       [headless, 'import { World } from \"cannon-es\";'],
+      [headless, 'import astar from "javascript-astar";'],
+      [physics, 'import astar from "javascript-astar/astar.js";'],
       [physics, 'import { World } from \"cannon-es/dist/cannon-es.js\";'],
       [headless, 'import type { Scene } from "@babylonjs/core";'],
       [headless, 'import { defineModule } from "../../core/context.ts";'],

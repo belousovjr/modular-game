@@ -8,6 +8,7 @@ import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { defaultPixelShader } from '@babylonjs/core/Shaders/default.fragment.js';
 import { defaultVertexShader } from '@babylonjs/core/Shaders/default.vertex.js';
+import { DoorwayCut } from '../src/modules/materials/doorway.ts';
 import { SurfaceScale } from '../src/modules/materials/surface-scale.ts';
 import { bumpFragment } from '@babylonjs/core/Shaders/ShadersInclude/bumpFragment.js';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js';
@@ -50,7 +51,7 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     const materialOwner = ownerScope();
     t.after(materialOwner.dispose);
     const api = createMaterials(scene, geometry, materialOwner);
-    assert.equal(api.getSnapshot().materials, 22);
+    assert.equal(api.getSnapshot().materials, 28);
     assert.equal(api.getSnapshot().textures, 12);
     assert.ok(api.getSnapshot().estimatedBytes < 17 * 1024 * 1024);
     assert.equal(plain.root.getChildMeshes()[0].material, geometry.getSurfaceMaterial('walls'));
@@ -58,12 +59,26 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(api.getSnapshot().loading, 0);
     assert.equal(api.getSnapshot().failed, 0);
-    for(const material of scene.materials)if(material instanceof StandardMaterial&&material.name.startsWith('materials/')&&material.emissiveColor.r===0&&material.emissiveColor.g===0&&material.emissiveColor.b===0){
+    const glass=geometry.getSurfaceMaterial('interior-glass');
+    assert.ok(glass instanceof StandardMaterial);
+    assert.equal(glass.needAlphaBlending(),true);
+    assert.equal(glass.alpha,.16);
+    assert.equal(glass.backFaceCulling,false);
+    assert.equal(glass.diffuseTexture,null);
+    assert.ok(glass.pluginManager?.getPlugin('WindowGlass'));
+    for(const material of scene.materials)if(material!==glass&&material instanceof StandardMaterial&&material.name.startsWith('materials/')&&material.emissiveColor.r===0&&material.emissiveColor.g===0&&material.emissiveColor.b===0){
       assert.ok(material.diffuseTexture,`Missing texture: ${material.name}`);
       assert.ok(material.bumpTexture,`Missing normal map: ${material.name}`);
     }
     const curb=geometry.getSurfaceMaterial('curb'),walk=geometry.getSurfaceMaterial('sidewalk');
     assert.ok(curb instanceof StandardMaterial&&walk instanceof StandardMaterial);assert.ok(curb.diffuseColor.r>walk.diffuseColor.r+.15);
+    for (const surface of ['park-path', 'rail-ballast']) {
+      const ground=geometry.getSurfaceMaterial(surface);
+      assert.ok(ground instanceof StandardMaterial);
+      assert.equal(ground.diffuseTexture, walk.diffuseTexture);
+      assert.equal(ground.bumpTexture, walk.bumpTexture);
+      assert.ok(ground.diffuseColor.r<walk.diffuseColor.r);
+    }
     const marking=geometry.getSurfaceMaterial('marking');assert.ok(marking instanceof StandardMaterial);
     assert.equal(marking.zOffset,-1);assert.equal(marking.zOffsetUnits,-2);assert.equal(marking.disableDepthWrite,false);
     const road=geometry.getSurfaceMaterial('road');assert.ok(road instanceof StandardMaterial);assert.equal(road.zOffset,-1);assert.equal(road.zOffsetUnits,-1);
@@ -83,6 +98,10 @@ test('materials share loaded textures, follow LOD and restore existing regular a
     assert.equal(door.diffuseTexture,metal.diffuseTexture);
     assert.notDeepEqual(door.diffuseColor.asArray(),metal.diffuseColor.asArray());
     assert.equal(sidewalk.bumpTexture, foundation.bumpTexture);
+    const interior = geometry.getSurfaceMaterial('interior-concrete');
+    assert.ok(interior instanceof StandardMaterial && interior !== foundation);
+    assert.equal(interior.diffuseTexture, foundation.diffuseTexture);
+    assert.equal(interior.bumpTexture, foundation.bumpTexture);
     assert.ok(sidewalk.bumpTexture instanceof Texture);
     assert.equal(sidewalk.bumpTexture.gammaSpace, false);
     assert.equal(sidewalk.diffuseTexture?.gammaSpace, true);
@@ -149,4 +168,16 @@ test('surface scale hooks match installed Babylon shaders without adding an extr
   assert.ok(fragment.CUSTOM_FRAGMENT_DEFINITIONS.includes('return vec4(0.5, 0.5, 1.0, 1.0)'));
   for (const point of Object.keys(vertex)) assert.ok(defaultVertexShader.shader.includes(`#define ${point}`));
   assert.equal(plugin.getCustomCode('compute'), null);
+});
+
+
+test('doorway cut extends below the threshold only on vertical geometry',t=>{
+  const engine=new NullEngine(),scene=new Scene(engine);
+  t.after(()=>{scene.dispose();engine.dispose();});
+  const cut=new DoorwayCut(new StandardMaterial('doorway',scene));
+  const shader=cut.getCustomCode('fragment')?.CUSTOM_FRAGMENT_BEFORE_LIGHTS;
+  assert.ok(shader);
+  assert.match(shader,/float doorBottom=\.015;/);
+  assert.match(shader,/#ifdef NORMAL[\s\S]+if\(abs\(normalize\(vNormalW\)\.y\)<\.25\)doorBottom=-\.025;\s+#endif/);
+  assert.match(shader,/doorLocal\.y>doorBottom/);
 });

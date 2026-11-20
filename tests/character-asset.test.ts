@@ -34,6 +34,36 @@ test('human asset stays within the render budget with one shared rig and baked l
 });
 
 
+test('skin geometry is closed under the shirt collar', async () => {
+  const { NodeIO } = await import('@gltf-transform/core');
+  const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
+  const bytes = readFileSync(new URL('../public/models/human/character.glb', import.meta.url));
+  const model = await new NodeIO().registerExtensions(ALL_EXTENSIONS).readBinary(bytes);
+  const primitive = model.getRoot().listMeshes()[0].listPrimitives()[0];
+  const position = primitive.getAttribute('POSITION');
+  const uv = primitive.getAttribute('TEXCOORD_0');
+  const indices = primitive.getIndices()?.getArray();
+  assert.ok(position && uv && indices);
+  const key = (vertex: number) => {
+    const [x, y, z] = position.getElement(vertex, [0, 0, 0]);
+    const [u, v] = uv.getElement(vertex, [0, 0]);
+    if (Math.abs(x) >= .15 || y <= 1.42 || y >= 1.56 || u < .5 || v < .5) return undefined;
+    return [x, y, z].map(value => Math.round(value * 1e5)).join(',');
+  };
+  const edges = new Map<string, number>();
+  for (let i = 0; i < indices.length; i += 3) {
+    const triangle = [key(indices[i]), key(indices[i + 1]), key(indices[i + 2])];
+    for (let side = 0; side < 3; side++) {
+      const a = triangle[side], b = triangle[(side + 1) % 3];
+      if (!a || !b || a === b) continue;
+      const edge = [a, b].sort().join('/');
+      edges.set(edge, (edges.get(edge) ?? 0) + 1);
+    }
+  }
+  assert.ok(edges.size > 100);
+  assert.ok([...edges.values()].every(count => count === 2));
+});
+
 test('native animation weights crossfade without a pose snap and stop faded groups', async () => {
   const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
   const {Scene}=await import('@babylonjs/core/scene.js');
@@ -152,4 +182,78 @@ test('animation visibility ignores distant and offscreen avatars without changin
   assert.equal(assets.shouldAnimate(0,0,0),true);assert.equal(assets.shouldAnimate(0,0,200),false);assert.equal(assets.shouldAnimate(0,0,-30),false);
   camera.setTarget(new Vector3(0,1,-40));camera.getViewMatrix(true);engine.endFrame();assert.equal(assets.shouldAnimate(0,0,-30),true);assert.equal(assets.shouldAnimate(0,0,20),false);await assets.ready;
  }finally{owner.dispose();scene.dispose();engine.dispose();}
+});
+
+test('starting a clip keeps the outgoing pose until the fade begins',async()=>{
+  const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
+  const {Scene}=await import('@babylonjs/core/scene.js');
+  const {AnimationGroup}=await import('@babylonjs/core/Animations/animationGroup.js');
+  const {Animation}=await import('@babylonjs/core/Animations/animation.js');
+  const {TransformNode}=await import('@babylonjs/core/Meshes/transformNode.js');
+  const {blendAnimations,startAvatarClip}=await import('../src/modules/characters/assets.ts');
+  const engine=new NullEngine(),scene=new Scene(engine);
+  try {
+    const target=new TransformNode('target',scene);
+    const [walking,idle]=[2,10].map(value=>{
+      const group=new AnimationGroup(String(value),scene);
+      const clip=new Animation('pose','position.x',30,Animation.ANIMATIONTYPE_FLOAT);
+      clip.setKeys([{frame:0,value},{frame:30,value:value+1}]);
+      group.addTargetedAnimation(clip,target);
+      return group;
+    });
+    startAvatarClip(walking,1);
+    assert.equal(target.position.x,2);
+    scene._animate(0);
+    const before=target.position.x;
+    startAvatarClip(idle,0);
+    assert.equal(target.position.x,before);
+    blendAnimations([walking,idle],idle,16);
+    scene._animate(16);
+    assert.ok(target.position.x>before&&target.position.x<10);
+  } finally {scene.dispose();engine.dispose();}
+});
+
+test('ground animation ignores isolated steps and keeps the sprint clip during a brief blockage',async()=>{
+  const {createGroundMotion}=await import('../src/modules/characters/assets.ts');
+  const sample=createGroundMotion();
+  const walk={moving:true,running:false,boosted:false},stop={...walk,moving:false};
+  const frame=1000/60;
+  sample(stop,0,0,true);
+  for(let i=0;i<48;i++)assert.equal(sample(walk,i%8===0?1.8:.03,frame,false).moving,false);
+  const sprint={moving:true,running:true,boosted:true};
+  for(let i=0;i<8;i++)sample(sprint,22,frame,false);
+  const blocked=sample(stop,0,frame,false);
+  assert.equal(blocked.moving,true);
+  assert.equal(blocked.boosted,true);
+  for(let i=0;i<20;i++)sample(stop,0,frame,false);
+  assert.equal(sample(stop,0,frame,false).moving,false);
+});
+
+test('walking off successive ledges never selects the rising jump pose',async()=>{
+  const {selectAnimation}=await import('../src/modules/characters/assets.ts');
+  const {createCharacterAuthority}=await import('../src/modules/characters/headless.ts');
+  const world={bounds:{minX:-10,maxX:10,minZ:-10,maxZ:10},baseHeight:0,slopeX:0,
+    spawn:{x:-.03,z:0},blockers:[],floors:[
+      {minX:-2,maxX:0,minZ:-2,maxZ:2,elevation:.9},
+      {minX:-2,maxX:1,minZ:-2,maxZ:2,elevation:.45},
+    ]};
+  const actor=createCharacterAuthority(world);
+  let drops=0,wasGrounded=true;
+  for(let tick=1;tick<=80;tick++){
+    assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:false,jump:false},'local').accepted);
+    actor.step(tick);
+    const snapshot=actor.snapshot();
+    if(!snapshot.grounded){
+      if(wasGrounded){drops++;assert.equal(snapshot.airborneTicks,1);}
+      assert.ok(snapshot.verticalSpeed<0);
+      assert.equal(selectAnimation(snapshot),snapshot.airborneTicks<4?'Walk_Loop':'Jump_Loop');
+    }
+    wasGrounded=snapshot.grounded;
+  }
+  assert.equal(drops,2);
+  const grounded=actor.snapshot();
+  assert.equal(selectAnimation({...grounded,landedTick:grounded.tick,airborneTicks:2}),'Walk_Loop');
+  assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:81,tick:80,x:1,z:0,run:false,jump:true},'local').accepted);
+  actor.step(81);
+  assert.equal(selectAnimation(actor.snapshot()),'Jump_Start');
 });

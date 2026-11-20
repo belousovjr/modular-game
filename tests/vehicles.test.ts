@@ -1,10 +1,9 @@
-import {findPedestrianPath} from '../src/modules/npc/headless.ts';
 import {Quaternion,Vec3} from 'cannon-es';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {createVehicleAuthority,createVehicleConnection,CAR_GUIDES,type VehicleCommand} from '../src/modules/vehicles/headless.ts';
+import {createVehicleAuthority,createVehicleConnection,findVehicleApproachPath,CAR_GUIDES,type VehicleCommand} from '../src/modules/vehicles/headless.ts';
 import {createCharacterAuthority} from '../src/modules/characters/headless.ts';
 import type {CollisionWorld} from '../src/modules/world/headless.ts';
 import {createLocalAuthority} from '../src/simulation/authority.ts';
@@ -36,7 +35,7 @@ test('vehicle authority owns boarding, animated doors, driving, braking and safe
 test('vehicle intent validates identity, shape, finite ranges, sequences, rate, stale input and TTL',()=>{
   const s=session();try{
     s.advance(120);
-    for(const value of [null,{},[],{...cmd('enter',120),extra:true},{...cmd('enter',120),characterId:'npc/1'},{...cmd('enter',120),vehicleId:'other'}])assert.equal(s.car.receive(value,'local').accepted,false);
+    for(const value of [null,{},[],{...cmd('enter',120),extra:true},{...cmd('enter',120),characterId:'other-player'},{...cmd('enter',120),vehicleId:'other'}])assert.equal(s.car.receive(value,'local').accepted,false);
     assert.equal(s.car.receive(cmd('enter',120),'other').reason,'owner');assert.equal(s.car.receive(cmd('enter',121),'local').reason,'stale');
     assert.equal(s.car.receive(cmd('enter',120),'local').accepted,true);assert.equal(s.car.receive(cmd('enter',120),'local').reason,'sequence');assert.equal(s.car.receive(cmd('enter',120,121),'local').reason,'rate');
     while(s.car.snapshot().phase!=='driving'&&s.tick<650)s.advance(s.tick+1);
@@ -73,7 +72,11 @@ test('prepared car keeps its budget, real texture/AO and functional door/wheel p
   const gltf=JSON.parse(bytes.subarray(20,20+bytes.readUInt32LE(12)).toString());assert.ok(manifest.triangles<4000);assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.ok(bytes.length<600000);
   for(const name of ['door/left','door/right'])assert.equal(gltf.nodes.filter((n:{name:string})=>n.name===name).length,1,'Exterior door must be unique: '+name);
   for(const name of ['door/left','door/right','wheel/front/left','wheel/front/right','wheel/rear/left','wheel/rear/right','steering'])assert.ok(gltf.nodes.some((n:{name:string})=>n.name===name),name);
-  for(const material of gltf.materials)assert.ok(material.pbrMetallicRoughness.baseColorTexture);
+  for(const material of gltf.materials){
+    const albedo=material.pbrMetallicRoughness.baseColorTexture;
+    assert.ok(albedo);
+    assert.equal(gltf.samplers[gltf.textures[albedo.index].sampler].minFilter,9729);
+  }
   assert.ok(gltf.materials.some((m:{normalTexture?:unknown})=>m.normalTexture));assert.equal(gltf.textures.length,2);
 });
 
@@ -139,9 +142,9 @@ test('exit at speed plays half the moving exit and leaves the driver door open',
 
 
 test('boarding paths avoid unnecessary grid detours and shorten corners around obstacles',()=>{
-  assert.deepEqual(findPedestrianPath(world,{x:0,z:0},{x:2.3,z:1.7}),[{x:2.3,z:1.7}]);
+  assert.deepEqual(findVehicleApproachPath(world,{x:0,z:0},{x:2.3,z:1.7}),[{x:2.3,z:1.7}]);
   const blocker={id:'wall',minX:1,maxX:2,minZ:-1,maxZ:1,minY:0,maxY:3};
-  const path=findPedestrianPath({...world,blockers:[blocker]},{x:0,z:0},{x:3,z:0});
+  const path=findVehicleApproachPath({...world,blockers:[blocker]},{x:0,z:0},{x:3,z:0});
   assert.ok(path.length>=2);assert.ok(path.length<=4);let p={x:0,z:0};
   for(const next of path){for(let t=0;t<=1;t+=.01){const x=p.x+(next.x-p.x)*t,z=p.z+(next.z-p.z)*t;assert.ok(!(x>.65&&x<2.35&&z>-1.35&&z<1.35));}p=next;}
 });
@@ -234,4 +237,15 @@ test('vehicle moves inside the real Art Institute courtyard and stops at the inn
     }
     assert.ok(furthest>-507&&furthest<-502.5,String(furthest));
   }finally{s.car.dispose();}
+});
+
+
+test('position reset frees the vehicle seat without moving or recreating the car',()=>{
+  const s=session();
+  try {
+    board(s);
+    const before=s.car.snapshot();
+    s.car.resetOccupancy();
+    assert.deepEqual(s.car.snapshot(),{...before,phase:'parked',driverId:null});
+  } finally {s.car.dispose();}
 });

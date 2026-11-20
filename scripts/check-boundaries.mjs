@@ -25,7 +25,8 @@ async function walk(dir) {
       if (spec) {
         const target = spec.startsWith('.') ? relative(root, resolve(dir, spec)).split(sep) : spec.split('/');
         const vehiclePhysics = owner.join('/') === 'modules/vehicles/headless.ts' && spec === 'cannon-es';
-        if (headless(owner) && !vehiclePhysics && (!spec.startsWith('.') || !headless(target))) fail(`Headless code cannot import ${spec}`);
+        const vehicleNavigation = owner.join('/') === 'modules/vehicles/headless.ts' && spec === 'javascript-astar';
+        if (headless(owner) && !vehiclePhysics && !vehicleNavigation && (!spec.startsWith('.') || !headless(target))) fail(`Headless code cannot import ${spec}`);
         if (owner[0] === 'core' && target[0] === 'modules') fail('Core cannot import feature modules');
         if (owner[0] === 'modules' && target[0] === 'modules' && owner[1] !== target[1] && !(target.length === 3 && /^index\.tsx?$/.test(target[2])) && !(headless(owner) && moduleHeadless(target))) fail(`Use the public module entry point: ${spec}`);
       }

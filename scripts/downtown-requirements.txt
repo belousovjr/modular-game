@@ -1,2 +1,3 @@
 # Offline map preparation only; no browser/runtime dependency.
 shapely==2.1.2
+tifffile==2025.10.16

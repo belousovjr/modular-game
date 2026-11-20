@@ -5,37 +5,82 @@ import { CharacterPanel } from './panel.tsx';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
+import { trackLocalCheckpoint } from '../../core/local-checkpoint.ts';
+import { createDisplayHeight } from './height-presentation.ts';
+import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
+import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
-import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
+import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
+export { clearLocalPosition } from './local-position.ts';
 export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
 
 export const charactersModule = defineModule({
   id: 'characters', title: 'Персонаж', category: 'Игра',
-  requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule },
+  requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule, interiors: buildingInteriorsModule },
   setup({ core, deps, scope }) {
     let stopped=false;
-    const authority = createCharacterAuthority(deps.world.collision, deps.simulation.snapshot().tick);
+    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision);
+    const start = deps.simulation.snapshot().tick;
+    const position = readLocalPosition();
+    const authority = createAuthority(start, undefined, position);
+    scope.onDispose(authority.dispose);
     const connection = createLocalConnection(authority);
     scope.onDispose(connection.close);
+    let saved=connection.snapshot();
+    trackLocalCheckpoint(core.onFrame,scope,()=>{
+      const next=connection.snapshot();
+      if (next.x===saved.x && next.y===saved.y && next.z===saved.z) return;
+      if (saveLocalPosition(next)) saved=next;
+    });
+    let resetVehicleOccupancy:(()=>void)|undefined;
     let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
     deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
-    const createView=(owner: Scope)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner);};
+    const createView=(owner: Scope)=>{
+      if(stopped)throw new Error('Персонаж остановлен');
+      return createAvatar(core.scene,deps.geometry,assets,owner);
+    };
     const render = createView(scope);
-    const update = () => render(connection.snapshot());
+    const sampleHeight=createDisplayHeight();
+    let displayY=sampleHeight(connection.snapshot(),0);
+    deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
+    const reset=core.onResetView?.add(()=>{
+      connection.resetPosition();
+      resetVehicleOccupancy?.();
+      const snapshot=connection.snapshot();
+      displayY=sampleHeight(snapshot,0,true);
+      if(saveLocalPosition(snapshot))saved=snapshot;
+    });
+    if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
+    const smoothing=core.onFrame.add(delta=>{
+      const snapshot=connection.snapshot();
+      displayY=sampleHeight(snapshot,delta);
+      deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
+    });
+    scope.onDispose(()=>core.onFrame.remove(smoothing));
+    const update = () => {
+      const snapshot=connection.snapshot();
+      render(snapshot,displayY);
+    };
+    scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));
     update();
     const observer = core.scene.onBeforeRenderObservable.add(update, -1, true);
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{stopped=true;});
-    return { registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope){
-      if(stopped)throw new Error('Персонаж остановлен');
-      if(vehicleStep)throw new Error('Vehicle authority already connected');
-      vehicleStep=step;owner.onDispose(()=>{vehicleStep=null;authority.setVehicleFrame(null);});
-    }, send: connection.send, snapshot: connection.snapshot, createView, getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe };
+    return {
+      registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
+        if(stopped)throw new Error('Персонаж остановлен');
+        if(vehicleStep)throw new Error('Vehicle authority already connected');
+        vehicleStep=step;resetVehicleOccupancy=resetOccupancy;
+        owner.onDispose(()=>{vehicleStep=null;resetVehicleOccupancy=undefined;authority.setVehicleFrame(null);});
+      },
+      send: connection.send, snapshot: connection.snapshot, displayHeight:()=>displayY, createView,
+      getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe,
+    };
   },
   test: {
     durationSeconds: 6,

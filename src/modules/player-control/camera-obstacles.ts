@@ -1,15 +1,56 @@
 import type {CollisionBox} from '../world/index.ts';
+import type {InteriorCollisionBox,InteriorQueryBounds} from '../building-interiors/index.ts';
 
 type Point = {readonly x:number;readonly y:number;readonly z:number};
 const CLEARANCE=.2;
+const CELL=32;
 
-function outlineEntry(target:Point,arm:Point,box:CollisionBox,outline:readonly (readonly number[])[],limit:number){
+export function createCameraObstacleSweep(blockers:readonly CollisionBox[],
+  local?: (bounds:InteriorQueryBounds)=>readonly InteriorCollisionBox[]) {
+  const grid=new Map<string,number[]>(),large:number[]=[];
+  const cell=(value:number)=>Math.floor(value/CELL);
+  for(const [index,b] of blockers.entries()){
+    const x0=cell(b.minX),x1=cell(b.maxX),z0=cell(b.minZ),z1=cell(b.maxZ);
+    if(![x0,x1,z0,z1].every(Number.isSafeInteger)||(x1-x0+1)*(z1-z0+1)>256){large.push(index);continue;}
+    for(let x=x0;x<=x1;x++)for(let z=z0;z<=z1;z++){
+      const key=`${x}/${z}`,entries=grid.get(key);
+      if(entries)entries.push(index);else grid.set(key,[index]);
+    }
+  }
+  return (target:Point,arm:Point,radius:number)=>{
+    const x0=cell(Math.min(target.x,target.x+arm.x)-CLEARANCE),x1=cell(Math.max(target.x,target.x+arm.x)+CLEARANCE);
+    const z0=cell(Math.min(target.z,target.z+arm.z)-CLEARANCE),z1=cell(Math.max(target.z,target.z+arm.z)+CLEARANCE);
+    const selected=new Set(large);
+    for(let x=x0;x<=x1;x++)for(let z=z0;z<=z1;z++)for(const i of grid.get(`${x}/${z}`)??[])selected.add(i);
+    const candidates=[...selected].sort((a,b)=>a-b).map(i=>blockers[i]);
+    const limit=cameraObstacleFraction(target,arm,radius,candidates);
+    if (!local||limit<=0) return limit;
+    const endX=target.x+arm.x*limit,endY=target.y+arm.y*limit,endZ=target.z+arm.z*limit;
+    const interior=local({
+      minX:Math.min(target.x,endX)-CLEARANCE,maxX:Math.max(target.x,endX)+CLEARANCE,
+      minZ:Math.min(target.z,endZ)-CLEARANCE,maxZ:Math.max(target.z,endZ)+CLEARANCE,
+      minY:Math.min(target.y,endY)-CLEARANCE,maxY:Math.max(target.y,endY)+CLEARANCE,
+    });
+    return cameraObstacleFraction(target,arm,radius,interior,limit);
+  };
+}
+
+function outlineEntry(target:Point,arm:Point,box:InteriorCollisionBox,outline:readonly (readonly number[])[],limit:number){
   let first=0,last=limit;
-  if((target.y<=box.minY&&arm.y<=0)||(target.y>=box.maxY&&arm.y>=0))return null;
-  if(Math.abs(arm.y)<1e-9){
-    if(target.y<box.minY-CLEARANCE||target.y>box.maxY+CLEARANCE)return null;
+  let originY=target.y,deltaY=arm.y,minY=box.minY,maxY=box.maxY,padding=CLEARANCE;
+  const slope=box.slope;
+  if(slope){
+    const lengthSquared=slope.dx*slope.dx+slope.dz*slope.dz, rise=slope.low1-slope.low0;
+    originY-=rise*((target.x-slope.x)*slope.dx+(target.z-slope.z)*slope.dz)/lengthSquared;
+    deltaY-=rise*(arm.x*slope.dx+arm.z*slope.dz)/lengthSquared;
+    minY=slope.low0;maxY=slope.high0;
+    padding*=Math.hypot(1,rise/Math.sqrt(lengthSquared));
+  }
+  if((originY<=minY&&deltaY<=0)||(originY>=maxY&&deltaY>=0))return null;
+  if(Math.abs(deltaY)<1e-9){
+    if(originY<minY-padding||originY>maxY+padding)return null;
   }else{
-    const a=(box.minY-CLEARANCE-target.y)/arm.y,b=(box.maxY+CLEARANCE-target.y)/arm.y;
+    const a=(minY-padding-originY)/deltaY,b=(maxY+padding-originY)/deltaY;
     first=Math.max(first,Math.min(a,b));last=Math.min(last,Math.max(a,b));
     if(first>last)return null;
   }
@@ -44,13 +85,13 @@ function outlineEntry(target:Point,arm:Point,box:CollisionBox,outline:readonly (
   return inside?first:hit;
 }
 
-export function cameraObstacleFraction(target:Point, arm:Point, radius:number, blockers:readonly CollisionBox[]) {
+export function cameraObstacleFraction(target:Point, arm:Point, radius:number, blockers:readonly InteriorCollisionBox[], limit=1) {
   const padding=CLEARANCE;
   const minX=Math.min(target.x,target.x+arm.x)-padding;
   const maxX=Math.max(target.x,target.x+arm.x)+padding;
   const minZ=Math.min(target.z,target.z+arm.z)-padding;
   const maxZ=Math.max(target.z,target.z+arm.z)+padding;
-  let fraction=1;
+  let fraction=limit;
   for(const box of blockers){
     if(box.maxX<minX||box.minX>maxX||box.maxZ<minZ||box.minZ>maxZ)continue;
     if(box.outline){

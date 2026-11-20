@@ -1,3 +1,5 @@
+import {facadeDoorWindows} from './facade-door-windows.ts';
+export {DOOR_FRAME_TRIM} from './facade-door-windows.ts';
 import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 import {StandardMaterial} from '@babylonjs/core/Materials/standardMaterial.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
@@ -10,7 +12,12 @@ import { worldGenerationModule } from '../world-generation/index.ts';
 import { worldTemplates } from './templates.ts';
 import {cityTemplates,toCityGrid} from './city-templates.ts';
 import {citySource} from './city.ts';
+import {getWorldMap} from './map.ts';
+import {getBuildingInteriorSources, getBuildingProfile} from './building-profiles.ts';
+export type {BuildingInteriorSource, BuildingProfile, BuildingShape} from './building-profiles.ts';
+export type {WorldMap} from './map.ts';
 import {createTreeBatch,createTreeMaterial,createTreeShadowBatch,groupTrees,treeLodBounds} from './trees.ts';
+import {createGrass, GRASS_DISTANCE, grassPatchDistance, groupGrass, groupGrassSections} from './grass.ts';
 import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
@@ -20,7 +27,7 @@ import {geometryModule} from '../geometry/index.ts';
 import {distantSurfaces,groupDistantSurfaces,groupStreetSurfaces} from './distant-surfaces.ts';
 import {createElement} from 'react';
 import {Link} from '@radix-ui/themes';
-export type { CollisionWorld, CollisionBox } from './headless.ts';
+export { pedestrianBlockers, type BuildingDoor, type CollisionWorld, type CollisionBox } from './headless.ts';
 export interface StreetLightAnchor {readonly id:string;readonly street:string;readonly x:number;readonly y:number;readonly z:number}
 
 export const worldModule = defineModule({
@@ -29,7 +36,12 @@ export const worldModule = defineModule({
   setup({ core, deps, scope }) {
     const city=deps.generator.generateCity(citySource);
     scope.onDispose(core.panels.register('world','Центр Чикаго',createElement(Link,{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noreferrer'},'© OpenStreetMap contributors · ODbL · Рельеф USGS 3DEP')));
-    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+city.placements.filter(p=>p.position[0]>=c.bounds.minX&&p.position[0]<c.bounds.maxX&&p.position[2]>=c.bounds.minZ&&p.position[2]<c.bounds.maxZ).length}));
+    const placementCounts=new Map<string,number>();
+    for(const {position:[x,,z]} of city.placements){
+      const id=`${city.id}/${Math.floor(x/district.tileSize)}/${Math.floor(z/district.tileSize)}`;
+      placementCounts.set(id,(placementCounts.get(id)??0)+1);
+    }
+    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+(placementCounts.get(c.id)??0)}));
     for(const template of cityTemplates)deps.templates.register(toCityGrid(template),scope);
     for (const template of worldTemplates) deps.templates.register(template.id==='world/lamp'?toCityGrid(template):template, scope);
     const aviationLights=aviationLightPositions(city,p=>deps.templates.resolve(p.templateId,p.parameters).levels[0].parts);
@@ -116,6 +128,25 @@ export const worldModule = defineModule({
         },scope,{load:210,unload:225});
       }
     }
+    const grassViews = new Set<(camera?: Vector3) => void>();
+    const createGrassPatch = createGrass(core.scene, scope);
+    for (const [key, section] of groupGrassSections(groupGrass(city).values())) {
+      const id = `${city.id}/grass/${key}`;
+      deps.streaming.registerSection(id, section.bounds, owner => {
+        const updates = section.patches.map((patch, index) => {
+          let updatePatch: ReturnType<typeof createGrassPatch> | undefined;
+          return (camera?: Vector3) => {
+            if (!updatePatch && camera && grassPatchDistance(patch.bounds, camera) < GRASS_DISTANCE) {
+              updatePatch = createGrassPatch(`${id}/${index}`, patch, owner, deps.geometry.registerMeshes);
+            }
+            updatePatch?.(camera);
+          };
+        });
+        const update = (camera?: Vector3) => { for (const updatePatch of updates) updatePatch(camera); };
+        grassViews.add(update);
+        owner.onDispose(() => grassViews.delete(update));
+      }, scope, { load: GRASS_DISTANCE + 12, unload: GRASS_DISTANCE + 20 });
+    }
     for(const band of [{meshes:groupDistantSurfaces(city),load:1200,unload:1400},{meshes:groupStreetSurfaces(city),load:192,unload:256}])for(const surface of band.meshes){
       const bounds={minX:Infinity,maxX:-Infinity,minZ:Infinity,maxZ:-Infinity};
       for(let i=0;i<surface.positions.length;i+=3){bounds.minX=Math.min(bounds.minX,surface.positions[i]);bounds.maxX=Math.max(bounds.maxX,surface.positions[i]);bounds.minZ=Math.min(bounds.minZ,surface.positions[i+2]);bounds.maxZ=Math.max(bounds.maxZ,surface.positions[i+2]);}
@@ -146,32 +177,50 @@ export const worldModule = defineModule({
         for(const surface of surfaces) {
           const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
+          if ('doorWindows' in surface && surface.doorWindows) mesh.setVerticesData('cityDoorWindows', new Float32Array(surface.doorWindows), false, 4);
+          if ('trim' in surface && surface.trim) {
+            mesh.setVerticesData('cityTrim', new Float32Array(surface.trim), false, 4);
+          }
           mesh.metadata={...mesh.metadata,citySurface:material,buildingBand:distant?band.id:undefined,shadowCaster:distant||['bank','facade','foundation','metal','roof'].includes(material)};mesh.freezeWorldMatrix();view.meshes.push(mesh);
         }
         if(distant)view.visibility=deps.rendering.createVisibility(meshes,owner);
         else {const surfaceView={bounds,load:band.load,unload:band.unload,visibility:deps.rendering.createVisibility(meshes,owner)};surfaceViews.add(surfaceView);owner.onDispose(()=>surfaceViews.delete(surfaceView));}
       },scope,{load:band.load,unload:band.unload,unloadDelayMs:250});
     }
+    const detailRange={load:36,unload:46,unloadDelayMs:250};
+    const collision=cityCollision(city);
+    const doorwayIds = new Set(collision.doors?.map(door => door.id));
     const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
     for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
       deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
         const meshes:Mesh[]=[];
         const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
         detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
+        const id=detail.id.split('/detail/')[1];
+        const doorPanel = detail.meshes.find(mesh=>mesh.surface==='facade')?.positions;
         for(const surface of detail.meshes){
           const material=surface.surface.replace(/-detail$/,'');
+          if (doorwayIds.has(id) && (material==='facade' || material==='metal')) continue;
           const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
-          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};mesh.freezeWorldMatrix();
+          const rectangles = doorPanel && facadeDoorWindows(surface,[doorPanel]);
+          if (rectangles) mesh.setVerticesData('cityDoorWindows',rectangles,false,4);
+          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};
+          mesh.freezeWorldMatrix();
           view.meshes.push(mesh);
           for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
         }
         view.visibility=deps.rendering.createVisibility(meshes,owner);
-      },scope,{load:24,unload:32,unloadDelayMs:250});
+      },scope,detailRange);
     }
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
       const point=deps.rendering.getDistanceOrigin();
       updateAviationLights(point);
       for(const update of treeViews)update(point);
+      if (grassViews.size) {
+        const camera = core.scene.activeCamera;
+        camera?.getViewMatrix();
+        for (const update of grassViews) update(camera?.globalPosition);
+      }
       for(const view of surfaceViews){
         const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
         view.visibility.setVisible(distance<=(view.visibility.isVisible()?view.unload:view.load),!point);
@@ -185,15 +234,19 @@ export const worldModule = defineModule({
       for(const view of detailViews){
         const b=view.bounds;
         const distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(view.minY-point.y,0,point.y-view.maxY),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
-        view.visibility?.setVisible(distance<=32,!point);
+        const limit=view.visibility?.isVisible()?detailRange.unload:detailRange.load;
+        view.visibility?.setVisible(distance<=limit,!point);
       }
     });
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
-    const collision=cityCollision(city);
     const streetNames=new Map(city.roads.map(r=>[r.id,r.name||r.id]));
     const streetLights=Object.freeze(city.placements.filter(p=>p.templateId==='world/lamp').map(p=>Object.freeze({id:p.key,street:streetNames.get(p.key.split('/').slice(2,-2).join('/'))??p.key,x:p.position[0]+1.5*Math.cos(p.rotation[1]),y:p.position[1]+4.125,z:p.position[2]-1.5*Math.sin(p.rotation[1])})));
     return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
       collision,streetLights,
+      getMap: () => getWorldMap(city),
+      getBuildingProfile,
+      getBuildingInteriorSources: () => getBuildingInteriorSources(city),
+      buildingDetailRange: detailRange,
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,
       visibility() {

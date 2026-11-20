@@ -15,6 +15,7 @@ import type { Scope } from '../../core/modules.ts';
 import { createScope } from '../../core/scope.ts';
 import type { geometryModule } from '../geometry/index.ts';
 import {LOCOMOTION_SPEEDS, type CharacterSnapshot} from './headless.ts';
+import {createDisplayHeight} from './height-presentation.ts';
 import {createCharacterShadowSource} from './shadow-proxy.ts';
 import manifest from '../../../public/models/human/manifest.json' with { type: 'json' };
 
@@ -94,39 +95,52 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
         if(!group.name.endsWith('_Loop'))for(const track of group.targetedAnimations)track.animation.loopMode=Animation.ANIMATIONLOOPMODE_CONSTANT;
       }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
-      if(idle) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);active=idle;playing.add(idle); }
+      if(idle&&root.isEnabled()) { idle.enableBlending=false;startAvatarClip(idle,1);active=idle;playing.add(idle); }
       loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
     } catch(error) {
       entries?.dispose();entries=null;assets.reportError(error);root.metadata={assetStatus:'error',error:error instanceof Error?error.message:String(error)};
     }
   };
   const existing=assets.getContainer();if(existing)load(existing);else void assets.ready.then(load);
+  const sampleHeight=createDisplayHeight();
+  const sampleGroundMotion=createGroundMotion();
   let previous: CharacterSnapshot | null = null, speed=0;
   const paused:AnimationGroup[]=[];scope.onDispose(()=>{paused.length=0;});
-  return (s: CharacterSnapshot) => {
+  function pauseAnimations(){
+    for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
+    root.metadata.animationCulled=true;
+  }
+  return (s: CharacterSnapshot, displayY?:number) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
-    root.position.set(s.x,s.y,s.z);
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
+    const targetHeight=displayY??sampleHeight(s,deltaMs,!before);
+    const x=s.x,z=s.z;
+    const dx=x-root.position.x,dy=targetHeight-root.position.y,dz=z-root.position.z;
+    const gap=Math.hypot(dx,dy,dz);
+    if(displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
+      const blend=1-Math.exp(-deltaMs/45);
+      root.position.set(root.position.x+dx*blend,root.position.y+dy*blend,root.position.z+dz*blend);
+    }else root.position.set(x,targetHeight,z);
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
+    const onGround=isGroundMotion(s);
+    const wasOnGround=!!before&&isGroundMotion(before);
+    const gait=sampleGroundMotion(s,speed,deltaMs,!onGround||!wasOnGround);
     if(!assets.shouldAnimate(s.x,s.y,s.z)){
-      for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
-      root.metadata.animationCulled=true;
+      pauseAnimations();
       if(root.rotationQuaternion)smoothCharacterRotation(root.rotationQuaternion,s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0),deltaMs,root.rotationQuaternion);
       return;
     }
     for(const group of paused)group.restart();paused.length=0;root.metadata.animationCulled=false;
-    const name=selectAnimation(s);
+    const name=selectAnimation(s,onGround?gait:s);
     const next=clips.get(name);
     if (!next) return;
     if (next!==active) {
       if(!next.isPlaying) {
-        next.start(true);next.weight=0;
+        startAvatarClip(next,active?0:1);
         playing.add(next);
-        const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
-        if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_')&&name.endsWith('_Loop'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));
       }
       active=next;
     }
@@ -148,10 +162,44 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     }
     root.metadata.animation=name;
     active.speedRatio=name==='Car_Enter'||name==='Car_Exit'?2:
-      name==='Sprint_Loop'?Math.max(.9,Math.min(1.65,speed/LOCOMOTION_SPEEDS.sprint*1.5)):
-      name==='Jog_Fwd_Loop'?Math.max(.7,Math.min(1.65,speed/4.4)):
-      name==='Walk_Loop'?Math.max(.65,Math.min(1.2,speed/1.6)):
+      name==='Sprint_Loop'?Math.max(.9,Math.min(1.65,gait.speed/LOCOMOTION_SPEEDS.sprint*1.5)):
+      name==='Jog_Fwd_Loop'?Math.max(.7,Math.min(1.65,gait.speed/4.4)):
+      name==='Walk_Loop'?Math.max(.65,Math.min(1.2,gait.speed/1.6)):
       name==='Swim_Fwd_Loop'&&s.boosted?1.35:1;
+  };
+}
+
+export function startAvatarClip(group:AnimationGroup,weight:number) {
+  group.start(true);
+  group.weight=weight;
+  // Only the first clip applies its pose immediately. Transitions use weighted playback.
+  if(weight===1)group.goToFrame(group.from);
+}
+
+type GroundGait=Pick<CharacterSnapshot,'moving'|'running'|'boosted'>;
+const FALL_POSE_TICKS=4;
+
+function usesGroundPose(snapshot:CharacterSnapshot) {
+  return snapshot.grounded||(snapshot.verticalSpeed<=0&&snapshot.airborneTicks<FALL_POSE_TICKS);
+}
+
+function isGroundMotion(snapshot:CharacterSnapshot) {
+  return usesGroundPose(snapshot)&&snapshot.mode==='walk'&&(!snapshot.vehicleId||snapshot.vehicleAnimation==='approaching');
+}
+
+export function createGroundMotion(){
+  let speed=0,moving=false,running=false,boosted=false;
+  return (snapshot:GroundGait,observedSpeed:number,deltaMs:number,reset:boolean)=>{
+    if(reset){
+      speed=observedSpeed;
+      moving=snapshot.moving;
+    }else{
+      const time=observedSpeed>speed?65:45;
+      speed+=(observedSpeed-speed)*(1-Math.exp(-deltaMs/time));
+      moving=speed>=(moving ? .18 : .5);
+    }
+    if(snapshot.moving||reset){running=snapshot.running;boosted=snapshot.boosted;}
+    return {speed,moving,running,boosted};
   };
 }
 
@@ -165,13 +213,15 @@ export function blendAnimations(groups: Iterable<AnimationGroup>, active: Animat
   }
 }
 
-export function selectAnimation(s: CharacterSnapshot) {
+export function selectAnimation(s: CharacterSnapshot, gait:GroundGait=s) {
   if(s.vehicleId&&s.vehicleAnimation!=='approaching')return s.vehicleAnimation==='crawling'?'Crawl_Loop':s.vehicleAnimation==='entering'?'Car_Enter':s.vehicleAnimation==='exiting'?'Car_Exit':'Driving_Loop';
   if(s.mode==='fly')return !s.moving?'Fly_Idle_Loop':s.boosted?'Fly_Boost_Loop':'Fly_Loop';
   if(s.mode==='swim')return s.moving?'Swim_Fwd_Loop':'Swim_Idle_Loop';
-  if(s.stance==='crouching')return s.moving?'Crouch_Fwd_Loop':'Crouch_Idle_Loop';
-  if(s.stance==='prone')return s.moving?'Crawl_Fwd_Loop':'Crawl_Idle_Loop';
-  return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!s.moving?'Idle_Loop':s.boosted?'Sprint_Loop':s.running?'Jog_Fwd_Loop':'Walk_Loop';
+  if(s.stance==='crouching')return gait.moving?'Crouch_Fwd_Loop':'Crouch_Idle_Loop';
+  if(s.stance==='prone')return gait.moving?'Crawl_Fwd_Loop':'Crawl_Idle_Loop';
+  if(!usesGroundPose(s))return s.verticalSpeed>0&&s.airborneTicks<7?'Jump_Start':'Jump_Loop';
+  if(s.grounded&&s.airborneTicks>=FALL_POSE_TICKS&&s.tick-s.landedTick<9)return 'Jump_Land';
+  return !gait.moving?'Idle_Loop':gait.boosted?'Sprint_Loop':gait.running?'Jog_Fwd_Loop':'Walk_Loop';
 }
 
 export function smoothYaw(current: number, target: number, deltaMs: number) {

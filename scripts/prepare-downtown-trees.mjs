@@ -47,8 +47,10 @@ for(const p of city.placements.filter(p=>p.templateId==='city/planter')){
   tree(x,y+.5,z,'planter');
 }
 for(const [surface,kind,step,clearance] of [['terrain','park',22,2.5],['sidewalk','street',20,1]]){
-  for(let gx=city.bounds.minX+step;gx<city.bounds.maxX;gx+=step){
-    for(let gz=city.bounds.minZ+step;gz<city.bounds.maxZ;gz+=step){
+  // Keep the original plaza-relative planting lattice when the map bounds expand.
+  const first=(min,anchor)=>anchor+(Math.floor((min-anchor)/step)+1)*step;
+  for(let gx=first(city.bounds.minX,-932);gx<city.bounds.maxX;gx+=step){
+    for(let gz=first(city.bounds.minZ,-807);gz<city.bounds.maxZ;gz+=step){
       const hash=seed(gx,gz);
       const x=gx+(hash%7)-3,z=gz+((hash>>>8)%7)-3;
       if(x>=0&&x<=92&&z>=-80&&z<=-38)continue;
