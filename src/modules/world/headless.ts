@@ -1,5 +1,7 @@
 import type { Rectangle, WorldPlacement, CitySource, CityMesh } from '../world-generation/headless.ts';
 
+export const DOOR_FRAME_TRIM = .25;
+
 export type BuildingShape = 'rectangular' | 'round' | 'oval' | 'complex';
 
 export interface BuildingProfile {

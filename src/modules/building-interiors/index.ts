@@ -1,5 +1,5 @@
 import { createInteriorCollision, createEntranceMotion, type InteriorQueryBounds, buildStairs, doorFrameParts, doorLeafParts, ENTRANCE_SWING, type DoorPose } from './headless.ts';
-import { floorInRange, partitionInterior } from './floor-lod.ts';
+import { floorInRange } from './floor-lod.ts';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
 import { defineModule } from '../../core/context.ts';
@@ -10,8 +10,11 @@ import { materialsModule } from '../materials/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
 import { worldModule, type BuildingDoor, type BuildingProfile } from '../world/index.ts';
 import { worldStreamingModule } from '../world-streaming/index.ts';
-import { buildInterior, ENTRANCE_FLOOR_OFFSET, nearInterior } from './shell.ts';
+import { ENTRANCE_FLOOR_OFFSET, interiorViewHeight, nearInterior } from './shell.ts';
 
+import type {LayoutRequest, LayoutResponse} from './interior-worker.ts';
+
+type InteriorLayout = Exclude<LayoutResponse, {error:string}>;
 type Leaf = {mesh:Mesh; direction:number};
 type Box = readonly [number,number,number,number,number,number];
 export type {DoorPose,InteriorCollisionBox,InteriorQueryBounds} from './headless.ts';
@@ -24,8 +27,32 @@ export const buildingInteriorsModule = defineModule({
     const active = new Map<string,{
       profile:BuildingProfile;
       leaves:Leaf[];
-      update:(point:Point | undefined,opacity:number,actor:Point | null)=>void;
+      doorReady:boolean;
+      update:(point:Point | undefined,opacity:number,actor:Point | null,preparingEntrance:boolean)=>boolean;
     }>();
+    const requests = new Map<number,(result:LayoutResponse)=>void>();
+    let worker:Worker|undefined,requestId=0,uploadAvailable=false;
+    scope.onDispose(()=>{worker?.terminate();requests.clear();});
+    function requestLayout(source:LayoutRequest['source'],apply:(result:LayoutResponse)=>void){
+      if(!worker){
+        worker=new Worker(new URL('./interior-worker.ts',import.meta.url),{type:'module'});
+        worker.onmessage=({data}:MessageEvent<LayoutResponse>)=>{
+          const receive=requests.get(data.id);
+          requests.delete(data.id);
+          receive?.(data);
+        };
+        worker.onerror=event=>{
+          for(const [id,receive] of requests)receive({id,error:event.message});
+          requests.clear();
+          worker?.terminate();
+          worker=undefined;
+        };
+      }
+      const id=++requestId;
+      requests.set(id,apply);
+      worker.postMessage({id,source} satisfies LayoutRequest);
+      return ()=>requests.delete(id);
+    }
     const doors = new Map(deps.world.collision.doors?.map(door=>[door.id,door]));
     const collision=createInteriorCollision(deps.world.getBuildingInteriorSources());
     const doorView=createEntranceMotion(deps.world.collision.doors??[]);
@@ -34,6 +61,7 @@ export const buildingInteriorsModule = defineModule({
     let doorway: BuildingDoor | undefined;
     let leaves: Leaf[] = [], open = 0, opening = false;
     scope.onDispose(() => deps.materials.setDoorway(null));
+    scope.onDispose(() => deps.world.setInteriorView(false));
     function selectDoor(door: BuildingDoor | undefined) {
       const next = door && active.get(door.id)?.leaves;
       if (door === doorway && (!door || leaves === next)) return;
@@ -103,15 +131,16 @@ export const buildingInteriorsModule = defineModule({
       deps.streaming.registerSection(`building-interiors/${id}`, bounds, owner => {
         const door = doors.get(id);
         const leaves = door ? createDoor(door,owner) : [];
-        let layout: {floors: ReturnType<typeof partitionInterior>;openings: ReturnType<typeof buildInterior>['openings']} | undefined;
+        let layout:InteriorLayout|undefined, cancelLayout:(()=>void)|undefined,failed=false;
+        let uploading:{level:number;owner:ReturnType<typeof createScope>;steps:Generator<Mesh,Mesh|undefined>;waiting?:Mesh}|undefined;
         const rendered = new Map<number,{owner:ReturnType<typeof createScope>;slab:Mesh | undefined}>();
         function releaseFloors() {
           for (const {owner} of rendered.values()) owner.dispose();
           rendered.clear();
-          layout=undefined;
+          uploading?.owner.dispose();
+          uploading=undefined;
         }
-        function loadFloor(level:number,floor:ReturnType<typeof partitionInterior>[number]) {
-          const resources=createScope();
+        function* loadFloor(level:number,floor:InteriorLayout['floors'][number],resources:Scope,opacity:number):Generator<Mesh,Mesh|undefined> {
           const prefix=`building-interiors/${id}/floor/${level}`;
           const metadata={buildingInterior:true,buildingInteriorLevel:level,shadowCaster:false};
           const mesh=(name:string,material:string,geometry:{positions:number[];indices:number[];uvs?:number[]})=>{
@@ -122,110 +151,134 @@ export const buildingInteriorsModule = defineModule({
             result.freezeWorldMatrix();
             return result;
           };
-          try {
-            const low=level===0 ? profile.origin[1]+profile.entrance.base+ENTRANCE_FLOOR_OFFSET : floor.minY;
-            const stairs=layout && level+1<layout.floors.length ? buildStairs(profile,layout.openings,low,floor.maxY) : undefined;
-            if (stairs?.steps.indices.length) {
-              const first=floor.walls.positions.length/3;
-              mesh('','interior-concrete',{
-                positions:floor.walls.positions.concat(stairs.steps.positions),
-                indices:floor.walls.indices.concat(stairs.steps.indices.map(index=>first+index)),
-              });
-              mesh('/rails','interior-door-frame',stairs.rails);
-            } else mesh('','interior-concrete',floor.walls);
-            const slab=mesh('/slab','interior-concrete',floor.slab);
-            if (slab) {
-              slab.metadata.buildingInteriorFloors=true;
-              if (floor.stairRims.length) {
-                const colors=new Float32Array(slab.getTotalVertices()*4).fill(1);
-                for (const start of floor.stairRims) {
-                  for (let i=start*4;i<(start+16)*4;i+=4) {
-                    colors[i]=.57;
-                    colors[i+1]=.58;
-                    colors[i+2]=.60;
-                  }
-                }
-                slab.setVerticesData('color',colors,false,4);
+          const low=level===0 ? profile.origin[1]+profile.entrance.base+ENTRANCE_FLOOR_OFFSET : floor.minY;
+          const stairs=layout && level+1<layout.floors.length ? buildStairs(profile,layout.openings,low,floor.maxY) : undefined;
+          const first=floor.walls.positions.length/3;
+          const walls=mesh('','interior-concrete',stairs?.steps.indices.length?{
+            positions:floor.walls.positions.concat(stairs.steps.positions),
+            indices:floor.walls.indices.concat(stairs.steps.indices.map(index=>first+index)),
+          }:floor.walls);
+          if(walls)yield walls;
+          const rails=stairs && mesh('/rails','interior-door-frame',stairs.rails);
+          if(rails)yield rails;
+          const slab=mesh('/slab','interior-concrete',floor.slab);
+          if(slab){
+            slab.metadata.buildingInteriorFloors=true;
+            slab.visibility=opacity;
+            if(floor.stairRims.length){
+              const colors=new Float32Array(slab.getTotalVertices()*4).fill(1);
+              for(const start of floor.stairRims)for(let i=start*4;i<(start+16)*4;i+=4){
+                colors[i]=.57;colors[i+1]=.58;colors[i+2]=.60;
               }
+              slab.setVerticesData('color',colors,false,4);
             }
-            mesh('/elevators','interior-door',floor.doors);
-            mesh('/glass','interior-glass',floor.glass);
-            const loaded={owner:resources,slab};
-            rendered.set(level,loaded);
-            return loaded;
-          } catch (error) {
-            resources.dispose();
-            throw error;
+            yield slab;
           }
+          const elevators=mesh('/elevators','interior-door',floor.doors);
+          if(elevators)yield elevators;
+          const glass=mesh('/glass','interior-glass',floor.glass);
+          if(glass)yield glass;
+          return slab;
         }
-        const update = (point: Point | undefined, opacity: number, actor: Point | null) => {
-          const reach = layout ? 4 : 2;
-          const cameraY=point && nearInterior(profile,point,reach) ? point.y : undefined;
-          const actorY=actor && nearInterior(profile,actor,reach) ? actor.y : undefined;
-          if (cameraY===undefined && actorY===undefined) {
+        let lastCameraY:number|undefined,lastActorY:number|undefined,lastOpacity:number|undefined;
+        let wanted:number[]=[];
+        const update = (point: Point | undefined, opacity: number, actor: Point | null, preparingEntrance:boolean) => {
+          const cameraY=interiorViewHeight(profile,point,preparingEntrance);
+          const actorY=interiorViewHeight(profile,actor,preparingEntrance);
+          if(cameraY===undefined&&actorY===undefined){
             releaseFloors();
-            return;
+            lastCameraY=lastActorY=undefined;wanted=[];
+            return false;
           }
-          if (!layout) {
-            const interior=buildInterior(source);
-            layout={floors:partitionInterior(interior),openings:interior.openings};
+          if(!layout){
+            if(!cancelLayout&&!failed)cancelLayout=requestLayout(source,result=>{
+              cancelLayout=undefined;
+              if('error' in result){failed=true;console.error('Interior layout',id,result.error);}
+              else layout=result;
+            });
+            return false;
           }
-          for (const [level,floor] of layout.floors.entries()) {
-            const visible=(cameraY!==undefined && floorInRange(floor,cameraY,profile.floorHeight)) ||
-              (actorY!==undefined && floorInRange(floor,actorY,profile.floorHeight));
-            const loaded=rendered.get(level);
-            if (!visible) {
-              if (loaded) {
-                rendered.delete(level);
-                loaded.owner.dispose();
-              }
-              continue;
+          if(cameraY!==lastCameraY||actorY!==lastActorY||opacity!==lastOpacity){
+            wanted=[];
+            for(const [level,floor] of layout.floors.entries()){
+              const visible=(cameraY!==undefined&&floorInRange(floor,cameraY,profile.floorHeight))||
+                (actorY!==undefined&&floorInRange(floor,actorY,profile.floorHeight));
+              if(visible)wanted.push(level);
+              else if(rendered.has(level)){rendered.get(level)?.owner.dispose();rendered.delete(level);}
             }
-            const {slab}=loaded??loadFloor(level,floor);
-            if (slab && slab.visibility!==opacity) slab.visibility=opacity;
+            if(uploading&&!wanted.includes(uploading.level)){uploading.owner.dispose();uploading=undefined;}
+            lastCameraY=cameraY;lastActorY=actorY;lastOpacity=opacity;
           }
+          const next=wanted.find(level=>!rendered.has(level));
+          if(next!==undefined&&uploadAvailable){
+            uploadAvailable=false;
+            if(!uploading){
+              const resources=createScope();
+              uploading={level:next,owner:resources,steps:loadFloor(next,layout.floors[next],resources,opacity)};
+            }
+            const pending=uploading;
+            try{
+              if(!pending.waiting||pending.waiting.isReady(true)){
+                const step=pending.steps.next();
+                if(step.done){rendered.set(pending.level,{owner:pending.owner,slab:step.value});uploading=undefined;}
+                else pending.waiting=step.value;
+              }
+            }catch(error){
+              pending.owner.dispose();uploading=undefined;throw error;
+            }
+          }
+          for(const {slab} of rendered.values())if(slab&&slab.visibility!==opacity)slab.visibility=opacity;
+          return wanted.length>0&&wanted.every(level=>rendered.has(level));
         };
-        active.set(id,{profile,leaves,update});
-        owner.onDispose(() => { active.delete(id); releaseFloors(); });
+        active.set(id,{profile,leaves,doorReady:false,update});
+        owner.onDispose(() => { active.delete(id); cancelLayout?.(); releaseFloors(); });
       }, scope, deps.world.buildingDetailRange);
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {
-      if (!active.size) {selectDoor(undefined);return;}
+      if (!active.size) {selectDoor(undefined);deps.world.setInteriorView(false);return;}
       const camera = core.scene.activeCamera;
       camera?.getViewMatrix();
       const opacity = camera instanceof SceneCamera ? .8 : 1;
       const point=camera?.globalPosition;
       const actor=deps.rendering.getDistanceOrigin();
-      let selected:BuildingDoor|undefined, distance=Infinity, insideSelected=false;
-      for (const [id,{profile,update}] of active) {
-        update(point, opacity, actor);
+      let selected:BuildingDoor|undefined, distance=Infinity, insideSelected=false, interiorView=false;
+      for (const [id,{profile}] of active) {
+        const inside=!!point&&nearInterior(profile,point,0);
+        if (inside && presentedDoors && actor && nearInterior(profile,actor,0)) interiorView=true;
         const door=doors.get(id);
         if(!point||!door)continue;
         const d=Math.min(doorDistance(door,point),actor?doorDistance(door,actor):Infinity);
-        const inside=nearInterior(profile,point,0);
         if (!inside && (insideSelected || d>4.5)) continue;
         if (inside===insideSelected && d>=distance) continue;
         distance=d;
         selected=door;
         insideSelected=inside;
       }
+      deps.world.setInteriorView(interiorView);
       selectDoor(selected);
-      if (presentedDoors) {
-        for (const [id,{leaves:current}] of active) {
-          const state=presentedById.get(id);
-          for (const {mesh,direction} of current) {
-            const angle=direction>0 ? state?.left : state?.right;
-            mesh.rotation.y=direction*ENTRANCE_SWING*(angle??0);
-          }
-        }
-        return;
+      if (!presentedDoors && selected) {
+        const actorDistance=actor?doorDistance(selected,actor):Infinity;
+        opening=actorDistance<=(opening?3:2.5);
+        const step=Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
+        open=opening?Math.min(1,open+step):Math.max(0,open-step);
       }
-      if(!selected)return;
-      const actorDistance=actor?doorDistance(selected,actor):Infinity;
-      opening=actorDistance<=(opening?3:2.5);
-      const step=Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
-      open=opening?Math.min(1,open+step):Math.max(0,open-step);
-      for (const {mesh,direction} of leaves) mesh.rotation.y=direction*ENTRANCE_SWING*open;
+      uploadAvailable=true;
+      const maxSwing=ENTRANCE_SWING*Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
+      for (const [id,view] of active) {
+        const selectedDoor=selected?.id===id?selected:undefined;
+        const visualOpen=selectedDoor?open:0;
+        const state=presentedById.get(id);
+        const left=presentedDoors?state?.left??0:visualOpen;
+        const right=presentedDoors?state?.right??0:visualOpen;
+        const preparingEntrance=!!selectedDoor&&(left>0||right>0||!!actor&&doorDistance(selectedDoor,actor)<=3.5);
+        const ready=view.update(point,opacity,actor,preparingEntrance);
+        view.doorReady=(left>0||right>0)&&(ready||view.doorReady);
+        for (const {mesh,direction} of view.leaves) {
+          const angle=view.doorReady?direction*ENTRANCE_SWING*(direction>0?left:right):0;
+          const change=angle-mesh.rotation.y;
+          if(change)mesh.rotation.y+=Math.max(-maxSwing,Math.min(maxSwing,change));
+        }
+      }
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {

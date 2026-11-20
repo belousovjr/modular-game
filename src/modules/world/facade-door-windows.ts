@@ -1,6 +1,6 @@
 import type {CityMesh} from '../world-generation/index.ts';
-
-export const DOOR_FRAME_TRIM = .25;
+import {DOOR_FRAME_TRIM} from './headless.ts';
+export {DOOR_FRAME_TRIM} from './headless.ts';
 
 export function facadeDoorWindows({positions:p, indices, uvs}: CityMesh, panels: readonly (readonly number[])[]) {
   if (!uvs || !panels.length) return;

@@ -19,6 +19,10 @@ const STEP = .25;
 export const GRASS_DISTANCE = 80;
 const NEAR_DISTANCE = 24;
 
+export function grassLodDistance(distance: number, indoors: boolean) {
+  return indoors ? distance + 1.5 * Math.max(0, distance - 12) : distance;
+}
+
 type Triangle = { positions: readonly number[]; a: number; b: number; c: number };
 
 type GrassPatch = { bounds: SectionBounds; triangles: Triangle[] };
@@ -191,10 +195,10 @@ export function createGrass(scene: Scene, scope: Scope) {
     }
     const { minX, maxX, minZ, maxZ } = patch.bounds;
     const levels: (Mesh | undefined)[] = [];
-    return (camera?: Vector3) => {
-      const distance = camera ? Math.hypot(
+    return (camera?: Vector3, indoors = false) => {
+      const distance = camera ? grassLodDistance(Math.hypot(
         grassPatchDistance(patch.bounds, camera), Math.max(minY - camera.y, 0, camera.y - maxY),
-      ) : Infinity;
+      ), indoors) : Infinity;
       // shortcut: abruptly switches blade geometry at 24 m, revisit if the switch is visible in motion.
       const level = distance < NEAR_DISTANCE ? 0 : 1;
       const count = level === 0

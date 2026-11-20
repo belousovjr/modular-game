@@ -17,7 +17,7 @@ import {getBuildingInteriorSources, getBuildingProfile} from './building-profile
 export type {BuildingInteriorSource, BuildingProfile, BuildingShape} from './building-profiles.ts';
 export type {WorldMap} from './map.ts';
 import {createTreeBatch,createTreeMaterial,createTreeShadowBatch,groupTrees,treeLodBounds} from './trees.ts';
-import {createGrass, GRASS_DISTANCE, grassPatchDistance, groupGrass, groupGrassSections} from './grass.ts';
+import {createGrass, GRASS_DISTANCE, grassLodDistance, grassPatchDistance, groupGrass, groupGrassSections} from './grass.ts';
 import {groupBuildingSurfaces} from './building-batches.ts';
 import {aviationLightPositions,createAviationLights} from './aviation-lights.ts';
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
@@ -128,21 +128,22 @@ export const worldModule = defineModule({
         },scope,{load:210,unload:225});
       }
     }
-    const grassViews = new Set<(camera?: Vector3) => void>();
+    let interiorView = false;
+    const grassViews = new Set<(camera: Vector3 | undefined, indoors: boolean) => void>();
     const createGrassPatch = createGrass(core.scene, scope);
     for (const [key, section] of groupGrassSections(groupGrass(city).values())) {
       const id = `${city.id}/grass/${key}`;
       deps.streaming.registerSection(id, section.bounds, owner => {
         const updates = section.patches.map((patch, index) => {
           let updatePatch: ReturnType<typeof createGrassPatch> | undefined;
-          return (camera?: Vector3) => {
-            if (!updatePatch && camera && grassPatchDistance(patch.bounds, camera) < GRASS_DISTANCE) {
+          return (camera: Vector3 | undefined, indoors: boolean) => {
+            if (!updatePatch && camera && grassLodDistance(grassPatchDistance(patch.bounds, camera), indoors) < GRASS_DISTANCE) {
               updatePatch = createGrassPatch(`${id}/${index}`, patch, owner, deps.geometry.registerMeshes);
             }
-            updatePatch?.(camera);
+            updatePatch?.(camera, indoors);
           };
         });
-        const update = (camera?: Vector3) => { for (const updatePatch of updates) updatePatch(camera); };
+        const update = (camera: Vector3 | undefined, indoors: boolean) => { for (const updatePatch of updates) updatePatch(camera, indoors); };
         grassViews.add(update);
         owner.onDispose(() => grassViews.delete(update));
       }, scope, { load: GRASS_DISTANCE + 12, unload: GRASS_DISTANCE + 20 });
@@ -219,7 +220,7 @@ export const worldModule = defineModule({
       if (grassViews.size) {
         const camera = core.scene.activeCamera;
         camera?.getViewMatrix();
-        for (const update of grassViews) update(camera?.globalPosition);
+        for (const update of grassViews) update(camera?.globalPosition, interiorView);
       }
       for(const view of surfaceViews){
         const b=view.bounds,distance=point?Math.hypot(Math.max(b.minX-point.x,0,point.x-b.maxX),Math.max(b.minZ-point.z,0,point.z-b.maxZ)):Infinity;
@@ -246,6 +247,7 @@ export const worldModule = defineModule({
       getMap: () => getWorldMap(city),
       getBuildingProfile,
       getBuildingInteriorSources: () => getBuildingInteriorSources(city),
+      setInteriorView(inside: boolean) { interiorView = inside; },
       buildingDetailRange: detailRange,
       regions: generated.map(region => ({ id: region.schemeId, bounds: region.bounds, objectCount:region.objectCount })),
       streaming: deps.streaming.getStats,

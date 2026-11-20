@@ -1,4 +1,5 @@
 import type { BuildingProfile, BuildingInteriorSource, CollisionBox, BuildingDoor } from '../world/headless.ts';
+export {DOOR_FRAME_TRIM} from '../world/headless.ts';
 
 export type Point = readonly [number, number];
 type Rectangle = {minX:number; minZ:number; maxX:number; maxZ:number};

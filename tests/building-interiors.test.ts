@@ -5,7 +5,7 @@ import {createCameraObstacleSweep} from '../src/modules/player-control/camera-ob
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
 import {type DoorPose, doorFrameParts, doorLeafParts, ENTRANCE_FLOOR_OFFSET, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
-import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
+import {buildInterior, interiorViewHeight, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
 import {citySource} from '../src/modules/world/city.ts';
@@ -465,4 +465,12 @@ test('character authority enters through a real doorway and is stopped by the wa
   assert.ok(walk(0)>1);
   assert.ok(walk(2)<0);
   assert.ok(world.blockers.some(b=>b.id===door.id));
+});
+
+test('visual floors prepare for the selected entrance or a viewpoint inside the building',()=>{
+  const outside={x:-1.8,y:1,z:5},inside={x:.5,y:1,z:5};
+  assert.equal(interiorViewHeight(source.profile,outside,false),undefined);
+  assert.equal(interiorViewHeight(source.profile,outside,true),1);
+  assert.equal(interiorViewHeight(source.profile,inside,false),1);
+  assert.equal(interiorViewHeight(source.profile,{x:-4.1,y:1,z:5},true),undefined);
 });

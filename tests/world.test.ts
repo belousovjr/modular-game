@@ -227,11 +227,14 @@ test('grass follows authored slopes, keeps stable roots and reduces geometry wit
   const createPatch = createGrass(scene, owner);
   const active = () => scene.meshes.filter((mesh): mesh is Mesh => mesh instanceof Mesh && mesh.isEnabled());
   const updates = [...patches.values()].map((patch, index) => createPatch(`test/grass/${index}`, patch, owner, () => {}));
-  const move = (x: number, y: number) => updates.forEach(update => update(new Vector3(x, y, 2)));
+  const move = (x: number, y: number, indoors = false) => updates.forEach(update => update(new Vector3(x, y, 2), indoors));
   move(0, 3);
   const near = active();
   assert.equal(near.length, 2);
   assert.ok(near.every(mesh => mesh.getTotalIndices() === 9 && mesh.thinInstanceCount > 0));
+  const nearCounts = near.map(mesh => mesh.thinInstanceCount);
+  move(0, 3, true);
+  assert.deepEqual(active().map(mesh => mesh.thinInstanceCount), nearCounts);
   for (const mesh of near) {
     const normals = mesh.getVerticesData('normal');
     assert.ok(normals && normals.filter((_, index) => index % 3 === 1).every(y => y > 0));
@@ -243,7 +246,7 @@ test('grass follows authored slopes, keeps stable roots and reduces geometry wit
   assert.ok(new Set(nearColors).size > 4);
   assert.ok(near[0].getBoundingInfo().boundingBox.centerWorld.x < 0);
   assert.ok(near[1].getBoundingInfo().boundingBox.centerWorld.x > 0);
-  move(45, 3);
+  move(55, 3);
   const far = active();
   assert.equal(far.length, 2);
   assert.ok(far.every((mesh, index) => mesh.getTotalIndices() === 3 && mesh.thinInstanceCount < near[index].thinInstanceCount));
@@ -256,6 +259,10 @@ test('grass follows authored slopes, keeps stable roots and reduces geometry wit
     assert.ok(farAxis && nearAxis);
     assert.deepEqual(Array.from(farAxis), Array.from(nearAxis.slice(0, farAxis.length)));
   }
+  move(55, 3, true);
+  assert.equal(active().length, 0);
+  move(55, 3);
+  assert.deepEqual(active(), far);
   move(100, 3);
   assert.equal(active().length, 0);
   move(0, 3);

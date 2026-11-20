@@ -1,6 +1,6 @@
-import { DOOR_FRAME_TRIM, type BuildingProfile, type BuildingInteriorSource } from '../world/index.ts';
+import type { BuildingProfile, BuildingInteriorSource } from '../world/index.ts';
 
-import { cutFloor, interiorLayout, SLAB_DEPTH, SHAFT_WALL_DEPTH, openingCorners, type Point } from './headless.ts';
+import { DOOR_FRAME_TRIM, cutFloor, interiorLayout, SLAB_DEPTH, SHAFT_WALL_DEPTH, openingCorners, type Point } from './headless.ts';
 export { ENTRANCE_FLOOR_OFFSET } from './headless.ts';
 const WALL_DEPTH = .25;
 
@@ -27,6 +27,11 @@ export function nearInterior(profile: BuildingProfile, point: {x:number; y:numbe
     az = bz;
   }
   return inside;
+}
+
+export function interiorViewHeight(profile: BuildingProfile, point: {x:number; y:number; z:number} | null | undefined, preparingEntrance: boolean) {
+  if (point && nearInterior(profile, point, preparingEntrance ? 4 : 0)) return point.y;
+  return undefined;
 }
 
 export function buildInterior({profile, facade}: BuildingInteriorSource) {

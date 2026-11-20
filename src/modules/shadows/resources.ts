@@ -6,6 +6,7 @@ import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator.
 import { Frustum } from '@babylonjs/core/Maths/math.frustum.js';
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import type { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js';
+import type { Node } from '@babylonjs/core/node.js';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Material } from '@babylonjs/core/Materials/material.js';
 import type { Scene } from '@babylonjs/core/scene.js';
@@ -23,6 +24,15 @@ const FAR_CASTER_RADIUS = 1600;
 const NORMAL_BIAS = .12;
 const SHADOW_MIN_Z = 0.1;
 const SHADOW_MAX_Z = 400;
+
+function casterWorldMatrix(node: Node): Matrix {
+  if (!node.isSynchronized()) {
+    if (node.parent) casterWorldMatrix(node.parent);
+    // Mark the new transform even when Babylon has already evaluated this render ID.
+    node.markAsDirty('');
+  }
+  return node.computeWorldMatrix();
+}
 
 export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: () => Iterable<Mesh>, readOrigin: () => DistancePoint | null, scope: Scope) {
   if (sun.getShadowGenerator()) throw new Error('У солнца уже есть генератор теней');
@@ -152,17 +162,18 @@ export function createShadows(scene: Scene, sun: DirectionalLight, getMeshes: ()
         if (mesh.isDisposed() || !mesh.isEnabled() || !mesh.isVisible) continue;
         if (mesh.metadata?.shadowReceiver !== false && !receivers.has(mesh)) { receivers.set(mesh, mesh.receiveShadows); mesh.receiveShadows = true; }
         if (mesh.hasThinInstances || mesh.metadata?.shadowCaster === false) continue;
-        const world = mesh.computeWorldMatrix(!!mesh.parent || !mesh.isSynchronized());
+        const world = mesh.isWorldMatrixFrozen ? mesh.computeWorldMatrix() : casterWorldMatrix(mesh);
         const box = mesh.getBoundingInfo().boundingBox;
-        const width = box.extendSize.x * 2 * Math.hypot(world.m[0], world.m[1], world.m[2]);
-        const height = box.extendSize.y * 2 * Math.hypot(world.m[4], world.m[5], world.m[6]);
-        const depth = box.extendSize.z * 2 * Math.hypot(world.m[8], world.m[9], world.m[10]);
         // Broad ground plates receive shadows; casting them causes stripes on overlapping surfaces.
-        if (width >= 160 && depth >= 160 && height < 2) continue;
+        if (box.extendSize.x * Math.hypot(world.m[0], world.m[1], world.m[2]) >= 80 &&
+            box.extendSize.z * Math.hypot(world.m[8], world.m[9], world.m[10]) >= 80 &&
+            box.extendSize.y * Math.hypot(world.m[4], world.m[5], world.m[6]) < 1) continue;
         const min = box.minimumWorld;
         const max = box.maximumWorld;
-        const distance = Math.hypot(Math.max(min.x - origin.x, 0, origin.x - max.x), Math.max(min.y - origin.y, 0, origin.y - max.y), Math.max(min.z - origin.z, 0, origin.z - max.z));
-        if (distance <= casterRadius) casters.push(mesh);
+        const dx = Math.max(min.x - origin.x, 0, origin.x - max.x);
+        const dy = Math.max(min.y - origin.y, 0, origin.y - max.y);
+        const dz = Math.max(min.z - origin.z, 0, origin.z - max.z);
+        if (dx * dx + dy * dy + dz * dz <= casterRadius * casterRadius) casters.push(mesh);
       }
     }
     count = casters.length;
