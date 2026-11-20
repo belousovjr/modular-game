@@ -1,4 +1,4 @@
-import { createCharacterAuthorityFactory, type CharacterSnapshot } from '../characters/headless.ts';
+import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, LOCOMOTION_SPEEDS, type CharacterIdentity, type CharacterSnapshot } from '../characters/headless.ts';
 import type { CollisionWorld } from '../world/headless.ts';
 
 export interface Patrol {
@@ -83,17 +83,44 @@ export function findPedestrianPath(world:CollisionWorld,start:{readonly x:number
   return result;
 }
 
-export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patrol[], count=8, startTick=0, prefix='npc') {
+type CreatePedestrian = (tick:number,spawn:{x:number;z:number},identity:CharacterIdentity)=>
+  ReturnType<ReturnType<typeof createCharacterAuthorityFactory>>;
+
+export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patrol[], count=8, startTick=0, prefix='npc',
+  createPedestrian?:CreatePedestrian) {
   if(!Number.isSafeInteger(count)||count<1||count>32||!Number.isSafeInteger(startTick)||startTick<0||!prefix.trim()||patrols.length<1||patrols.length>8||new Set(patrols.map(p=>p.id)).size!==patrols.length)throw new Error('Invalid NPC population');
-  const createCharacter=createCharacterAuthorityFactory(world);
   const prepared=patrols.map(p=>preparePatrol(world,p));
-  const actors=Array.from({length:count},(_,i)=>{
-    const route=prepared[i%prepared.length],point=Math.floor(i/prepared.length);
-    if(point>=route.points.length)throw new Error('NPC spawn capacity exceeded');
-    return {id:`${prefix}/${i}`,authority:createCharacter(startTick,route.points[point]),route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0};
-  });
+  if(!createPedestrian){
+    const factory=createCharacterAuthorityFactory(world);
+    createPedestrian=(tick,spawn,identity)=>factory(tick,spawn,undefined,identity);
+  }
+  const create=createPedestrian;
+  const nextSpawn=prepared.map(()=>0);
+  function spawnActor(index:number){
+    const zone=index%prepared.length,route=prepared[zone];
+    const identity={id:`${prefix}/${index}`,ownerId:prefix};
+    while(nextSpawn[zone]<route.points.length){
+      const point=nextSpawn[zone]++;
+      try {
+        const authority=create(startTick,route.points[point],identity);
+        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0};
+      } catch(error) {
+        if(!(error instanceof CharacterSpawnBlockedError))throw error;
+      }
+    }
+    throw new Error('NPC spawn capacity exceeded');
+  }
+  const actors:ReturnType<typeof spawnActor>[]=[];
+  const dispose=()=>{for(const actor of actors.splice(0))actor.authority.dispose();};
+  try {
+    for(let i=0;i<count;i++)actors.push(spawnActor(i));
+  } catch(error) {
+    dispose();
+    throw error;
+  }
   let tick=startTick;
   return {
+    dispose,
     step(nextTick:number){
       if(nextTick!==tick+1)throw new Error('NPC ticks must be consecutive');
       tick=nextTick;
@@ -105,16 +132,17 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
           if(actor.node===path.length){actor.arrivals++;actor.goal=(actor.goal+1)%actor.route.paths.length;actor.node=0;actor.waitUntil=tick+(actor.goal%4===0?45+i%3*15:0);}
           path=actor.route.paths[actor.goal];target=path[actor.node];
         }
-        const dx=target?target.x-s.x:0,dz=target?target.z-s.z:0,length=Math.hypot(dx,dz);
-        const waiting=tick<actor.waitUntil||actor.stalled>=120;
-        const receipt=actor.authority.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:waiting||!length?0:dx/length,z:waiting||!length?0:dz/length,run:false,jump:false},'local');
+        const dx=target?target.x-s.x:0,dz=target?target.z-s.z:0;
+        const scale=tick<actor.waitUntil?0:1/Math.max(Math.hypot(dx,dz),LOCOMOTION_SPEEDS.walk/60);
+        const receipt=actor.authority.receive({type:'move',characterId:s.id,sequence:s.lastSequence+1,tick:s.tick,
+          x:dx*scale,z:dz*scale,run:false,jump:false},s.ownerId);
         if(!receipt.accepted)throw new Error(`NPC intent rejected: ${receipt.reason}`);
         actor.authority.step(tick);
-        actor.stalled=!waiting&&!actor.authority.snapshot().moving?actor.stalled+1:0;
-        // shortcut: inaccessible terrain stops this patrol; add terrain-aware replanning before expanding its zones.
+        actor.stalled=tick>=actor.waitUntil&&!actor.authority.snapshot().moving?actor.stalled+1:0;
+        // shortcut: a blocked route pauses and retries, add dynamic replanning if patrols need to overtake.
         if(actor.stalled>=120)actor.waitUntil=tick+120;
       }
     },
-    snapshot():NpcSnapshot{return Object.freeze({tick,actors:Object.freeze(actors.map(a=>Object.freeze({...a.authority.snapshot(),id:a.id,ownerId:'npc'}))),arrivals:actors.reduce((n,a)=>n+a.arrivals,0)});},
+    snapshot():NpcSnapshot{return Object.freeze({tick,actors:Object.freeze(actors.map(a=>a.authority.snapshot())),arrivals:actors.reduce((n,a)=>n+a.arrivals,0)});},
   };
 }

@@ -452,3 +452,18 @@ test('character authority enters through a real doorway and is stopped by the wa
   assert.ok(walk(2)<0);
   assert.ok(world.blockers.some(b=>b.id===door.id));
 });
+
+test('an NPC opens the same entrance the hero sees, once per authority tick',()=>{
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const world={bounds:{minX:-10,maxX:15,minZ:-10,maxZ:15},baseHeight:0,slopeX:0,
+    spawn:{x:0,z:-6},blockers:[],floors:[],doors:[door]};
+  const create=createCharacterAuthorityFactory(world,[source]);
+  const hero=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
+  const npc=create(0,{x:0,z:2},undefined,{id:'npc/0',ownerId:'npc'});
+  hero.step(1);
+  npc.step(1);
+  const poses=hero.snapshot().entranceDoors;
+  assert.equal(poses?.[0].left,1/24);
+  assert.equal(poses?.[0].right,1/24);
+  assert.equal(npc.snapshot().entranceDoors,poses);
+});

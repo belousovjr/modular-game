@@ -1,3 +1,10 @@
+import {Observable} from '@babylonjs/core/Misc/observable.js';
+import {defineModule} from '../src/core/context.ts';
+import {startModules} from '../src/core/modules.ts';
+import {createPanels} from '../src/core/panels.ts';
+import {createAvatar} from '../src/modules/characters/assets.ts';
+import {createCharacterAuthority} from '../src/modules/characters/headless.ts';
+import {geometryModule} from '../src/modules/geometry/index.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {NullEngine} from '@babylonjs/core/Engines/nullEngine.js';
@@ -45,4 +52,46 @@ test('character shadows share a low-poly rounded proxy, follow the avatar and st
   assert.equal(sun.getShadowGenerator()?.getShadowMap()?.renderList?.includes(human),false);
   shadowScope.dispose();human.dispose();views.dispose();roots.forEach(root=>root.dispose());owner.dispose();
   assert.equal(scene.geometries.length,0);assert.equal(scene.materials.length,0);
+});
+
+test('distance-limited avatars hide their model and shadow with hysteresis',t=>{
+  const engine=new NullEngine(),scene=new Scene(engine),owner=createScope();
+  t.after(()=>{owner.dispose();scene.dispose();engine.dispose();});
+  const camera=new FreeCamera('camera',Vector3.Zero(),scene);
+  const view:{render?:ReturnType<typeof createAvatar>}={};
+  const probe=defineModule({id:'avatar-probe',title:'Avatar probe',category:'Тесты',requires:{geometry:geometryModule},
+    setup({deps,scope}){
+      view.render=createAvatar(scene,deps.geometry,{
+        createShadowProxy:createCharacterShadowSource(scene,scope),
+        ready:Promise.resolve(null),reportError:()=>{},shouldAnimate:()=>true,
+        getContainer:()=>null,getStatus:()=>({state:'loading',error:null}),subscribe:()=>()=>{},
+      },scope,{show:100,hide:110});
+      return {};
+    },
+  });
+  const session=startModules([geometryModule,probe],[probe.id],{scene,onFrame:new Observable<number>(),panels:createPanels()});
+  owner.onDispose(()=>session.dispose());
+  const {render}=view;
+  assert.ok(render);
+  const actor=createCharacterAuthority({bounds:{minX:-10,maxX:10,minZ:-10,maxZ:10},baseHeight:0,slopeX:0,
+    spawn:{x:0,z:0},blockers:[],floors:[]}).snapshot();
+  const npc={...actor,id:'npc/0'};
+  render(npc);
+  const root=scene.getTransformNodeByName('character/npc/0');
+  assert.ok(root);
+  const children=root.getChildMeshes();
+  assert.equal(children.length,2);
+  for(const [distance,visible] of [[110,true],[111,false],[105,false],[100,true]] as const){
+    camera.position.y=distance;
+    render(npc);
+    assert.equal(root.isEnabled(),visible);
+    assert.ok(children.every(mesh=>mesh.isEnabled()===visible));
+  }
+  camera.position.y=111;
+  render(npc);
+  camera.position.set(4,0,0);
+  render({...npc,x:4});
+  assert.ok(root.isEnabled());
+  assert.equal(root.position.x,4);
+  assert.deepEqual(root.getChildMeshes().map(mesh=>mesh.uniqueId),children.map(mesh=>mesh.uniqueId));
 });

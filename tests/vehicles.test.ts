@@ -239,3 +239,17 @@ test('vehicle moves inside the real Art Institute courtyard and stops at the inn
     assert.ok(furthest>-507&&furthest<-502.5,String(furthest));
   }finally{s.car.dispose();}
 });
+
+test('a pedestrian occupying the release point prevents exit until it clears',()=>{
+  const s=session();
+  try {
+    board(s);
+    s.car.observeCharacter(s.actor.snapshot(),()=>false);
+    assert.equal(s.car.receive(cmd('exit',s.tick,1000),'local').reason,'blocked-exit');
+    assert.equal(s.car.snapshot().phase,'driving');
+    s.car.observeCharacter(s.actor.snapshot());
+    assert.ok(s.car.receive(cmd('exit',s.tick,1001),'local').accepted);
+  } finally {
+    s.car.dispose();
+  }
+});

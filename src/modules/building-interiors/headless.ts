@@ -738,7 +738,36 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
     return result;
   }
   let snapshot:readonly DoorPose[]=Object.freeze([]);
+  function stepBodies(bodies:readonly CollisionBox[], blockers:(door:BuildingDoor)=>readonly CollisionBox[]) {
+    const actors=bodies.map(body=>({body,x:(body.minX+body.maxX)/2,z:(body.minZ+body.maxZ)/2}));
+    const candidates=new Set(states.keys());
+    for(const actor of actors)for(const door of near(actor.x,actor.z))candidates.add(door);
+    let changed=false;
+    for(const door of candidates){
+      const state=states.get(door)??{left:0,right:0,opening:false,boxes:[]};
+      state.opening=actors.some(({body,x,z})=>
+        Math.hypot(x-door.x,z-door.z,Math.max(door.y-body.minY,0,body.minY-door.y-door.height))<=(state.opening?3:2.5));
+      if(!state.opening&&!state.left&&!state.right){states.delete(door);continue;}
+      if(state.opening&&state.left===1&&state.right===1)continue;
+      let adjusted=false;
+      const staticBoxes=blockers(door);
+      for(const [key,sign] of [['left',-1],['right',1]] as const){
+        const from=state[key],to=state.opening?Math.min(1,from+1/24):Math.max(0,from-1/24);
+        if(to===from)continue;
+        const blocked=[(from+to)/2,to].some(angle=>leafBoxes(door,sign,angle).some(leaf=>
+          bodies.some(body=>boxesOverlap(leaf,body))||staticBoxes.some(box=>boxesOverlap(leaf,box))));
+        if(!blocked){state[key]=to;adjusted=true;}
+      }
+      changed ||= adjusted;
+      if(!state.opening&&!state.left&&!state.right){states.delete(door);continue;}
+      if(adjusted||!state.boxes.length)state.boxes=[...leafBoxes(door,-1,state.left),...leafBoxes(door,1,state.right)];
+      states.set(door,state);
+    }
+    if(changed)snapshot=Object.freeze([...states].filter(([,s])=>s.left||s.right).map(([door,s])=>
+      Object.freeze({id:door.id,left:s.left,right:s.right})));
+  }
   return {
+    stepBodies,
     viewAlong(bounds:InteriorQueryBounds,poses:ReadonlyMap<string,DoorPose>){
       const result:CollisionBox[]=[];
       for(const door of candidatesIn(cells,cell,bounds)){
@@ -764,32 +793,8 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
       return boxes;
     },
     step(actor:Position,radius:number,height:number,blockers:(door:BuildingDoor)=>readonly CollisionBox[]) {
-      const candidates=new Set([...states.keys(),...near(actor.x,actor.z)]);
-      const body=rectangleBox('actor',[[actor.x-radius,actor.z-radius],[actor.x+radius,actor.z-radius],
-        [actor.x+radius,actor.z+radius],[actor.x-radius,actor.z+radius]],actor.y,actor.y+height);
-      let changed=false;
-      for(const door of candidates){
-        const state=states.get(door)??{left:0,right:0,opening:false,boxes:[]};
-        const distance=Math.hypot(actor.x-door.x,actor.z-door.z,Math.max(door.y-actor.y,0,actor.y-door.y-door.height));
-        state.opening=distance<=(state.opening?3:2.5);
-        if(!state.opening&&!state.left&&!state.right){states.delete(door);continue;}
-        if(state.opening&&state.left===1&&state.right===1)continue;
-        let adjusted=false;
-        const staticBoxes=blockers(door);
-        for(const [key,sign] of [['left',-1],['right',1]] as const){
-          const from=state[key],to=state.opening?Math.min(1,from+1/24):Math.max(0,from-1/24);
-          if(to===from)continue;
-          const blocked=[(from+to)/2,to].some(angle=>leafBoxes(door,sign,angle).some(leaf=>
-            boxesOverlap(leaf,body)||staticBoxes.some(box=>boxesOverlap(leaf,box))));
-          if(!blocked){state[key]=to;adjusted=true;}
-        }
-        changed ||= adjusted;
-        if(!state.opening&&!state.left&&!state.right){states.delete(door);continue;}
-        if(adjusted||!state.boxes.length)state.boxes=[...leafBoxes(door,-1,state.left),...leafBoxes(door,1,state.right)];
-        states.set(door,state);
-      }
-      if(changed)snapshot=Object.freeze([...states].filter(([,s])=>s.left||s.right).map(([door,s])=>
-        Object.freeze({id:door.id,left:s.left,right:s.right})));
+      stepBodies([{id:'actor',minX:actor.x-radius,maxX:actor.x+radius,minZ:actor.z-radius,maxZ:actor.z+radius,
+        minY:actor.y,maxY:actor.y+height}],blockers);
     },
     snapshot:()=>snapshot,
   };

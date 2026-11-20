@@ -28,6 +28,11 @@ function validLocomotion(value:unknown):value is LocomotionInput{
     &&'lift' in value&&typeof value.lift==='number'&&Number.isFinite(value.lift)&&Math.abs(value.lift)<=1
     &&'flight' in value&&(typeof value.flight==='boolean'||value.flight===null);
 }
+export interface CharacterIdentity {readonly id:string;readonly ownerId:string}
+export type CanStand = (position:{x:number;y:number;z:number})=>boolean;
+export class CharacterSpawnBlockedError extends Error {}
+const LOCAL_PLAYER:CharacterIdentity={id:'local-player',ownerId:'local'};
+
 export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
 const HEIGHT = {standing:1.8,crouching:1.3,prone:.65};
@@ -117,7 +122,13 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
+  const people=new Map<string,()=>CollisionBox|null>();
+  const vehicleBlockers=new Map<string,CollisionBox>();
+  const sharedEntrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  let sharedDoorTick=-1;
+  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number},member?:CharacterIdentity)=>{
+  const {id,ownerId:owner}=member??LOCAL_PLAYER;
+  if(!id.trim()||!owner.trim()||(member&&people.has(id)))throw new Error('Invalid or duplicate character identity');
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
@@ -125,7 +136,37 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
   let stance:CharacterStance='standing',stanceRequest:CharacterStance|undefined;
   let vx=0,vy=0,vz=0;
-  const entrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  const entrances=member ? sharedEntrances : interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  let vehicleFrame:VehicleCharacterFrame|null=null;
+  let closed=false;
+  let lastBody:CollisionBox|undefined;
+  function body():CollisionBox|null {
+    if(vehicleFrame?.pose)return null;
+    if(!lastBody||lastBody.minX!==x-RADIUS||lastBody.minZ!==z-RADIUS||lastBody.minY!==y||lastBody.maxY!==y+HEIGHT[stance]){
+      lastBody={id,minX:x-RADIUS,maxX:x+RADIUS,minZ:z-RADIUS,maxZ:z+RADIUS,minY:y,maxY:y+HEIGHT[stance]};
+    }
+    return lastBody;
+  }
+  function* otherPeople(){
+    if(!member)return;
+    for(const [other,read] of people){
+      if(other===id)continue;
+      const box=read();
+      if(box)yield box;
+    }
+  }
+  function overlapsPerson(b:CollisionBox,px:number,pz:number){
+    return px>b.minX-RADIUS+1e-7&&px<b.maxX+RADIUS-1e-7&&
+      pz>b.minZ-RADIUS+1e-7&&pz<b.maxZ+RADIUS-1e-7;
+  }
+  function peopleBlock(px:number,pz:number,py:number,height:number){
+    for(const b of otherPeople()){
+      if(py<b.maxY-1e-7&&py+height>b.minY+1e-7&&overlapsPerson(b,px,pz))return true;
+    }
+    return false;
+  }
+  const vehicles=()=>member ? vehicleBlockers.values() : vehicleFrame ? [vehicleFrame.blocker] : [];
+
   function sample(px:number,pz:number,low:number,high:number) {
     return interiors.at(px,pz,low,high);
   }
@@ -139,11 +180,13 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       const radius=b.id==='stair-tread' ? 0 : area.onStairs ? .215 : RADIUS;
       if(b.maxY<=y+.3 && overlapsAt(b,px,pz,radius))height=Math.max(height,b.maxY);
     }
+    for(const b of otherPeople()) {
+      if(b.maxY<=y+1e-7&&overlapsPerson(b,px,pz))height=Math.max(height,b.maxY);
+    }
     return height;
   }
-  let vehicleFrame:VehicleCharacterFrame|null=null;
   const obstacles=(px:number,pz:number,py:number,inside:readonly CollisionBox[])=>[
-    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame?[vehicleFrame.blocker]:[]),
+    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...vehicles(),
   ];
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
   function touches(b:CollisionBox,px:number,pz:number,radius=RADIUS) {
@@ -162,11 +205,16 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   }
   function blocked(px: number, pz: number, py: number, checkStep=true,height=HEIGHT[stance]) {
     if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || (checkStep&&py-y>.3)) return true;
+    if(peopleBlock(px,pz,py,height))return true;
     const area=sample(px,pz,py,py+height);
     if(area.slabs.some(s=>py<s.maxY-1e-7&&py+height>s.minY+1e-7))return true;
     const radius=area.onStairs ? .215 : RADIUS;
     return obstacles(px,pz,py,area.boxes).some(b=>
       py < b.maxY-1e-7 && py+height > b.minY+1e-7 && overlapsAt(b,px,pz,b.id==='stair-tread'&&checkStep?0:radius));
+  }
+  function groundedBlocked(px:number,pz:number){
+    const floor=support(px,pz);
+    return blocked(px,pz,y-floor>.3?y:floor);
   }
   function freeBlocked(px:number,pz:number,py:number){
     if(blocked(px,pz,py,false))return true;
@@ -232,8 +280,17 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       grounded=Math.abs(y-support(x,z,true))<1e-7;
     }
   }
-  if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
+  if (blocked(x,z,y)) throw new CharacterSpawnBlockedError('Character spawn is blocked');
+  if(member)people.set(id,body);
   return {
+    dispose(){
+      if(closed)return;
+      closed=true;
+      if(member){people.delete(id);vehicleBlockers.delete(id);}
+    },
+    canStandAmongPeople(position: Parameters<CanStand>[0]){
+      return !peopleBlock(position.x,position.z,position.y,HEIGHT.standing);
+    },
     setVehicleFrame(frame:VehicleCharacterFrame|null){
       if(frame){
         if(frame.approach&&(![frame.approach.x,frame.approach.z,frame.approach.yaw].every(Number.isFinite)||!frame.approach.vehicleId.trim()))throw new Error('Invalid vehicle approach');
@@ -244,9 +301,14 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       }
       if(vehicleFrame?.approach&&!frame?.approach&&!frame?.pose){dx=dz=0;run=false;facing=null;expiry=tick;}
       vehicleFrame=frame;
+      if(member){
+        if(frame)vehicleBlockers.set(id,frame.blocker);
+        else vehicleBlockers.delete(id);
+      }
     },
     receive(input: unknown, ownerId: string): Receipt {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== (8+Number('facing' in input)+Number('locomotion' in input)+Number('stance' in input)) || input.type !== 'move' || input.characterId !== 'local-player' || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
+      if(closed)return {accepted:false,reason:'closed'};
+      if (!input || typeof input !== 'object' || Array.isArray(input) || !('type' in input) || !('characterId' in input) || !('sequence' in input) || !('tick' in input) || !('x' in input) || !('z' in input) || !('run' in input) || !('jump' in input) || Object.keys(input).length !== (8+Number('facing' in input)+Number('locomotion' in input)+Number('stance' in input)) || input.type !== 'move' || input.characterId !== id || typeof input.sequence !== 'number' || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 || typeof input.tick !== 'number' || !Number.isSafeInteger(input.tick) || input.tick < 0 || typeof input.x !== 'number' || typeof input.z !== 'number' || ![input.x,input.z].every(Number.isFinite) || Math.abs(input.x) > 1 || Math.abs(input.z) > 1 || typeof input.run !== 'boolean' || typeof input.jump !== 'boolean' || ('facing' in input && input.facing !== null && (typeof input.facing !== 'number' || !Number.isFinite(input.facing) || Math.abs(input.facing)>Math.PI))) return { accepted: false, reason: 'invalid' };
       const locomotion='locomotion' in input?input.locomotion:undefined;
       if('locomotion' in input&&!validLocomotion(locomotion))return {accepted:false,reason:'invalid'};
       let requestedStance:CharacterStance|undefined;
@@ -256,7 +318,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
         requestedStance=value;
       }
       if (vehicleFrame?.pose||vehicleFrame?.approach) return {accepted:false,reason:'vehicle'};
-      if (ownerId !== 'local') return { accepted: false, reason: 'owner' };
+      if (ownerId !== owner) return { accepted: false, reason: 'owner' };
       if (input.sequence <= lastSequence) return { accepted: false, reason: 'sequence' };
       if (input.tick > tick || tick-input.tick > 30) return { accepted: false, reason: 'stale' };
       if (acceptedTick === tick) return { accepted: false, reason: 'rate' };
@@ -271,14 +333,23 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       return { accepted: true, reason: 'accepted' };
     },
     step(nextTick: number) {
+      if(closed)throw new Error('Character authority disposed');
       if (nextTick !== tick + 1) throw new Error('Character ticks must be consecutive');
       tick = nextTick;
       moving = false;
-      entrances?.step({x,y,z},RADIUS,HEIGHT[stance],door=>[
-        ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
-        ...sample(door.x,door.z,door.y,door.y+door.height).boxes,
-        ...(vehicleFrame?[vehicleFrame.blocker]:[]),
-      ]);
+      if(entrances&&(!member||sharedDoorTick<tick)){
+        const blockers=(door:NonNullable<CollisionWorld['doors']>[number])=>[
+          ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
+          ...sample(door.x,door.z,door.y,door.y+door.height).boxes,
+          ...vehicles(),
+        ];
+        if(member){
+          sharedDoorTick=tick;
+          const bodies=[];
+          for(const read of people.values()){const box=read();if(box)bodies.push(box);}
+          entrances.stepBodies(bodies,blockers);
+        }else entrances.step({x,y,z},RADIUS,HEIGHT[stance],blockers);
+      }
       if(vehicleFrame?.pose)return;
       if(vehicleFrame?.approach){resetMotion();stanceRequest='standing';const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
       if(stanceRequest&&stanceRequest!==stance&&grounded&&mode==='walk'&&!blocked(x,z,y,false,HEIGHT[stanceRequest]))stance=stanceRequest;
@@ -302,9 +373,9 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
         const beforeX = x, beforeZ = z;
         for (let i = 0; i < steps; i++) {
           const nx = x + dx * speed / 60 / steps;
-          if(dx&&!(grounded?blocked(nx,z,support(nx,z)):freeBlocked(nx,z,y)))x=nx;
+          if(dx&&!(grounded?groundedBlocked(nx,z):freeBlocked(nx,z,y)))x=nx;
           const nz = z + dz * speed / 60 / steps;
-          if(dz&&!(grounded?blocked(x,nz,support(x,nz)):freeBlocked(x,nz,y)))z=nz;
+          if(dz&&!(grounded?groundedBlocked(x,nz):freeBlocked(x,nz,y)))z=nz;
           if (grounded) { const floor=support(x,z,true); if(y-floor>.3) grounded=false; else y=floor; }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
@@ -330,17 +401,23 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
           if (verticalSpeed > 0 && y+height <= b.minY && nextY+height >= b.minY) { nextY=b.minY-height;verticalSpeed=0; }
         }
+        for(const b of otherPeople()){
+          if(!overlapsPerson(b,x,z))continue;
+          if(verticalSpeed<=0&&y>=b.maxY-1e-7)support=Math.max(support,b.maxY);
+          if(verticalSpeed>0&&y+height<=b.minY+1e-7&&nextY+height>=b.minY){nextY=b.minY-height;verticalSpeed=0;}
+        }
         if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;onStairs=area.onStairs;landedTick=tick; }
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id: 'local-player', ownerId: 'local', x,y,z,yaw,...(onStairs&&grounded&&mode==='walk'?{onStairs:true}:{}),grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id, ownerId:owner, x,y,z,yaw,...(onStairs&&grounded&&mode==='walk'?{onStairs:true}:{}),grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
   };
   };
 }
 
 export interface DeliveryOptions { readonly latencyTicks?: number; readonly jitterTicks?: number; readonly dropEvery?: number; readonly seed?: number }
 export function createLocalConnection(authority: ReturnType<typeof createCharacterAuthority>, options: DeliveryOptions = {}) {
+  const owner=authority.snapshot().ownerId;
   const latency = options.latencyTicks ?? 0, jitter = options.jitterTicks ?? 0, dropEvery = options.dropEvery ?? 0;
   let seed = options.seed ?? 2026;
   if (![latency,jitter,dropEvery,seed].every(Number.isSafeInteger) || latency < 0 || latency > 120 || jitter < 0 || jitter > 120 || dropEvery < 0 || seed < 0 || seed > 0xffffffff) throw new Error('Invalid delivery configuration');
@@ -360,7 +437,7 @@ export function createLocalConnection(authority: ReturnType<typeof createCharact
       queue.sort((a,b) => a.due - b.due);
       while (queue.length && queue[0].due <= tick) {
         const delivery = queue.shift();
-        if (delivery) delivery.resolve(authority.receive(delivery.command,'local'));
+        if (delivery) delivery.resolve(authority.receive(delivery.command,owner));
       }
       authority.step(tick);
     },

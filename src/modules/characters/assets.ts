@@ -59,12 +59,14 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
   return { ready, reportError, createShadowProxy, shouldAnimate, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 
-export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope) {
+export interface AvatarDrawDistance {readonly show:number;readonly hide:number}
+export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope, drawDistance?:AvatarDrawDistance) {
   let disposed = false, entries: InstantiatedEntries | null = null, active: AnimationGroup | undefined;
   const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
   const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
   const clips=new Map<string,AnimationGroup>(),playing=new Set<AnimationGroup>();
   root.metadata = { assetStatus:'loading' };
+  if(drawDistance)root.setEnabled(false);
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null;clips.clear();playing.clear();root.dispose(); });
   const shadow=assets.createShadowProxy(root,scope);
   geometry.registerMeshes([shadow],scope);
@@ -94,7 +96,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
         if(!group.name.endsWith('_Loop'))for(const track of group.targetedAnimations)track.animation.loopMode=Animation.ANIMATIONLOOPMODE_CONSTANT;
       }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
-      if(idle) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);active=idle;playing.add(idle); }
+      if(idle&&root.isEnabled()) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);active=idle;playing.add(idle); }
       loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
     } catch(error) {
       entries?.dispose();entries=null;assets.reportError(error);root.metadata={assetStatus:'error',error:error instanceof Error?error.message:String(error)};
@@ -103,17 +105,34 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   const existing=assets.getContainer();if(existing)load(existing);else void assets.ready.then(load);
   let previous: CharacterSnapshot | null = null, speed=0;
   const paused:AnimationGroup[]=[];scope.onDispose(()=>{paused.length=0;});
+  function pauseAnimations(){
+    for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
+    root.metadata.animationCulled=true;
+  }
   return (s: CharacterSnapshot, displayY=s.y) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
+    if(drawDistance){
+      const camera=scene.activeCamera;
+      const wasVisible=root.isEnabled();
+      const range=wasVisible?drawDistance.hide:drawDistance.show;
+      camera?.getViewMatrix();
+      const eye=camera?.globalPosition;
+      const visible=!!eye&&Math.hypot(eye.x-s.x,eye.y-displayY,eye.z-s.z)<=range;
+      if(wasVisible!==visible)root.setEnabled(visible);
+      if(!visible){
+        if(wasVisible)pauseAnimations();
+        previous=null;speed=0;
+        return;
+      }
+    }
     root.position.set(s.x,displayY,s.z);
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
     if(!assets.shouldAnimate(s.x,s.y,s.z)){
-      for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
-      root.metadata.animationCulled=true;
+      pauseAnimations();
       if(root.rotationQuaternion)smoothCharacterRotation(root.rotationQuaternion,s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0),deltaMs,root.rotationQuaternion);
       return;
     }
@@ -123,7 +142,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     if (!next) return;
     if (next!==active) {
       if(!next.isPlaying) {
-        next.start(true);next.weight=0;
+        next.start(true);next.weight=active?0:1;
         playing.add(next);
         const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
         if(Number.isSafeInteger(ordinal)&&!name.startsWith('Jump_')&&name.endsWith('_Loop'))next.goToFrame(next.from+(next.to-next.from)*(ordinal*.61803398875%1));

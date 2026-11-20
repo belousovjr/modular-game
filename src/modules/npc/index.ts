@@ -6,14 +6,17 @@ import { worldModule } from '../world/index.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { createNpcAuthority, downtownPatrols } from './headless.ts';
 
+const DRAW_DISTANCE={show:100,hide:110};
+
 export const npcModule=defineModule({
   id:'npc',title:'Пешеходы',category:'Игра',
   requires:{characters:charactersModule,world:worldModule,simulation:simulationModule},
   setup({core,deps,scope}){
     let stopped=false;scope.onDispose(()=>{stopped=true;});
-    const authority=createNpcAuthority(deps.world.collision,downtownPatrols,8,deps.simulation.snapshot().tick);
+    const authority=createNpcAuthority(deps.world.collision,downtownPatrols,8,deps.simulation.snapshot().tick,'npc',deps.characters.createNpcCharacter);
+    scope.onDispose(authority.dispose);
     deps.simulation.registerSystem(authority.step,scope);
-    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope));
+    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope,DRAW_DISTANCE));
     const render=()=>{for(const [i,s] of authority.snapshot().actors.entries())views[i](s);};
     render();const observer=core.scene.onBeforeRenderObservable.add(render,-1,true);
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(observer));
@@ -21,8 +24,9 @@ export const npcModule=defineModule({
   },
   test:{durationSeconds:8,setup({core,deps,scope,report}){
     const authority=createNpcAuthority(deps.world.collision,downtownPatrols,16,deps.simulation.snapshot().tick,'npc-test');
+    scope.onDispose(authority.dispose);
     deps.simulation.registerSystem(authority.step,scope);
-    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope));
+    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope,DRAW_DISTANCE));
     const camera=core.scene.activeCamera;
     if(camera instanceof ArcRotateCamera){const upper=camera.upperRadiusLimit;scope.onDispose(()=>{camera.upperRadiusLimit=upper;});camera.upperRadiusLimit=150;}
     let visibleMin=16;
@@ -33,10 +37,11 @@ export const npcModule=defineModule({
       visibleMin=Math.min(visibleMin,count);
     });
     scope.onDispose(()=>core.scene.onAfterRenderObservable.remove(visible));
+    const target=new Vector3(25,2,-32);
     const observer=core.scene.onBeforeRenderObservable.add(()=>{
-      for(const [i,s] of authority.snapshot().actors.entries())views[i](s);
       const camera=core.scene.activeCamera;
-      if(camera instanceof ArcRotateCamera){camera.setTarget(new Vector3(25,2,-32));camera.radius=125;}
+      if(camera instanceof ArcRotateCamera){camera.setTarget(target);camera.radius=85;}
+      for(const [i,s] of authority.snapshot().actors.entries())views[i](s);
     },-1,true);
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{const s=authority.snapshot();report({actors:s.actors.length,visibleMin,arrivals:s.arrivals,moving:s.actors.filter(a=>a.moving).length,tick:s.tick});});

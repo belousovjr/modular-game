@@ -1,5 +1,5 @@
 import {World,Body,Box,ConvexPolyhedron,Material,ContactMaterial,Vec3,Heightfield,RaycastVehicle,SAPBroadphase} from 'cannon-es';
-import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
+import {createCharacterAuthorityFactory,type CharacterSnapshot,type CanStand,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
 import {findPedestrianPath} from '../npc/headless.ts';
 import type {CollisionBox,CollisionWorld} from '../world/headless.ts';
 
@@ -121,6 +121,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   let approachPath:{x:number;z:number}[]=[],approachNode=0,lastProgress=startTick,lastDistance=Infinity;
   let character:CharacterSnapshot|null=null,entry={x:0,y:0,z:0,yaw:0},exit={x:0,y:0,z:0,yaw:0},release:VehicleCharacterFrame['release']=null;
   let coasting=false,exitCrawling=false,crawlRight=false;
+  let canStand:CanStand=()=>true;
   const point=(x:number,y:number,z:number)=>{const v=body.quaternion.vmult(new Vec3(x,y-ROOT_OFFSET,z));return {x:v.x+body.position.x,y:v.y+body.position.y,z:v.z+body.position.z};};
   const heading=()=>{const v=body.quaternion.vmult(new Vec3(0,0,1));return Math.atan2(v.x,v.z);};
   const speed=()=>body.velocity.length();
@@ -131,18 +132,22 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
     const outline=[[-1.15,-2.45],[1.15,-2.45],[1.15,2.45],[-1.15,2.45]].map(([x,z])=>[p.x+x*c+z*sn,p.z-x*sn+z*c]);
     return {id:ID,minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),minY:p.y-ROOT_OFFSET,maxY:p.y-ROOT_OFFSET+CAR_GUIDES.height,outline};
   }
-  function standingPoint(){const p=point(CAR_GUIDES.stand.x,0,CAR_GUIDES.stand.z),s=probe(tick,{x:p.x,z:p.z}).snapshot();return {x:s.x,y:s.y,z:s.z,yaw:heading()-Math.PI/2};}
+  function standingPoint(){
+    const p=point(CAR_GUIDES.stand.x,0,CAR_GUIDES.stand.z),s=probe(tick,{x:p.x,z:p.z}).snapshot();
+    if(!canStand(s))throw new Error('Occupied vehicle door');
+    return {x:s.x,y:s.y,z:s.z,yaw:heading()-Math.PI/2};
+  }
   function safeExit(crawl=false){
     if(!crawl){try{return standingPoint();}catch{return null;}}
     for(const side of [-1,1])try{const yaw=heading(),x=body.position.x+side*Math.cos(yaw)*2.6,z=body.position.z-side*Math.sin(yaw)*2.6,p=probe(tick,{x,z}).snapshot();
-      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5)continue;
+      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5||!canStand(p))continue;
       return {x:p.x,y:p.y,z:p.z,yaw:Math.atan2(p.x-body.position.x,p.z-body.position.z)};
     }catch{continue;}
     return null;
   }
   function snapshot():VehicleSnapshot{return Object.freeze({id:ID,tick,position:Object.freeze(Object.values(point(0,0,0))),rotation:Object.freeze([body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]),wheels:Object.freeze(car.wheelInfos.map(w=>{const t=w.worldTransform;return Object.freeze({position:Object.freeze([t.position.x,t.position.y,t.position.z]),rotation:Object.freeze([t.quaternion.x,t.quaternion.y,t.quaternion.z,t.quaternion.w])});})),speed:speed(),steering:steeringAngle,driverId,phase,leftDoor,rightDoor,message});}
   return {
-    observeCharacter(s:CharacterSnapshot){character=s;},
+    observeCharacter(s:CharacterSnapshot,clearance:CanStand=()=>true){character=s;canStand=clearance;},
     receive(value:unknown,owner:string):Receipt{
       if(!value||typeof value!=='object'||Array.isArray(value))return denied('invalid');
       const input:Record<string,unknown>=Object.fromEntries(Object.entries(value));
@@ -182,8 +187,9 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;release=null;syncTerrain();
       if(tick>expires){throttle=steering=0;brake=true;}
       if((phase==='approaching'||phase==='entering')&&overturned()){
-        if(phase==='entering')release=safeExit(true)??entry;
-        phase='parked';driverId=null;approachPath=[];message='overturned';
+        if(phase==='entering')release=safeExit(true)??(canStand(entry)?entry:null);
+        if(phase==='entering'&&!release){phase='driving';message='blocked-exit';}
+        else{phase='parked';driverId=null;approachPath=[];message='overturned';}
       }
       if(phase==='approaching'){
         const target=approachPath[approachNode],distance=target?Math.hypot(s.x-target.x,s.z-target.z):0;
@@ -248,5 +254,5 @@ export function createVehicleConnection(authority:ReturnType<typeof createVehicl
     count++;if(drop&&count%drop===0)return Promise.resolve({accepted:false,reason:'dropped'});seed=(Math.imul(seed,1664525)+1013904223)>>>0;
     const due=authority.snapshot().tick+1+latency+Math.floor(seed/0x100000000*(jitter*2+1))-jitter;
     return new Promise(resolve=>queue.push({due,command:{...command},resolve}));
-  },step(tick:number,character:CharacterSnapshot){authority.observeCharacter(character);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
+  },step(tick:number,character:CharacterSnapshot,canStand?:CanStand){authority.observeCharacter(character,canStand);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
 }

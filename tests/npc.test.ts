@@ -1,3 +1,4 @@
+import {createCharacterAuthorityFactory,createLocalConnection} from '../src/modules/characters/headless.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createNpcAuthority,downtownPatrols,type Patrol} from '../src/modules/npc/headless.ts';
@@ -55,4 +56,43 @@ test('pinned Chicago pedestrian routes stay dry, progress and retain unique auth
   }
   const s=npc.snapshot();assert.equal(new Set(s.actors.map(a=>a.id)).size,16);
   assert.ok(s.arrivals>=16);assert.ok(s.actors.filter(a=>a.moving).length>=12);
+});
+
+test('player and patrol share solid bodies and the patrol submits its own validated move commands',async()=>{
+  const flat={...world,blockers:[],spawn:{x:-2,z:0}};
+  const create=createCharacterAuthorityFactory(flat);
+  const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
+  const connection=createLocalConnection(player);
+  const npc=createNpcAuthority(flat,[{...patrol,points:[[2,0],[-6,0]]}],1,0,'npc',(tick,spawn,identity)=>{
+    const actor=create(tick,spawn,undefined,identity);
+    const wrongOwner=actor.receive({type:'move',characterId:identity.id,sequence:1,tick,x:0,z:0,run:false,jump:false},'local');
+    assert.equal(wrongOwner.reason,'owner');
+    return actor;
+  });
+  try {
+    for(let tick=1;tick<=90;tick++){
+      const playerState=connection.snapshot();
+      const receipt=connection.send({type:'move',characterId:playerState.id,sequence:tick,tick:playerState.tick,
+        x:1,z:0,run:true,jump:tick===40,locomotion:{boost:true,lift:0,flight:null}});
+      connection.step(tick);
+      npc.step(tick);
+      assert.ok((await receipt).accepted);
+      const p=connection.snapshot(),n=npc.snapshot().actors[0];
+      assert.ok(n.x-p.x>=.7-1e-7,'Sprint or jump penetrated an NPC');
+      assert.equal(n.lastSequence,tick);
+    }
+    const before=connection.snapshot().x;
+    assert.ok(before>-1 && npc.snapshot().actors[0].x<1.9);
+    npc.dispose();
+    for(let tick=91;tick<=105;tick++){
+      const receipt=connection.send({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:true,jump:false});
+      connection.step(tick);
+      assert.ok((await receipt).accepted);
+    }
+    assert.ok(connection.snapshot().x>before+1);
+  } finally {
+    npc.dispose();
+    connection.close();
+    player.dispose();
+  }
 });
