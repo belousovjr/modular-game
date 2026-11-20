@@ -59,7 +59,10 @@ test('pinned Chicago pedestrian routes stay dry, progress and retain unique auth
 });
 
 test('player and patrol share solid bodies and the patrol submits its own validated move commands',async()=>{
-  const flat={...world,blockers:[],spawn:{x:-2,z:0}};
+  const flat={...world,spawn:{x:-2,z:0},blockers:[
+    {id:'north',minX:-12,maxX:12,minZ:.75,maxZ:12,minY:0,maxY:3},
+    {id:'south',minX:-12,maxX:12,minZ:-12,maxZ:-.75,minY:0,maxY:3},
+  ]};
   const create=createCharacterAuthorityFactory(flat);
   const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
   const connection=createLocalConnection(player);
@@ -82,7 +85,7 @@ test('player and patrol share solid bodies and the patrol submits its own valida
       assert.equal(n.lastSequence,tick);
     }
     const before=connection.snapshot().x;
-    assert.ok(before>-1 && npc.snapshot().actors[0].x<1.9);
+    assert.ok(before>1 && before<1.4);
     npc.dispose();
     for(let tick=91;tick<=105;tick++){
       const receipt=connection.send({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:true,jump:false});
@@ -95,4 +98,26 @@ test('player and patrol share solid bodies and the patrol submits its own valida
     connection.close();
     player.dispose();
   }
+});
+
+
+test('a patrol turns by command and takes a local detour around a stationary player',()=>{
+  const flat={...world,spawn:{x:0,z:0},blockers:[]};
+  const create=createCharacterAuthorityFactory(flat);
+  const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
+  const npc=createNpcAuthority(flat,[patrol],1,0,'npc',(tick,spawn,identity)=>create(tick,spawn,undefined,identity));
+  let before=npc.snapshot().actors[0],detour=0;
+  for(let tick=1;tick<=500;tick++){
+    player.step(tick);npc.step(tick);
+    const position=npc.snapshot().actors[0];
+    const turn=Math.atan2(Math.sin(position.yaw-before.yaw),Math.cos(position.yaw-before.yaw));
+    assert.ok(Math.abs(turn)<=.12+1e-9);
+    assert.ok(Math.abs(position.x)>=.7-1e-7||Math.abs(position.z)>=.7-1e-7);
+    assert.ok(Math.hypot(position.x-before.x,position.z-before.z)<=.03+1e-7);
+    detour=Math.max(detour,Math.abs(position.z));
+    before=position;
+  }
+  assert.ok(detour>=.7);
+  assert.ok(npc.snapshot().arrivals>=1);
+  npc.dispose();player.dispose();
 });

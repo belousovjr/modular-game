@@ -285,6 +285,10 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       closed=true;
       if(member){people.delete(id);vehicleBlockers.delete(id);}
     },
+    navigationObstacles():readonly CollisionBox[]{
+      const height=HEIGHT[stance];
+      return [...otherPeople(),...vehicles()].filter(box=>box.maxY>y+1e-7&&box.minY<y+height-1e-7);
+    },
     canStandAmongPeople(position: Parameters<CanStand>[0]){
       return !peopleBlock(position.x,position.z,position.y,HEIGHT.standing);
     },

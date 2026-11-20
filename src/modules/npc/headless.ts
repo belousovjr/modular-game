@@ -1,4 +1,5 @@
-import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, LOCOMOTION_SPEEDS, type CharacterIdentity, type CharacterSnapshot } from '../characters/headless.ts';
+import pathfinding from 'javascript-astar';
+import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, LOCOMOTION_SPEEDS, type CharacterIdentity, type CharacterSnapshot, type MoveCommand } from '../characters/headless.ts';
 import type { CollisionWorld } from '../world/headless.ts';
 
 export interface Patrol {
@@ -24,63 +25,123 @@ function navigationBlocked(o:CollisionWorld['blockers'][number],x:number,z:numbe
   return inside;
 }
 
-// A conservative one-metre planning grid; actual movement/collisions stay in character authority.
+type Waypoint={readonly x:number;readonly z:number};
+type NavigationBox=CollisionWorld['blockers'][number];
+type Bounds=CollisionWorld['bounds'];
+
+function segmentClear(blockers:readonly NavigationBox[],a:Waypoint,b:Waypoint,radius:number){
+  const steps=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/.125));
+  for(let i=0;i<=steps;i++){
+    if(blockers.some(box=>navigationBlocked(box,a.x+(b.x-a.x)*i/steps,a.z+(b.z-a.z)*i/steps,radius)))return false;
+  }
+  return true;
+}
+
+function createGrid(bounds:Bounds, obstacles:readonly NavigationBox[], cell:number, radius:number){
+  const width=Math.floor((bounds.maxX-bounds.minX)/cell)+1,depth=Math.floor((bounds.maxZ-bounds.minZ)/cell)+1;
+  const size=width*depth;
+  if(width<1||depth<1||size>20000)throw new Error('NPC navigation budget exceeded');
+  const blockers=obstacles.filter(box=>box.maxX>=bounds.minX-radius&&box.minX<=bounds.maxX+radius&&
+    box.maxZ>=bounds.minZ-radius&&box.minZ<=bounds.maxZ+radius);
+  const point=(id:number):Waypoint=>({x:bounds.minX+(id%width)*cell,z:bounds.minZ+Math.floor(id/width)*cell});
+  const free=new Uint8Array(size);
+  for(let id=0;id<size;id++){
+    const {x,z}=point(id);
+    free[id]=Number(!blockers.some(box=>navigationBlocked(box,x,z,radius)));
+  }
+  const graph=new pathfinding.Graph(Array.from({length:width},(_,x)=>
+    Array.from({length:depth},(_,z)=>free[z*width+x])));
+  const index=(node:{x:number;y:number})=>node.y*width+node.x;
+  const neighbors=graph.neighbors.bind(graph);
+  graph.neighbors=node=>neighbors(node).filter(next=>free[index(next)]&&
+    segmentClear(blockers,point(index(node)),point(index(next)),radius));
+  function find(start:number,goal:number):Waypoint[]|undefined{
+    if(start===goal)return [];
+    const node=(id:number)=>graph.grid[id%width][Math.floor(id/width)];
+    const startNode=node(start);
+    const path=pathfinding.astar.search(graph,startNode,node(goal)).map(index);
+    // The library closes the start node without adding it to the dirty list.
+    graph.markDirty(startNode);
+    if(!path.length)return undefined;
+    return path.filter((id,i)=>i===path.length-1||id-(path[i-1]??start)!==path[i+1]-id).map(point);
+  }
+  return {width,size,free,point,find};
+}
+
 function preparePatrol(world: CollisionWorld, patrol: Patrol) {
   const b=patrol.bounds;
   if(!patrol.id.trim()||![b.minX,b.maxX,b.minZ,b.maxZ].every(Number.isSafeInteger)||b.minX>=b.maxX||b.minZ>=b.maxZ||b.minX<world.bounds.minX||b.maxX>world.bounds.maxX||b.minZ<world.bounds.minZ||b.maxZ>world.bounds.maxZ||patrol.points.length<2||patrol.points.length>32)throw new Error('Invalid NPC patrol');
-  const width=b.maxX-b.minX+1,depth=b.maxZ-b.minZ+1,size=width*depth;
-  if(size>20000)throw new Error('NPC navigation budget exceeded');
-  const blockers=world.blockers.filter(o=>o.maxX>=b.minX&&o.minX<=b.maxX&&o.maxZ>=b.minZ&&o.minZ<=b.maxZ);
-  const free=new Uint8Array(size);
-  const x=(id:number)=>b.minX+id%width,z=(id:number)=>b.minZ+Math.floor(id/width);
-  for(let id=0;id<size;id++)free[id]=Number(!blockers.some(o=>navigationBlocked(o,x(id),z(id))));
-  const neighbours=(id:number)=>[id%width>0?id-1:-1,id%width<width-1?id+1:-1,id>=width?id-width:-1,id<size-width?id+width:-1].filter(i=>i>=0&&free[i]);
+  const grid=createGrid(b,world.blockers,1,.6);
   const points=patrol.points.map(p=>{
     if(p.length!==2||!p.every(Number.isSafeInteger)||p[0]<b.minX||p[0]>b.maxX||p[1]<b.minZ||p[1]>b.maxZ)throw new Error('Invalid NPC waypoint');
-    const id=(p[1]-b.minZ)*width+p[0]-b.minX;
-    if(!free[id])throw new Error('Blocked NPC waypoint');
+    const id=(p[1]-b.minZ)*grid.width+p[0]-b.minX;
+    if(!grid.free[id])throw new Error('Blocked NPC waypoint');
     return id;
   });
   if(new Set(points).size!==points.length)throw new Error('Duplicate NPC waypoint');
   const paths=points.map((goal,index)=>{
-    const start=points[(index+points.length-1)%points.length];
-    const previous=new Int32Array(size).fill(-1),queue=new Int32Array(size);
-    let head=0,tail=1;queue[0]=start;previous[start]=start;
-    while(head<tail&&previous[goal]<0){const id=queue[head++];for(const next of neighbours(id))if(previous[next]<0){previous[next]=id;queue[tail++]=next;}}
-    if(previous[goal]<0)throw new Error('Unreachable NPC waypoint');
-    const path:number[]=[];
-    for(let id=goal;id!==start;id=previous[id])path.push(id);
-    path.reverse();
-    // Keep corners, drop intermediate cells along straight runs.
-    return path.filter((id,i)=>i===path.length-1||i===0||(x(id)-x(path[i-1]))!==(x(path[i+1])-x(id))||(z(id)-z(path[i-1]))!==(z(path[i+1])-z(id))).map(id=>({x:x(id),z:z(id)}));
+    const path=grid.find(points[(index+points.length-1)%points.length],goal);
+    if(!path)throw new Error('Unreachable NPC waypoint');
+    return path;
   });
-  return {points:points.map(id=>({x:x(id),z:z(id)})),paths};
+  return {points:points.map(grid.point),paths};
 }
 
-export function findPedestrianPath(world:CollisionWorld,start:{readonly x:number;readonly z:number},goal:{readonly x:number;readonly z:number}){
-  if(![start.x,start.z,goal.x,goal.z].every(Number.isFinite)||Math.hypot(start.x-goal.x,start.z-goal.z)>24)throw new Error('Invalid pedestrian path');
-  const bounds={minX:Math.max(Math.ceil(world.bounds.minX+1),Math.floor(Math.min(start.x,goal.x))-5),maxX:Math.min(Math.floor(world.bounds.maxX-1),Math.ceil(Math.max(start.x,goal.x))+5),minZ:Math.max(Math.ceil(world.bounds.minZ+1),Math.floor(Math.min(start.z,goal.z))-5),maxZ:Math.min(Math.floor(world.bounds.maxZ-1),Math.ceil(Math.max(start.z,goal.z))+5)};
-  const nearest=(p:typeof start)=>{
-    const candidates=[];
-    for(let x=Math.round(p.x)-2;x<=Math.round(p.x)+2;x++)for(let z=Math.round(p.z)-2;z<=Math.round(p.z)+2;z++)if(x>=bounds.minX&&x<=bounds.maxX&&z>=bounds.minZ&&z<=bounds.maxZ&&!world.blockers.some(o=>navigationBlocked(o,x,z)))candidates.push({x,z});
-    candidates.sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z));
-    if(!candidates.length)throw new Error('Blocked pedestrian path');return candidates[0];
-  };
-  const clear=(a:typeof start,b:typeof start)=>{
-    const steps=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/.15));
-    for(let i=0;i<=steps;i++)if(world.blockers.some(o=>navigationBlocked(o,a.x+(b.x-a.x)*i/steps,a.z+(b.z-a.z)*i/steps,.35)))return false;
-    return true;
-  };
-  if(clear(start,goal))return [{x:goal.x,z:goal.z}];
+function localPath(bounds:Bounds,blockers:readonly NavigationBox[],start:Waypoint,goal:Waypoint,cell:number){
+  const radius=.35;
+  const clear=(a:Waypoint,b:Waypoint)=>segmentClear(blockers,a,b,radius);
+  if(clear(start,goal))return [goal];
+  if(!clear(start,start)||!clear(goal,goal))return undefined;
+  const grid=createGrid(bounds,blockers,cell,radius);
+  function nearest(endpoint:Waypoint){
+    let best=-1,distance=Infinity;
+    for(let id=0;id<grid.size;id++){
+      if(!grid.free[id])continue;
+      const point=grid.point(id),d=Math.hypot(point.x-endpoint.x,point.z-endpoint.z);
+      if(d<distance&&clear(endpoint,point)){best=id;distance=d;}
+    }
+    return best;
+  }
   const a=nearest(start),b=nearest(goal);
-  const path=a.x===b.x&&a.z===b.z?[]:preparePatrol(world,{id:'autowalk',bounds,points:[[a.x,a.z],[b.x,b.z]]}).paths[1];
-  const candidates=[a,...path,{x:goal.x,z:goal.z}],result:typeof candidates=[];
+  if(a<0||b<0)return undefined;
+  const path=grid.find(a,b);
+  if(!path)return undefined;
+  const candidates=[grid.point(a),...path,goal],result:Waypoint[]=[];
   let current=start,index=0;
-  while(index<candidates.length){let next=candidates.length-1;while(next>=index&&!clear(current,candidates[next]))next--;
-    if(next<index)throw new Error('Blocked pedestrian connector');
+  while(index<candidates.length){
+    let next=candidates.length-1;
+    while(next>=index&&!clear(current,candidates[next]))next--;
+    if(next<index)return undefined;
     result.push(candidates[next]);current=candidates[next];index=next+1;
   }
   return result;
+}
+
+export function findPedestrianPath(world:CollisionWorld,start:Waypoint,goal:Waypoint){
+  const inside=({x,z}:Waypoint)=>x>=world.bounds.minX+.35&&x<=world.bounds.maxX-.35&&
+    z>=world.bounds.minZ+.35&&z<=world.bounds.maxZ-.35;
+  if(!inside(start)||!inside(goal)||Math.hypot(start.x-goal.x,start.z-goal.z)>24)throw new Error('Invalid pedestrian path');
+  const path=localPath(localBounds(world.bounds,start,goal,5),world.blockers,start,goal,1);
+  if(!path)throw new Error('Blocked pedestrian path');
+  return path;
+}
+
+function localBounds(world:Bounds,start:Waypoint,goal:Waypoint,margin:number):Bounds{
+  return {minX:Math.max(Math.ceil(world.minX+.35),Math.floor(Math.min(start.x,goal.x))-margin),
+    maxX:Math.min(Math.floor(world.maxX-.35),Math.ceil(Math.max(start.x,goal.x))+margin),
+    minZ:Math.max(Math.ceil(world.minZ+.35),Math.floor(Math.min(start.z,goal.z))-margin),
+    maxZ:Math.min(Math.floor(world.maxZ-.35),Math.ceil(Math.max(start.z,goal.z))+margin)};
+}
+
+function pedestrianMove(s:CharacterSnapshot,target:Waypoint|undefined):MoveCommand{
+  const dx=target?target.x-s.x:0,dz=target?target.z-s.z:0;
+  const distance=Math.hypot(dx,dz);
+  const desired=distance?Math.atan2(dx,dz):s.yaw;
+  const turn=Math.atan2(Math.sin(desired-s.yaw),Math.cos(desired-s.yaw));
+  const yaw=s.yaw+Math.max(-.12,Math.min(.12,turn));
+  const speedScale=Math.max(0,Math.cos(turn))/Math.max(distance,LOCOMOTION_SPEEDS.walk/60);
+  return {type:'move',characterId:s.id,sequence:s.lastSequence+1,tick:s.tick,x:dx*speedScale,z:dz*speedScale,
+    run:false,jump:false,facing:Math.atan2(Math.sin(yaw),Math.cos(yaw))};
 }
 
 type CreatePedestrian = (tick:number,spawn:{x:number;z:number},identity:CharacterIdentity)=>
@@ -103,7 +164,8 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
       const point=nextSpawn[zone]++;
       try {
         const authority=create(startTick,route.points[point],identity);
-        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0};
+        const detour:Waypoint[]=[];
+        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0,detour,nextPlan:startTick};
       } catch(error) {
         if(!(error instanceof CharacterSpawnBlockedError))throw error;
       }
@@ -127,19 +189,43 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
       for(const [i,actor] of actors.entries()){
         const s=actor.authority.snapshot();
         let path=actor.route.paths[actor.goal],target=path[actor.node];
-        if(target&&Math.hypot(target.x-s.x,target.z-s.z)<.08){
+        while(actor.detour.length&&Math.hypot(actor.detour[0].x-s.x,actor.detour[0].z-s.z)<.08)actor.detour.shift();
+        if(!actor.detour.length&&target&&Math.hypot(target.x-s.x,target.z-s.z)<.08){
           actor.node++;
-          if(actor.node===path.length){actor.arrivals++;actor.goal=(actor.goal+1)%actor.route.paths.length;actor.node=0;actor.waitUntil=tick+(actor.goal%4===0?45+i%3*15:0);}
+          if(actor.node===path.length){
+            actor.arrivals++;actor.goal=(actor.goal+1)%actor.route.paths.length;actor.node=0;
+            actor.waitUntil=tick+(actor.goal%4===0?45+i%3*15:0);
+          }
           path=actor.route.paths[actor.goal];target=path[actor.node];
         }
-        const dx=target?target.x-s.x:0,dz=target?target.z-s.z:0;
-        const scale=tick<actor.waitUntil?0:1/Math.max(Math.hypot(dx,dz),LOCOMOTION_SPEEDS.walk/60);
-        const receipt=actor.authority.receive({type:'move',characterId:s.id,sequence:s.lastSequence+1,tick:s.tick,
-          x:dx*scale,z:dz*scale,run:false,jump:false},s.ownerId);
+        let steering:Waypoint|undefined=actor.detour[0]??target;
+        if(tick<actor.waitUntil)steering=undefined;
+        if(steering&&target){
+          const obstacles=actor.authority.navigationObstacles();
+          const dx=steering.x-s.x,dz=steering.z-s.z,scale=Math.min(1,2.5/(Math.hypot(dx,dz)||1));
+          const ahead={x:s.x+dx*scale,z:s.z+dz*scale};
+          if(!segmentClear(obstacles,s,ahead,.35)){
+            steering=undefined;
+            if(tick>=actor.nextPlan){
+              actor.nextPlan=tick+12+i%3;
+              const dx=target.x-s.x,dz=target.z-s.z,scale=Math.min(1,5/(Math.hypot(dx,dz)||1));
+              const rejoin={x:s.x+dx*scale,z:s.z+dz*scale};
+              const bounds=localBounds(world.bounds,s,rejoin,2);
+              const staticBoxes=world.blockers.filter(box=>box.maxY>s.y+.3&&box.minY<s.y+1.8&&
+                box.maxX>=bounds.minX-.35&&box.minX<=bounds.maxX+.35&&box.maxZ>=bounds.minZ-.35&&box.minZ<=bounds.maxZ+.35);
+              actor.detour=localPath(bounds,[...staticBoxes,...obstacles],s,rejoin,.25)??[];
+              steering=actor.detour[0];
+            }
+          }
+        }
+        const command=pedestrianMove(s,steering);
+        const receipt=actor.authority.receive(command,s.ownerId);
         if(!receipt.accepted)throw new Error(`NPC intent rejected: ${receipt.reason}`);
         actor.authority.step(tick);
-        actor.stalled=tick>=actor.waitUntil&&!actor.authority.snapshot().moving?actor.stalled+1:0;
-        // shortcut: a blocked route pauses and retries, add dynamic replanning if patrols need to overtake.
+        const after=actor.authority.snapshot();
+        const progress=steering?Math.hypot(steering.x-s.x,steering.z-s.z)-Math.hypot(steering.x-after.x,steering.z-after.z):0;
+        actor.stalled=steering&&progress<.003&&Math.abs(command.x)+Math.abs(command.z)>.1 ? actor.stalled+1 : 0;
+        // shortcut: if the collision solver sees an obstacle outside the planar map, wait and retry.
         if(actor.stalled>=120)actor.waitUntil=tick+120;
       }
     },
