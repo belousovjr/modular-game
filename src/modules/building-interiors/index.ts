@@ -46,7 +46,7 @@ export const buildingInteriorsModule = defineModule({
       opening = false;
       deps.materials.setDoorway(door ?? null);
     }
-    function createDoor(door: BuildingDoor, profile: BuildingProfile, owner: Scope) {
+    function createDoor(door: BuildingDoor, owner: Scope) {
       const {tx,tz}=door;
       const part = (name:string, surface:string, boxes:readonly Box[]) => {
         const positions:number[]=[], indices:number[]=[], uvs:number[]=[];
@@ -75,10 +75,7 @@ export const buildingInteriorsModule = defineModule({
 
       // Match the baked entrance: 25 cm trim, 12.5 cm meeting stile and 6.25 cm handles.
       const half=door.width/2;
-      const floorY = profile.origin[1] + profile.entrance.base + ENTRANCE_FLOOR_OFFSET;
-      // Keep the foot of each jamb above the translucent floor and clear of its depth plane.
-      const jambBottom = Math.max(0, floorY - door.y + .002);
-      const frame=part('frame','interior-door-frame',doorFrameParts(door,jambBottom));
+      const frame=part('frame','interior-door-frame',doorFrameParts(door));
       frame.position.set(door.x,door.y,door.z);
       frame.freezeWorldMatrix();
       const leaves: Leaf[] = [];
@@ -105,7 +102,7 @@ export const buildingInteriorsModule = defineModule({
       // Streaming follows the player when present, with room for the orbit camera.
       deps.streaming.registerSection(`building-interiors/${id}`, bounds, owner => {
         const door = doors.get(id);
-        const leaves = door ? createDoor(door,profile,owner) : [];
+        const leaves = door ? createDoor(door,owner) : [];
         let layout: {floors: ReturnType<typeof partitionInterior>;openings: ReturnType<typeof buildInterior>['openings']} | undefined;
         const rendered = new Map<number,{owner:ReturnType<typeof createScope>;slab:Mesh | undefined}>();
         function releaseFloors() {

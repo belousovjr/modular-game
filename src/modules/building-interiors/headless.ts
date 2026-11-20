@@ -667,23 +667,29 @@ export function createInteriorCollision(sources:readonly BuildingInteriorSource[
 
 export type DoorPart = readonly [left:number,right:number,bottom:number,top:number,front:number,back:number];
 export const ENTRANCE_SWING = 5*Math.PI/12;
+const DOOR_BOTTOM = ENTRANCE_FLOOR_OFFSET + .012;
+const HEADER_LIP = .008;
+const LEAF_CLEARANCE = .012;
 
 export function doorLeafParts(door:BuildingDoor,sign:number):readonly DoorPart[] {
   const meeting=-sign*door.width/2, gap=.004;
   const left=Math.min(0,meeting+sign*gap),right=Math.max(0,meeting+sign*gap);
   const handle=meeting+sign*.25;
+  const top=door.height-HEADER_LIP-LEAF_CLEARANCE;
+  // Keep the stile off the leaf's end faces and meeting edge.
+  const inset=.006;
   return [
-    [left,right,0,door.height,-.004,.076],
-    [Math.max(left,meeting-.0625),Math.min(right,meeting+.0625),0,door.height,-.03,.10],
+    [left,right,DOOR_BOTTOM,top,-.004,.076],
+    [Math.max(left+inset,meeting-.0625),Math.min(right-inset,meeting+.0625),DOOR_BOTTOM+inset,top-inset,-.03,.10],
     [handle-.03125,handle+.03125,1,1.5,-.0625,.135],
   ];
 }
 
-export function doorFrameParts(door:BuildingDoor,jambBottom=0):readonly DoorPart[] {
+export function doorFrameParts(door:BuildingDoor):readonly DoorPart[] {
   const half=door.width/2,trim=.25,top=door.height;
-  return [[-half-trim,-half,jambBottom,top+trim,-.09375,.86],
-    [half,half+trim,jambBottom,top+trim,-.09375,.86],
-    [-half,half,top,top+trim,-.09375,.86]];
+  return [[-half-trim,-half,DOOR_BOTTOM,top+trim,-.09375,.86],
+    [half,half+trim,DOOR_BOTTOM,top+trim,-.09375,.86],
+    [-half,half,top-HEADER_LIP,top+trim,-.09375,.86]];
 }
 
 function doorBoxes(door:BuildingDoor, parts:readonly DoorPart[], hinge:number,angle:number) {

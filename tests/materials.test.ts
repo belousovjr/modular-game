@@ -8,6 +8,7 @@ import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { defaultPixelShader } from '@babylonjs/core/Shaders/default.fragment.js';
 import { defaultVertexShader } from '@babylonjs/core/Shaders/default.vertex.js';
+import { DoorwayCut } from '../src/modules/materials/doorway.ts';
 import { SurfaceScale } from '../src/modules/materials/surface-scale.ts';
 import { bumpFragment } from '@babylonjs/core/Shaders/ShadersInclude/bumpFragment.js';
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js';
@@ -167,4 +168,16 @@ test('surface scale hooks match installed Babylon shaders without adding an extr
   assert.ok(fragment.CUSTOM_FRAGMENT_DEFINITIONS.includes('return vec4(0.5, 0.5, 1.0, 1.0)'));
   for (const point of Object.keys(vertex)) assert.ok(defaultVertexShader.shader.includes(`#define ${point}`));
   assert.equal(plugin.getCustomCode('compute'), null);
+});
+
+
+test('doorway cut extends below the threshold only on vertical geometry',t=>{
+  const engine=new NullEngine(),scene=new Scene(engine);
+  t.after(()=>{scene.dispose();engine.dispose();});
+  const cut=new DoorwayCut(new StandardMaterial('doorway',scene));
+  const shader=cut.getCustomCode('fragment')?.CUSTOM_FRAGMENT_BEFORE_LIGHTS;
+  assert.ok(shader);
+  assert.match(shader,/float doorBottom=\.015;/);
+  assert.match(shader,/#ifdef NORMAL[\s\S]+if\(abs\(normalize\(vNormalW\)\.y\)<\.25\)doorBottom=-\.025;\s+#endif/);
+  assert.match(shader,/doorLocal\.y>doorBottom/);
 });

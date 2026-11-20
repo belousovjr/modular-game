@@ -30,7 +30,12 @@ export class DoorwayCut extends MaterialPluginBase {
     return type==='fragment'?{CUSTOM_FRAGMENT_DEFINITIONS:'uniform vec4 doorwayCenter; uniform vec4 doorwayAxis;',CUSTOM_FRAGMENT_BEFORE_LIGHTS:`
       if(doorwayCenter.w>0.){
         vec3 doorLocal=vPositionW-doorwayCenter.xyz;
-        if(doorLocal.y>.015 && doorLocal.y<doorwayCenter.w
+        float doorBottom=.015;
+        #ifdef NORMAL
+          // Cut both wall skins below the threshold without cutting the floor.
+          if(abs(normalize(vNormalW).y)<.25)doorBottom=-.025;
+        #endif
+        if(doorLocal.y>doorBottom && doorLocal.y<doorwayCenter.w
           && abs(dot(doorLocal.xz,doorwayAxis.xy))<doorwayAxis.z
           && abs(dot(doorLocal.xz,vec2(-doorwayAxis.y,doorwayAxis.x)))<.95)discard;
       }`}:null;

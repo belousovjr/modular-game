@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
 import {createCameraObstacleSweep} from '../src/modules/player-control/camera-obstacles.ts';
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
-import {type DoorPose, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
+import {type DoorPose, doorFrameParts, doorLeafParts, ENTRANCE_FLOOR_OFFSET, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
@@ -67,6 +67,20 @@ test('window reveal edges are perpendicular to the inner face at either end of a
     }
   }
   assert.equal(depthEdges,32);
+});
+
+test('entrance metal clears the first floor and the header overlaps the top of the opening',()=>{
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const [left,right,header]=doorFrameParts(door);
+  for(const jamb of [left,right])assert.ok(jamb[2]-ENTRANCE_FLOOR_OFFSET>.01);
+  assert.ok(header[2]<door.height);
+  for(const sign of [-1,1]){
+    const [leaf,stile]=doorLeafParts(door,sign);
+    assert.ok(leaf[2]-ENTRANCE_FLOOR_OFFSET>.01);
+    assert.ok(header[2]-leaf[3]>.01);
+    assert.ok(stile[0]>leaf[0]&&stile[1]<leaf[1]);
+    assert.ok(stile[2]>leaf[2]&&stile[3]<leaf[3]);
+  }
 });
 
 test('entrance frame suppresses the entire intersecting window on the facade and in the interior', () => {
