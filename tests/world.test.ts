@@ -268,3 +268,37 @@ test('grass follows authored slopes, keeps stable roots and reduces geometry wit
   move(0, 3);
   assert.deepEqual(active(), near);
 });
+
+test('underwater view attaches when the near plane crosses water and detaches over dry ground', async t => {
+  const { FreeCamera } = await import('@babylonjs/core/Cameras/freeCamera.js');
+  const { createUnderwaterView } = await import('../src/modules/world/underwater.ts');
+  const engine = new NullEngine(), scene = new Scene(engine), owner = createScope();
+  t.after(() => { owner.dispose(); scene.dispose(); engine.dispose(); });
+  const camera = new FreeCamera('waterline-test', new Vector3(0, 1, 0), scene);
+  camera.minZ = .1;
+  createUnderwaterView(scene, {
+    level: 0,
+    triangles: [[-2,0,-2,2,0,-2,0,0,2]],
+  }, owner);
+  const frame = () => {
+    camera.getViewMatrix();
+    camera.getProjectionMatrix();
+    scene.onBeforeCameraRenderObservable.notifyObservers(camera);
+  };
+
+  frame();
+  assert.equal(engine.postProcesses.length, 0);
+  camera.position.y = .02;
+  frame();
+  assert.equal(engine.postProcesses.length, 1);
+  const post = engine.postProcesses[0];
+  for(let i=0;!post.isReady()&&i<50;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  frame();
+  assert.equal(camera._getFirstPostProcess(), post);
+  camera.position.set(4,-1,0);
+  frame();
+  assert.equal(camera._getFirstPostProcess(), null);
+  assert.equal(engine.postProcesses.length, 1);
+  owner.dispose();
+  assert.equal(engine.postProcesses.length, 0);
+});

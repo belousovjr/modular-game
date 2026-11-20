@@ -23,6 +23,7 @@ import {aviationLightPositions,createAviationLights} from './aviation-lights.ts'
 import reviewRoute from './data/downtown/review-route.json' with {type:'json'};
 import district from './data/downtown/district.json' with {type:'json'};
 import {cityCollision} from './headless.ts';
+import {createUnderwaterView} from './underwater.ts';
 import {geometryModule} from '../geometry/index.ts';
 import {distantSurfaces,groupDistantSurfaces,groupStreetSurfaces} from './distant-surfaces.ts';
 import {createElement} from 'react';
@@ -190,6 +191,7 @@ export const worldModule = defineModule({
     }
     const detailRange={load:36,unload:46,unloadDelayMs:250};
     const collision=cityCollision(city);
+    if(collision.water)createUnderwaterView(core.scene,collision.water,scope);
     const doorwayIds = new Set(collision.doors?.map(door => door.id));
     const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
     for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
