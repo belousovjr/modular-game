@@ -116,11 +116,12 @@ export const buildingInteriorsModule = defineModule({
         function loadFloor(level:number,floor:ReturnType<typeof partitionInterior>[number]) {
           const resources=createScope();
           const prefix=`building-interiors/${id}/floor/${level}`;
-          const metadata={buildingInterior:true,buildingInteriorLevel:level,shadowCaster:false,shadowReceiver:false};
+          const metadata={buildingInterior:true,buildingInteriorLevel:level,shadowCaster:false};
           const mesh=(name:string,material:string,geometry:{positions:number[];indices:number[];uvs?:number[]})=>{
             if (!geometry.indices.length) return;
             const result=deps.geometry.createSurfaceMesh(prefix+name,material,geometry.positions,geometry.indices,resources,geometry.uvs);
             result.metadata={...result.metadata,...metadata};
+            if (material==='interior-glass') result.metadata.shadowReceiver=false;
             result.freezeWorldMatrix();
             return result;
           };
