@@ -1,4 +1,4 @@
-import { buildStairs, doorFrameParts, doorLeafParts, ENTRANCE_SWING, type DoorPose } from './headless.ts';
+import { createInteriorCollision, createEntranceMotion, type InteriorQueryBounds, buildStairs, doorFrameParts, doorLeafParts, ENTRANCE_SWING, type DoorPose } from './headless.ts';
 import { floorInRange, partitionInterior } from './floor-lod.ts';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
@@ -14,7 +14,7 @@ import { buildInterior, ENTRANCE_FLOOR_OFFSET, nearInterior } from './shell.ts';
 
 type Leaf = {mesh:Mesh; direction:number};
 type Box = readonly [number,number,number,number,number,number];
-export type {DoorPose} from './headless.ts';
+export type {DoorPose,InteriorCollisionBox,InteriorQueryBounds} from './headless.ts';
 type Point = {x:number; y:number; z:number};
 
 export const buildingInteriorsModule = defineModule({
@@ -27,6 +27,8 @@ export const buildingInteriorsModule = defineModule({
       update:(point:Point | undefined,opacity:number,actor:Point | null)=>void;
     }>();
     const doors = new Map(deps.world.collision.doors?.map(door=>[door.id,door]));
+    const collision=createInteriorCollision(deps.world.getBuildingInteriorSources());
+    const doorView=createEntranceMotion(deps.world.collision.doors??[]);
     let presentedDoors:readonly DoorPose[]|undefined;
     let presentedById=new Map<string,DoorPose>();
     let doorway: BuildingDoor | undefined;
@@ -229,6 +231,12 @@ export const buildingInteriorsModule = defineModule({
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {
+      collision,
+      cameraObstacles(bounds:InteriorQueryBounds) {
+        const result=collision.along(bounds);
+        result.push(...doorView.viewAlong(bounds,presentedById));
+        return result;
+      },
       presentDoorSnapshot(snapshot:readonly DoorPose[]|undefined) {
         if (snapshot===presentedDoors) return;
         presentedDoors=snapshot;

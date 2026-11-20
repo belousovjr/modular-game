@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
+import {createCameraObstacleSweep} from '../src/modules/player-control/camera-obstacles.ts';
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
-import {floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
+import {type DoorPose, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
 import {buildInterior, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
@@ -254,6 +255,30 @@ test('authority climbs both flights and lands on the upper slab independently of
   walk(at(right,landing));
   walk(at(right,-.6));
   assert.ok(Math.abs(actor.snapshot().y-4)<.01);
+});
+
+test('the orbit camera retracts below a slab and can pass through a clear shaft opening', () => {
+  const building={...source,profile:{...source.profile,elevatorCount:1}};
+  const shaft=buildInterior(building).openings.find(o=>o.kind==='elevator');
+  assert.ok(shaft);
+  const collision=createInteriorCollision([building]);
+  const sweep=createCameraObstacleSweep([],collision.along);
+  const arm={x:0,y:3,z:0};
+  const hit=sweep({x:5,y:2.5,z:5},arm,3);
+  assert.ok(Math.abs(hit*3-1.03)<1e-9);
+  assert.equal(sweep({x:(shaft.minX+shaft.maxX)/2,y:2.5,z:(shaft.minZ+shaft.maxZ)/2},arm,3),1);
+  assert.equal(sweep({x:5,y:2.5,z:5},{x:0,y:-.5,z:0},.5),1);
+});
+
+test('camera sweep uses the presented open or closed entrance leaf pose', () => {
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const entrance=createEntranceMotion([door]);
+  const poses=new Map<string,DoorPose>();
+  const sweep=createCameraObstacleSweep([],bounds=>entrance.viewAlong(bounds,poses));
+  const target={x:0,y:1.2,z:1.5},arm={x:0,y:0,z:-3};
+  assert.ok(sweep(target,arm,3)<.5);
+  poses.set(door.id,{id:door.id,left:1,right:1});
+  assert.equal(sweep(target,arm,3),1);
 });
 
 test('local collision cache can revisit an evicted building and preserves its floor contacts', () => {

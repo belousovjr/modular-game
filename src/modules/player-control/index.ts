@@ -6,13 +6,14 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { KeyboardEventTypes } from '@babylonjs/core/Events/keyboardEvents.js';
 import { defineModule } from '../../core/context.ts';
+import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { charactersModule,type CharacterStance } from '../characters/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
 import { pedestrianBlockers, worldModule } from '../world/index.ts';
 
 export const playerControlModule = defineModule({
   id: 'player-control', title: 'Управление персонажем', category: 'Игра',
-  requires: { characters: charactersModule, rendering: objectRenderingModule, world: worldModule },
+  requires: { characters: charactersModule, interiors: buildingInteriorsModule, rendering: objectRenderingModule, world: worldModule },
   setup({ core, deps, scope }) {
     scope.onDispose(core.panels.register('player-control','Управление',createElement(ControlPanel)));
     const previous = core.scene.activeCamera;
@@ -38,7 +39,7 @@ export const playerControlModule = defineModule({
       ...camera.movement.input.inputMap.filter(entry=>entry.source!=='pointer'),
     ];
     const groundSweep=createCameraGroundSweep(deps.world.collision);
-    const obstacleSweep=createCameraObstacleSweep(pedestrianBlockers(deps.world.collision));
+    const obstacleSweep=createCameraObstacleSweep(pedestrianBlockers(deps.world.collision),deps.interiors.cameraObstacles);
     const arm=Vector3.Zero();
     let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();

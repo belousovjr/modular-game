@@ -39,7 +39,8 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
   return createCharacterAuthorityFactory(world)(startTick);
 }
 
-export function createCharacterAuthorityFactory(world: CollisionWorld, interiorSources:readonly BuildingInteriorSource[] = []) {
+export function createCharacterAuthorityFactory(world: CollisionWorld, interiorSources:readonly BuildingInteriorSource[] = [],
+  interiors=createInteriorCollision(interiorSources)) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
@@ -116,7 +117,6 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  const interiors=createInteriorCollision(interiorSources);
   return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');

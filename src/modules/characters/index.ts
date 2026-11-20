@@ -21,7 +21,7 @@ export const charactersModule = defineModule({
   requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule, interiors: buildingInteriorsModule },
   setup({ core, deps, scope }) {
     let stopped=false;
-    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources());
+    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision);
     const start = deps.simulation.snapshot().tick;
     const position = readLocalPosition();
     const authority = createAuthority(start, undefined, position);
@@ -41,11 +41,15 @@ export const charactersModule = defineModule({
     const render = createView(scope);
     const stairHeight=createStairHeight();
     let displayY=stairHeight(connection.snapshot(),0);
-    const smoothing=core.onFrame.add(delta=>{displayY=stairHeight(connection.snapshot(),delta);});
+    deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
+    const smoothing=core.onFrame.add(delta=>{
+      const snapshot=connection.snapshot();
+      displayY=stairHeight(snapshot,delta);
+      deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
+    });
     scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {
       const snapshot=connection.snapshot();
-      deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
       render(snapshot,displayY);
     };
     scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));

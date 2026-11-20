@@ -299,12 +299,12 @@ export function cutFloor(footprint: readonly Point[], triangles: readonly number
 
 
 type Vertex = readonly [across:number,height:number,inward:number];
-type StairCollision = CollisionBox & {slope?: {
+export type InteriorCollisionBox = CollisionBox & {slope?: {
   x:number;z:number;dx:number;dz:number;
   low0:number;low1:number;high0:number;high1:number;
 }};
 
-export function buildStairs(profile:BuildingProfile, openings:readonly Opening[], low:number, high:number, collision?:StairCollision[]) {
+export function buildStairs(profile:BuildingProfile, openings:readonly Opening[], low:number, high:number, collision?:InteriorCollisionBox[]) {
   const steps={positions:[] as number[],indices:[] as number[]};
   const rails={positions:[] as number[],indices:[] as number[],uvs:[] as number[]};
   const [ox,,oz]=profile.origin;
@@ -421,6 +421,19 @@ export function interiorLayout({profile,facade}:Pick<BuildingInteriorSource,'pro
 type Slab = {readonly minY:number;readonly maxY:number};
 type InteriorContact = {readonly slabs:readonly Slab[];readonly boxes:readonly CollisionBox[];readonly onStairs:boolean};
 type Position = {x:number;y:number;z:number};
+export type InteriorQueryBounds = Rectangle & Slab;
+
+function touchesBounds(a:Rectangle,b:Rectangle) {
+  return a.maxX>=b.minX&&a.minX<=b.maxX&&a.maxZ>=b.minZ&&a.minZ<=b.maxZ;
+}
+
+function candidatesIn<T>(cells:ReadonlyMap<string,T[]>,cell:number,bounds:Rectangle) {
+  const result=new Set<T>();
+  for(let x=Math.floor(bounds.minX/cell);x<=Math.floor(bounds.maxX/cell);x++)
+    for(let z=Math.floor(bounds.minZ/cell);z<=Math.floor(bounds.maxZ/cell);z++)
+      for(const candidate of cells.get(`${x}/${z}`)??[])result.add(candidate);
+  return result;
+}
 export type DoorPose = {readonly id:string;readonly left:number;readonly right:number};
 
 function rectangleBox(id:string,outline:number[][],minY:number,maxY:number):CollisionBox {
@@ -481,7 +494,7 @@ export function createInteriorCollision(sources:readonly BuildingInteriorSource[
       doors:new Map<number,CollisionBox[]>(),
     }));
     const stairs=openings.filter(o=>o.kind==='staircase').map(opening=>({
-      opening,levels:new Map<number,StairCollision[]>(),
+      opening,levels:new Map<number,InteriorCollisionBox[]>(),
     }));
     function shaftParts(opening:Opening,level?:number) {
       const result:CollisionBox[]=[];
@@ -527,8 +540,9 @@ export function createInteriorCollision(sources:readonly BuildingInteriorSource[
       }
       return low;
     }
+    const toLocal=(x:number,z:number):Point=>[(x-ox)*cos-(z-oz)*sin,(x-ox)*sin+(z-oz)*cos];
     function horizontal(x:number,z:number) {
-      const u=(x-ox)*cos-(z-oz)*sin, v=(x-ox)*sin+(z-oz)*cos;
+      const [u,v]=toLocal(x,z);
       const inside=(o:Rectangle,pad=0)=>u>=o.minX-pad&&u<=o.maxX+pad&&v>=o.minZ-pad&&v<=o.maxZ+pad;
       return {
         contains:contains(u,v),cutout:openings.some(o=>inside(o)),
@@ -536,8 +550,61 @@ export function createInteriorCollision(sources:readonly BuildingInteriorSource[
         stairs:stairs.filter(({opening})=>inside(opening,.45)),
       };
     }
+    function shaftBoxes(shaft:typeof shafts[number],first:number,last:number,minY:number,maxY:number) {
+      shaft.walls??=shaftParts(shaft.opening);
+      const parts=[...shaft.walls];
+      for(let i=first;i<=last;i++){
+        if(levels[i]>maxY||(levels[i+1]??roof.minY)<minY)continue;
+        parts.push(...remember(shaft.doors,i,8,()=>shaftParts(shaft.opening,i)));
+      }
+      return parts;
+    }
+    function stairBoxes(stair:typeof stairs[number],first:number,last:number,minY:number,maxY:number) {
+      const parts:InteriorCollisionBox[]=[];
+      for(let i=first;i<=last&&i+1<levels.length;i++){
+        const low=levels[i],high=levels[i+1];
+        if(high+1<minY||low-.25>maxY)continue;
+        parts.push(...remember(stair.levels,i,8,()=>{
+          const result:InteriorCollisionBox[]=[];
+          buildStairs(profile,[stair.opening],low,high,result);
+          return result;
+        }));
+      }
+      return parts;
+    }
+    const slabOutlines=new Map<boolean,CollisionBox[]>();
+    function along(bounds:InteriorQueryBounds,result:InteriorCollisionBox[]) {
+      const {minY,maxY}=bounds;
+      const first=levelAt(minY-1.1),end=levelAt(maxY+.25);
+      const local=[toLocal(bounds.minX,bounds.minZ),toLocal(bounds.minX,bounds.maxZ),
+        toLocal(bounds.maxX,bounds.minZ),toLocal(bounds.maxX,bounds.maxZ)];
+      const area={minX:Math.min(...local.map(p=>p[0])),maxX:Math.max(...local.map(p=>p[0])),
+        minZ:Math.min(...local.map(p=>p[1])),maxZ:Math.max(...local.map(p=>p[1]))};
+      const vertical=(slab:Slab)=>slab.minY<=maxY&&slab.maxY>=minY;
+      function addSlab(slab:Slab,cut:boolean) {
+        if (!vertical(slab))return;
+        const shapes=remember(slabOutlines,cut,2,()=>{
+          const points=cut ? cutFloor(localFootprint,footprint,openings) : footprint.map(index=>localFootprint[index]);
+          const shapes:CollisionBox[]=[];
+          for(let i=0;i<points.length;i+=3){
+            const outline=points.slice(i,i+3).map(([x,z])=>[ox+x*cos+z*sin,oz-x*sin+z*cos]);
+            const box=rectangleBox(`${source.id}/slab`,outline,0,0);
+            if(box.minX<box.maxX&&box.minZ<box.maxZ)shapes.push(box);
+          }
+          return shapes;
+        });
+        for(const shape of shapes)if(touchesBounds(bounds,shape))result.push({...shape,...slab});
+      }
+      addSlab(slabs[0],false);
+      addSlab(roof,false);
+      for(let i=Math.max(1,first);i<=end+1&&i<slabs.length;i++)addSlab(slabs[i],openings.length>0);
+      for(const shaft of shafts)if(touchesBounds(area,shaft.opening))
+        for(const box of shaftBoxes(shaft,first,end,minY,maxY))if(vertical(box)&&touchesBounds(bounds,box))result.push(box);
+      for(const stair of stairs)if(touchesBounds(area,stair.opening))
+        for(const box of stairBoxes(stair,first,end,minY,maxY))if(vertical(box)&&touchesBounds(bounds,box))result.push(box);
+    }
     let last: {x:number;z:number;result:ReturnType<typeof horizontal>} | undefined;
-    return {slabs,levels,shaftParts,levelAt,roof,queryXZ(x:number,z:number){
+    return {slabs,levels,shaftBoxes,stairBoxes,along,levelAt,roof,queryXZ(x:number,z:number){
       if(last?.x===x&&last.z===z)return last.result;
       const result=horizontal(x,z);
       last={x,z,result};
@@ -565,38 +632,32 @@ export function createInteriorCollision(sources:readonly BuildingInteriorSource[
         }
       }
       const close=(b:CollisionBox)=>x>b.minX-.4&&x<b.maxX+.4&&z>b.minZ-.4&&z<b.maxZ+.4&&b.maxY>=minY&&b.minY<=maxY;
-      for(const shaft of horizontal.shafts){
-        shaft.walls??=data.shaftParts(shaft.opening);
-        for(const wall of shaft.walls)if(close(wall))boxes.push(wall);
-        for(let i=first;i<=last;i++){
-          if(data.levels[i]>maxY||(data.levels[i+1]??data.roof.minY)<minY)continue;
-          const parts=remember(shaft.doors,i,8,()=>data.shaftParts(shaft.opening,i));
-          for(const wall of parts)if(close(wall))boxes.push(wall);
-        }
-      }
+      for(const shaft of horizontal.shafts)
+        for(const wall of data.shaftBoxes(shaft,first,last,minY,maxY))if(close(wall))boxes.push(wall);
       for(const stair of horizontal.stairs){
         onStairs=true;
-        for(let i=first;i<=last&&i+1<data.levels.length;i++){
-          const low=data.levels[i],high=data.levels[i+1];
-          if(high+1<minY||low-.25>maxY)continue;
-          const parts=remember(stair.levels,i,8,()=>{
-            const result:StairCollision[]=[];
-            buildStairs(p,[stair.opening],low,high,result);
-            return result;
-          });
-          for(const part of parts)if(close(part)){
-            const span=part.slope;
-            if(!span){boxes.push(part);continue;}
-            const t=Math.max(0,Math.min(1,((x-span.x)*span.dx+(z-span.z)*span.dz)/(span.dx*span.dx+span.dz*span.dz)));
-            boxes.push({...part,minY:span.low0+(span.low1-span.low0)*t,maxY:span.high0+(span.high1-span.high0)*t});
-          }
+        for(const part of data.stairBoxes(stair,first,last,minY,maxY))if(close(part)){
+          const span=part.slope;
+          if(!span){boxes.push(part);continue;}
+          const t=Math.max(0,Math.min(1,((x-span.x)*span.dx+(z-span.z)*span.dz)/(span.dx*span.dx+span.dz*span.dz)));
+          boxes.push({...part,minY:span.low0+(span.low1-span.low0)*t,maxY:span.high0+(span.high1-span.high0)*t});
         }
       }
     }
     return slabs.length||boxes.length||onStairs ? {slabs,boxes,onStairs} : EMPTY_INTERIOR;
   }
   let last: {x:number;z:number;minY:number;maxY:number;result:ReturnType<typeof sample>} | undefined;
-  return {at(x:number,z:number,minY:number,maxY:number){
+  return {
+    along(bounds:InteriorQueryBounds){
+      const result:InteriorCollisionBox[]=[];
+      for(const source of candidatesIn(cells,cell,bounds)){
+        const {profile}=source;
+        if(!touchesBounds(source.bounds,bounds)||bounds.maxY<profile.origin[1]-1||bounds.minY>profile.origin[1]+profile.height)continue;
+        remember(plans,source,12,()=>prepare(source)).along(bounds,result);
+      }
+      return result;
+    },
+    at(x:number,z:number,minY:number,maxY:number){
     if(last?.x===x&&last.z===z&&last.minY===minY&&last.maxY===maxY)return last.result;
     const result=sample(x,z,minY,maxY);
     last={x,z,minY,maxY,result};
@@ -665,20 +726,40 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
   const states=new Map<BuildingDoor,{left:number;right:number;opening:boolean;boxes:CollisionBox[]}>();
   const closed=new WeakMap<BuildingDoor,CollisionBox[]>();
   const frames=new WeakMap<BuildingDoor,CollisionBox[]>();
+  const presented=new WeakMap<DoorPose,CollisionBox[]>();
+  function frameBoxes(door:BuildingDoor){
+    let result=frames.get(door);
+    if(!result){result=doorBoxes(door,doorFrameParts(door),0,0);frames.set(door,result);}
+    return result;
+  }
+  function closedBoxes(door:BuildingDoor){
+    let result=closed.get(door);
+    if(!result){result=[...leafBoxes(door,-1,0),...leafBoxes(door,1,0)];closed.set(door,result);}
+    return result;
+  }
   let snapshot:readonly DoorPose[]=Object.freeze([]);
   return {
+    viewAlong(bounds:InteriorQueryBounds,poses:ReadonlyMap<string,DoorPose>){
+      const result:CollisionBox[]=[];
+      for(const door of candidatesIn(cells,cell,bounds)){
+        if(door.x<bounds.minX-2.7||door.x>bounds.maxX+2.7||door.z<bounds.minZ-2.7||door.z>bounds.maxZ+2.7||
+          door.y>bounds.maxY||door.y+door.height+.25<bounds.minY)continue;
+        const pose=poses.get(door.id);
+        let leaves=pose&&presented.get(pose);
+        if(pose&&!leaves){
+          leaves=[...leafBoxes(door,-1,pose.left),...leafBoxes(door,1,pose.right)];
+          presented.set(pose,leaves);
+        }
+        for(const part of [...frameBoxes(door),...(leaves??closedBoxes(door))])
+          if(touchesBounds(bounds,part)&&part.minY<=bounds.maxY&&part.maxY>=bounds.minY)result.push(part);
+      }
+      return result;
+    },
     at(x:number,z:number,y:number) {
       const boxes:CollisionBox[]=[];
       for(const door of near(x,z)){
         if(Math.abs(x-door.x)>2.7||Math.abs(z-door.z)>2.7||y<door.y-4||y>door.y+door.height+4)continue;
-        let frame=frames.get(door);
-        if(!frame){frame=doorBoxes(door,doorFrameParts(door),0,0);frames.set(door,frame);}
-        boxes.push(...frame);
-        const moving=states.get(door);
-        if(moving){boxes.push(...moving.boxes);continue;}
-        let blockers=closed.get(door);
-        if(!blockers){blockers=[...leafBoxes(door,-1,0),...leafBoxes(door,1,0)];closed.set(door,blockers);}
-        boxes.push(...blockers);
+        boxes.push(...frameBoxes(door),...(states.get(door)?.boxes??closedBoxes(door)));
       }
       return boxes;
     },
