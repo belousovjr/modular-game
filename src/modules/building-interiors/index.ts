@@ -30,28 +30,31 @@ export const buildingInteriorsModule = defineModule({
       doorReady:boolean;
       update:(point:Point | undefined,opacity:number,actor:Point | null,preparingEntrance:boolean)=>boolean;
     }>();
-    const requests = new Map<number,(result:LayoutResponse)=>void>();
-    let worker:Worker|undefined,requestId=0,uploadAvailable=false;
-    scope.onDispose(()=>{worker?.terminate();requests.clear();});
-    function requestLayout(source:LayoutRequest['source'],apply:(result:LayoutResponse)=>void){
-      if(!worker){
-        worker=new Worker(new URL('./interior-worker.ts',import.meta.url),{type:'module'});
-        worker.onmessage=({data}:MessageEvent<LayoutResponse>)=>{
-          const receive=requests.get(data.id);
-          requests.delete(data.id);
-          receive?.(data);
-        };
-        worker.onerror=event=>{
-          for(const [id,receive] of requests)receive({id,error:event.message});
-          requests.clear();
-          worker?.terminate();
-          worker=undefined;
-        };
+    let worker:Worker|undefined,uploadAvailable=false;
+    scope.onDispose(()=>{worker?.terminate();worker=undefined;});
+    function requestLayout(source:LayoutRequest,apply:(result:LayoutResponse)=>void){
+      if(worker)return;
+      const current=new Worker(new URL('./interior-worker.ts',import.meta.url),{type:'module'});
+      worker=current;
+      const cancel=()=>{
+        if(worker!==current)return;
+        current.terminate();
+        worker=undefined;
+      };
+      const finish=(result:LayoutResponse)=>{
+        if(worker!==current)return;
+        cancel();
+        apply(result);
+      };
+      current.onmessage=({data}:MessageEvent<LayoutResponse>)=>finish(data);
+      current.onerror=event=>finish({error:event.message});
+      try {
+        current.postMessage(source);
+      } catch (error) {
+        cancel();
+        throw error;
       }
-      const id=++requestId;
-      requests.set(id,apply);
-      worker.postMessage({id,source} satisfies LayoutRequest);
-      return ()=>requests.delete(id);
+      return cancel;
     }
     const doors = new Map(deps.world.collision.doors?.map(door=>[door.id,door]));
     const collision=createInteriorCollision(deps.world.getBuildingInteriorSources());
@@ -59,16 +62,11 @@ export const buildingInteriorsModule = defineModule({
     let presentedDoors:readonly DoorPose[]|undefined;
     let presentedById=new Map<string,DoorPose>();
     let doorway: BuildingDoor | undefined;
-    let leaves: Leaf[] = [], open = 0, opening = false;
+    let open = 0, opening = false;
     scope.onDispose(() => deps.materials.setDoorway(null));
     scope.onDispose(() => deps.world.setInteriorView(false));
     function selectDoor(door: BuildingDoor | undefined) {
-      const next = door && active.get(door.id)?.leaves;
-      if (door === doorway && (!door || leaves === next)) return;
-      for (const {mesh} of leaves) {
-        if (!mesh.isDisposed()) mesh.rotation.y = 0;
-      }
-      leaves = next ?? [];
+      if (door === doorway) return;
       doorway = door;
       open = 0;
       opening = false;
@@ -142,7 +140,7 @@ export const buildingInteriorsModule = defineModule({
         }
         function* loadFloor(level:number,floor:InteriorLayout['floors'][number],resources:Scope,opacity:number):Generator<Mesh,Mesh|undefined> {
           const prefix=`building-interiors/${id}/floor/${level}`;
-          const metadata={buildingInterior:true,buildingInteriorLevel:level,shadowCaster:false};
+          const metadata={buildingInterior:true,shadowCaster:false};
           const mesh=(name:string,material:string,geometry:{positions:number[];indices:number[];uvs?:number[]})=>{
             if (!geometry.indices.length) return;
             const result=deps.geometry.createSurfaceMesh(prefix+name,material,geometry.positions,geometry.indices,resources,geometry.uvs);
@@ -163,7 +161,6 @@ export const buildingInteriorsModule = defineModule({
           if(rails)yield rails;
           const slab=mesh('/slab','interior-concrete',floor.slab);
           if(slab){
-            slab.metadata.buildingInteriorFloors=true;
             slab.visibility=opacity;
             if(floor.stairRims.length){
               const colors=new Float32Array(slab.getTotalVertices()*4).fill(1);
@@ -180,14 +177,16 @@ export const buildingInteriorsModule = defineModule({
           if(glass)yield glass;
           return slab;
         }
-        let lastCameraY:number|undefined,lastActorY:number|undefined,lastOpacity:number|undefined;
-        let wanted:number[]=[];
+        let lastCameraY:number|undefined,lastActorY:number|undefined;
+        const wanted:number[]=[];
         const update = (point: Point | undefined, opacity: number, actor: Point | null, preparingEntrance:boolean) => {
           const cameraY=interiorViewHeight(profile,point,preparingEntrance);
           const actorY=interiorViewHeight(profile,actor,preparingEntrance);
           if(cameraY===undefined&&actorY===undefined){
+            cancelLayout?.();
+            cancelLayout=undefined;
             releaseFloors();
-            lastCameraY=lastActorY=undefined;wanted=[];
+            lastCameraY=lastActorY=undefined;wanted.length=0;
             return false;
           }
           if(!layout){
@@ -198,8 +197,8 @@ export const buildingInteriorsModule = defineModule({
             });
             return false;
           }
-          if(cameraY!==lastCameraY||actorY!==lastActorY||opacity!==lastOpacity){
-            wanted=[];
+          if(cameraY!==lastCameraY||actorY!==lastActorY){
+            wanted.length=0;
             for(const [level,floor] of layout.floors.entries()){
               const visible=(cameraY!==undefined&&floorInRange(floor,cameraY,profile.floorHeight))||
                 (actorY!==undefined&&floorInRange(floor,actorY,profile.floorHeight));
@@ -207,7 +206,7 @@ export const buildingInteriorsModule = defineModule({
               else if(rendered.has(level)){rendered.get(level)?.owner.dispose();rendered.delete(level);}
             }
             if(uploading&&!wanted.includes(uploading.level)){uploading.owner.dispose();uploading=undefined;}
-            lastCameraY=cameraY;lastActorY=actorY;lastOpacity=opacity;
+            lastCameraY=cameraY;lastActorY=actorY;
           }
           const next=wanted.find(level=>!rendered.has(level));
           if(next!==undefined&&uploadAvailable){
