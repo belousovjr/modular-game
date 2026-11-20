@@ -103,10 +103,10 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   const existing=assets.getContainer();if(existing)load(existing);else void assets.ready.then(load);
   let previous: CharacterSnapshot | null = null, speed=0;
   const paused:AnimationGroup[]=[];scope.onDispose(()=>{paused.length=0;});
-  return (s: CharacterSnapshot) => {
+  return (s: CharacterSnapshot, displayY=s.y) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
-    root.position.set(s.x,s.y,s.z);
+    root.position.set(s.x,displayY,s.z);
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;

@@ -6,6 +6,7 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
 import { trackLocalCheckpoint } from '../../core/local-checkpoint.ts';
+import { createStairHeight } from './stair-presentation.ts';
 import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
@@ -38,10 +39,14 @@ export const charactersModule = defineModule({
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
     const createView=(owner: Scope)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner);};
     const render = createView(scope);
+    const stairHeight=createStairHeight();
+    let displayY=stairHeight(connection.snapshot(),0);
+    const smoothing=core.onFrame.add(delta=>{displayY=stairHeight(connection.snapshot(),delta);});
+    scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {
       const snapshot=connection.snapshot();
       deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
-      render(snapshot);
+      render(snapshot,displayY);
     };
     scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));
     update();
@@ -52,7 +57,7 @@ export const charactersModule = defineModule({
       if(stopped)throw new Error('Персонаж остановлен');
       if(vehicleStep)throw new Error('Vehicle authority already connected');
       vehicleStep=step;owner.onDispose(()=>{vehicleStep=null;authority.setVehicleFrame(null);});
-    }, send: connection.send, snapshot: connection.snapshot, createView, getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe };
+    }, send: connection.send, snapshot: connection.snapshot, displayHeight:()=>displayY, createView, getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe };
   },
   test: {
     durationSeconds: 6,

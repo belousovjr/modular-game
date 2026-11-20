@@ -14,6 +14,7 @@ export interface VehicleCharacterFrame {
 }
 export interface CharacterSnapshot {
   readonly entranceDoors?:readonly DoorPose[];
+  readonly onStairs?:boolean;
   readonly tick: number; readonly id: string; readonly ownerId: string;
   readonly x: number; readonly y: number; readonly z: number; readonly yaw: number;
   readonly vehicleId?:string;readonly vehicleRotation?:readonly number[];readonly vehicleAnimation?:'approaching'|'entering'|'driving'|'exiting'|'crawling';
@@ -128,9 +129,11 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   function sample(px:number,pz:number,low:number,high:number) {
     return interiors.at(px,pz,low,high);
   }
-  function support(px: number,pz: number) {
+  let onStairs=false;
+  function support(px: number,pz: number, track=false) {
     let height=ground(px,pz);
     const area=sample(px,pz,y-.5,y+.3);
+    if (track) onStairs=area.onStairs;
     for(const slab of area.slabs) if(slab.maxY<=y+.3)height=Math.max(height,slab.maxY);
     for(const b of obstacles(px,pz,y,area.boxes)) {
       const radius=b.id==='stair-tread' ? 0 : area.onStairs ? .215 : RADIUS;
@@ -226,7 +229,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     }
     if(!freeBlocked(resume.x,resume.z,savedY)&&Number.isFinite(ground(resume.x,resume.z,savedY+1e-7))){
       x=resume.x;y=savedY;z=resume.z;
-      grounded=Math.abs(y-support(x,z))<1e-7;
+      grounded=Math.abs(y-support(x,z,true))<1e-7;
     }
   }
   if (blocked(x,z,y)) throw new Error('Character spawn is blocked');
@@ -302,7 +305,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
           if(dx&&!(grounded?blocked(nx,z,support(nx,z)):freeBlocked(nx,z,y)))x=nx;
           const nz = z + dz * speed / 60 / steps;
           if(dz&&!(grounded?blocked(x,nz,support(x,nz)):freeBlocked(x,nz,y)))z=nz;
-          if (grounded) { const floor=support(x,z); if(y-floor>.3) grounded=false; else y=floor; }
+          if (grounded) { const floor=support(x,z,true); if(y-floor>.3) grounded=false; else y=floor; }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
         if (stance!=='prone'&&facing!==null) yaw=facing;
@@ -327,11 +330,11 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
           if (verticalSpeed > 0 && y+height <= b.minY && nextY+height >= b.minY) { nextY=b.minY-height;verticalSpeed=0; }
         }
-        if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;landedTick=tick; }
+        if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;onStairs=area.onStairs;landedTick=tick; }
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id: 'local-player', ownerId: 'local', x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id: 'local-player', ownerId: 'local', x,y,z,yaw,...(onStairs&&grounded&&mode==='walk'?{onStairs:true}:{}),grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
   };
   };
 }

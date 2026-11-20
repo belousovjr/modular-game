@@ -140,7 +140,7 @@ export const playerControlModule = defineModule({
       const targetHeight=s.mode==='swim'?.95:s.stance==='prone'?.48:s.stance==='crouching'?.86:1.2;
       const deltaMs=core.scene.getEngine().getDeltaTime();
       cameraHeight+=(targetHeight-cameraHeight)*(1-Math.exp(-deltaMs/60));
-      const target=new Vector3(s.x,s.y+cameraHeight,s.z);
+      const target=new Vector3(s.x,deps.characters.displayHeight()+cameraHeight,s.z);
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createStairHeight } from '../src/modules/characters/stair-presentation.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
 import { createCollisionWorld, type CollisionWorld } from '../src/modules/world/headless.ts';
@@ -9,6 +10,22 @@ import { scheme,regions,insertions } from '../src/modules/world/scheme.ts';
 const world: CollisionWorld = { bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},baseHeight:0,slopeX:0.015,spawn:{x:0,z:0},
   blockers:[{id:'wall',minX:2,maxX:3,minZ:-5,maxZ:5,minY:-2,maxY:10}],floors:[{minX:-10,maxX:1,minZ:1,maxZ:5,elevation:0.2}] };
 const command = (sequence=1,x=0,z=1,run=false): MoveCommand => ({type:'move',characterId:'local-player',sequence,tick:sequence-1,x,z,run,jump:false});
+
+test('stair height eases on the ground at any frame rate and releases immediately for jumps', () => {
+  const from={y:1,grounded:true,mode:'walk' as const,onStairs:true};
+  const step={...from,y:1.2};
+  const smooth=createStairHeight(), slow=createStairHeight();
+  assert.equal(smooth(from,0),1);
+  slow(from,0);
+  const first=smooth(step,20);
+  assert.ok(first>1 && first<1.2);
+  for(let i=0;i<4;i++)smooth(step,20);
+  assert.ok(Math.abs(smooth(step,0)-slow(step,100))<1e-9);
+  const exit=smooth({...step,onStairs:false},20);
+  assert.ok(exit>first && exit<1.2);
+  assert.equal(smooth({...step,y:1.29,grounded:false},16),1.29);
+  assert.equal(smooth({...step,y:2.1,vehicleId:'car'},16),2.1);
+});
 
 test('local resume uses a valid XYZ and falls back if saved coordinates are unsafe', () => {
   const create = createCharacterAuthorityFactory(world);
