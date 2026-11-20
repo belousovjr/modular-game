@@ -61,7 +61,7 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
 }
 
 export interface AvatarDrawDistance {readonly show:number;readonly hide:number}
-export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope, drawDistance?:AvatarDrawDistance) {
+export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope, drawDistance?:AvatarDrawDistance, overheadMarker?:Mesh) {
   let disposed = false, entries: InstantiatedEntries | null = null, active: AnimationGroup | undefined;
   const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
   const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
@@ -69,6 +69,12 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   root.metadata = { assetStatus:'loading' };
   if(drawDistance)root.setEnabled(false);
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null;clips.clear();playing.clear();root.dispose(); });
+  if(overheadMarker){
+    const marker=overheadMarker.clone('character/overhead-marker',root);
+    scope.onDispose(()=>marker.dispose());
+    marker.isPickable=false;
+    marker.setEnabled(true);
+  }
   const shadow=assets.createShadowProxy(root,scope);
   geometry.registerMeshes([shadow],scope);
   const loading=createScope();scope.onDispose(loading.dispose);
@@ -130,7 +136,13 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       }
     }
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
-    root.position.set(s.x,displayY??sampleHeight(s,deltaMs,!before),s.z);
+    const targetHeight=displayY??sampleHeight(s,deltaMs,!before);
+    const dx=s.x-root.position.x,dy=targetHeight-root.position.y,dz=s.z-root.position.z;
+    const gap=Math.hypot(dx,dy,dz);
+    if(displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
+      const blend=1-Math.exp(-deltaMs/45);
+      root.position.addInPlaceFromFloats(dx*blend,dy*blend,dz*blend);
+    }else root.position.set(s.x,targetHeight,s.z);
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
@@ -190,9 +202,14 @@ export function startAvatarClip(group:AnimationGroup,weight:number,phase:number)
 }
 
 type GroundGait=Pick<CharacterSnapshot,'moving'|'running'|'boosted'>;
+const FALL_POSE_TICKS=4;
+
+function usesGroundPose(snapshot:CharacterSnapshot) {
+  return snapshot.grounded||(snapshot.verticalSpeed<=0&&snapshot.airborneTicks<FALL_POSE_TICKS);
+}
 
 function isGroundMotion(snapshot:CharacterSnapshot) {
-  return snapshot.grounded&&snapshot.mode==='walk'&&(!snapshot.vehicleId||snapshot.vehicleAnimation==='approaching');
+  return usesGroundPose(snapshot)&&snapshot.mode==='walk'&&(!snapshot.vehicleId||snapshot.vehicleAnimation==='approaching');
 }
 
 export function createGroundMotion(){
@@ -227,7 +244,9 @@ export function selectAnimation(s: CharacterSnapshot, gait:GroundGait=s) {
   if(s.mode==='swim')return s.moving?'Swim_Fwd_Loop':'Swim_Idle_Loop';
   if(s.stance==='crouching')return gait.moving?'Crouch_Fwd_Loop':'Crouch_Idle_Loop';
   if(s.stance==='prone')return gait.moving?'Crawl_Fwd_Loop':'Crawl_Idle_Loop';
-  return !s.grounded?(s.airborneTicks<7?'Jump_Start':'Jump_Loop'):s.tick-s.landedTick<9?'Jump_Land':!gait.moving?'Idle_Loop':gait.boosted?'Sprint_Loop':gait.running?'Jog_Fwd_Loop':'Walk_Loop';
+  if(!usesGroundPose(s))return s.verticalSpeed>0&&s.airborneTicks<7?'Jump_Start':'Jump_Loop';
+  if(s.grounded&&s.airborneTicks>=FALL_POSE_TICKS&&s.tick-s.landedTick<9)return 'Jump_Land';
+  return !gait.moving?'Idle_Loop':gait.boosted?'Sprint_Loop':gait.running?'Jog_Fwd_Loop':'Walk_Loop';
 }
 
 export function smoothYaw(current: number, target: number, deltaMs: number) {

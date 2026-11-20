@@ -2,4 +2,5 @@
 .minimap-hud[data-hovered]{opacity:1}
 @media(prefers-reduced-motion:reduce){.minimap-hud{transition:none}}
 .minimap{position:relative;aspect-ratio:1}
-.minimap-marker{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--cyan-9)}
+/* The rounded tip of Navigation2 is at y=1 in its 24-unit viewBox. */
+.minimap-marker{position:absolute;left:50%;top:50%;transform:translate(-50%,calc(-100% / 24));color:var(--cyan-9)}

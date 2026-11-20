@@ -228,3 +228,32 @@ test('ground animation ignores isolated steps and keeps the sprint clip during a
   for(let i=0;i<20;i++)sample(stop,0,frame,false);
   assert.equal(sample(stop,0,frame,false).moving,false);
 });
+
+test('walking off successive ledges never selects the rising jump pose',async()=>{
+  const {selectAnimation}=await import('../src/modules/characters/assets.ts');
+  const {createCharacterAuthority}=await import('../src/modules/characters/headless.ts');
+  const world={bounds:{minX:-10,maxX:10,minZ:-10,maxZ:10},baseHeight:0,slopeX:0,
+    spawn:{x:-.03,z:0},blockers:[],floors:[
+      {minX:-2,maxX:0,minZ:-2,maxZ:2,elevation:.9},
+      {minX:-2,maxX:1,minZ:-2,maxZ:2,elevation:.45},
+    ]};
+  const actor=createCharacterAuthority(world);
+  let drops=0,wasGrounded=true;
+  for(let tick=1;tick<=80;tick++){
+    assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:1,z:0,run:false,jump:false},'local').accepted);
+    actor.step(tick);
+    const snapshot=actor.snapshot();
+    if(!snapshot.grounded){
+      if(wasGrounded){drops++;assert.equal(snapshot.airborneTicks,1);}
+      assert.ok(snapshot.verticalSpeed<0);
+      assert.equal(selectAnimation(snapshot),snapshot.airborneTicks<4?'Walk_Loop':'Jump_Loop');
+    }
+    wasGrounded=snapshot.grounded;
+  }
+  assert.equal(drops,2);
+  const grounded=actor.snapshot();
+  assert.equal(selectAnimation({...grounded,landedTick:grounded.tick,airborneTicks:2}),'Walk_Loop');
+  assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:81,tick:80,x:1,z:0,run:false,jump:true},'local').accepted);
+  actor.step(81);
+  assert.equal(selectAnimation(actor.snapshot()),'Jump_Start');
+});

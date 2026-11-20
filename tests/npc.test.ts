@@ -140,3 +140,26 @@ test('local detours go around low props without stepping onto them',()=>{
   assert.ok(npc.snapshot().arrivals>=1);
   npc.dispose();player.dispose();
 });
+
+test('a moving blocker that flickers across a full destination does not restart the patrol every other tick',()=>{
+  const flat={...world,spawn:{x:2,z:.71},blockers:[]};
+  const create=createCharacterAuthorityFactory(flat);
+  const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
+  const route={...patrol,points:[[-2,0],[2,0]]};
+  const npc=createNpcAuthority(flat,[route],1,0,'npc',(tick,spawn,identity)=>create(tick,spawn,undefined,identity));
+  try {
+    for(let tick=1;tick<=75;tick++){player.step(tick);npc.step(tick);}
+    const before=npc.snapshot().actors[0];
+    assert.ok(before.x>-.4&&before.x<.6);
+    for(let tick=76;tick<=105;tick++){
+      const s=player.snapshot();
+      const z=tick%2===0?-1:1;
+      assert.ok(player.receive({type:'move',characterId:s.id,sequence:tick,tick:s.tick,x:0,z,run:false,jump:false},s.ownerId).accepted);
+      player.step(tick);npc.step(tick);
+      assert.equal(npc.snapshot().actors[0].x,before.x);
+    }
+    player.dispose();
+    for(let tick=106;tick<=210;tick++)npc.step(tick);
+    assert.ok(npc.snapshot().arrivals>=1);
+  } finally {npc.dispose();player.dispose();}
+});

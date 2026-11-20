@@ -1,3 +1,4 @@
+import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
 import { createAvatar, createCharacterAssets, type AvatarDrawDistance } from './assets.ts';
@@ -40,7 +41,10 @@ export const charactersModule = defineModule({
     deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot(),authority.canStandAmongPeople));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
-    const createView=(owner: Scope, drawDistance?:AvatarDrawDistance)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner,drawDistance);};
+    const createView=(owner: Scope, drawDistance?:AvatarDrawDistance, overheadMarker?:Mesh)=>{
+      if(stopped)throw new Error('Персонаж остановлен');
+      return createAvatar(core.scene,deps.geometry,assets,owner,drawDistance,overheadMarker);
+    };
     const render = createView(scope);
     const sampleHeight=createDisplayHeight();
     let displayY=sampleHeight(connection.snapshot(),0);

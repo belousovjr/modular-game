@@ -388,7 +388,11 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
           if(dx&&!(grounded?groundedBlocked(nx,z):freeBlocked(nx,z,y)))x=nx;
           const nz = z + dz * speed / 60 / steps;
           if(dz&&!(grounded?groundedBlocked(x,nz):freeBlocked(x,nz,y)))z=nz;
-          if (grounded) { const floor=support(x,z); if(y-floor>.3) grounded=false; else y=floor; }
+          if (grounded) {
+            const floor=support(x,z);
+            if(y-floor>.3){grounded=false;airborneTicks=0;}
+            else y=floor;
+          }
         }
         moving = Math.hypot(x-beforeX,z-beforeZ) > 1e-8;
         if (stance!=='prone'&&facing!==null) yaw=facing;

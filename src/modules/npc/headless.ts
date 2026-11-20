@@ -170,7 +170,7 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
       try {
         const authority=create(startTick,route.points[point],identity);
         const detour:Waypoint[]=[];
-        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0,detour,nextPlan:startTick};
+        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0,detour,nextPlan:startTick,waitForClearUntil:startTick};
       } catch(error) {
         if(!(error instanceof CharacterSpawnBlockedError))throw error;
       }
@@ -211,6 +211,7 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
           const ahead={x:s.x+dx*scale,z:s.z+dz*scale};
           if(!segmentClear(obstacles,s,ahead,.35)){
             steering=undefined;
+            actor.waitForClearUntil=tick+6;
             if(tick>=actor.nextPlan){
               actor.nextPlan=tick+12+i%3;
               const dx=target.x-s.x,dz=target.z-s.z,scale=Math.min(1,5/(Math.hypot(dx,dz)||1));
@@ -221,10 +222,14 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
                 box.maxX>=bounds.minX-margin&&box.minX<=bounds.maxX+margin&&
                 box.maxZ>=bounds.minZ-margin&&box.minZ<=bounds.maxZ+margin)
                 .map(box=>({...box,clearance:STATIC_DETOUR_CLEARANCE}));
-              actor.detour=localPath(bounds,[...staticBoxes,...obstacles],s,rejoin,.25)??[];
-              steering=actor.detour[0];
+              const detour=localPath(bounds,[...staticBoxes,...obstacles],s,rejoin,.25);
+              if(detour){
+                actor.detour=detour;
+                steering=detour[0];
+                actor.waitForClearUntil=tick;
+              }
             }
-          }
+          }else if(tick<actor.waitForClearUntil)steering=undefined;
         }
         const command=pedestrianMove(s,steering);
         const receipt=actor.authority.receive(command,s.ownerId);
