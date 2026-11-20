@@ -6,7 +6,7 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
 import { trackLocalCheckpoint } from '../../core/local-checkpoint.ts';
-import { createStairHeight } from './stair-presentation.ts';
+import { createDisplayHeight } from './height-presentation.ts';
 import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
@@ -40,12 +40,12 @@ export const charactersModule = defineModule({
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
     const createView=(owner: Scope, drawDistance?:AvatarDrawDistance)=>{if(stopped)throw new Error('Персонаж остановлен');return createAvatar(core.scene,deps.geometry,assets,owner,drawDistance);};
     const render = createView(scope);
-    const stairHeight=createStairHeight();
-    let displayY=stairHeight(connection.snapshot(),0);
+    const sampleHeight=createDisplayHeight();
+    let displayY=sampleHeight(connection.snapshot(),0);
     deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
     const smoothing=core.onFrame.add(delta=>{
       const snapshot=connection.snapshot();
-      displayY=stairHeight(snapshot,delta);
+      displayY=sampleHeight(snapshot,delta);
       deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
     });
     scope.onDispose(()=>core.onFrame.remove(smoothing));

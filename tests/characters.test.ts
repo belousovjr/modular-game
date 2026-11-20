@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createStairHeight } from '../src/modules/characters/stair-presentation.ts';
+import { createDisplayHeight } from '../src/modules/characters/height-presentation.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { createCharacterAuthority, createCharacterAuthorityFactory, createLocalConnection, type MoveCommand, type Receipt } from '../src/modules/characters/headless.ts';
 import { createCollisionWorld, type CollisionWorld } from '../src/modules/world/headless.ts';
@@ -11,20 +11,35 @@ const world: CollisionWorld = { bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},b
   blockers:[{id:'wall',minX:2,maxX:3,minZ:-5,maxZ:5,minY:-2,maxY:10}],floors:[{minX:-10,maxX:1,minZ:1,maxZ:5,elevation:0.2}] };
 const command = (sequence=1,x=0,z=1,run=false): MoveCommand => ({type:'move',characterId:'local-player',sequence,tick:sequence-1,x,z,run,jump:false});
 
-test('stair height eases on the ground at any frame rate and releases immediately for jumps', () => {
-  const from={y:1,grounded:true,mode:'walk' as const,onStairs:true};
-  const step={...from,y:1.2};
-  const smooth=createStairHeight(), slow=createStairHeight();
-  assert.equal(smooth(from,0),1);
-  slow(from,0);
-  const first=smooth(step,20);
+test('display height eases across ground changes in either direction at any frame rate', () => {
+  const level={y:1,grounded:true,mode:'walk' as const};
+  const raised={...level,y:1.2};
+  const smooth=createDisplayHeight(), slow=createDisplayHeight();
+  assert.equal(smooth(level,0),1);
+  slow(level,0);
+  const first=smooth(raised,20);
   assert.ok(first>1 && first<1.2);
-  for(let i=0;i<4;i++)smooth(step,20);
-  assert.ok(Math.abs(smooth(step,0)-slow(step,100))<1e-9);
-  const exit=smooth({...step,onStairs:false},20);
-  assert.ok(exit>first && exit<1.2);
-  assert.equal(smooth({...step,y:1.29,grounded:false},16),1.29);
-  assert.equal(smooth({...step,y:2.1,vehicleId:'car'},16),2.1);
+  for(let i=0;i<4;i++)smooth(raised,20);
+  assert.ok(Math.abs(smooth(raised,0)-slow(raised,100))<1e-9);
+  assert.equal(smooth(raised,1000),1.2);
+  const down=smooth(level,20);
+  assert.ok(down>1 && down<1.2);
+  assert.ok(smooth({...raised,vehicleAnimation:'approaching'},20)<1.2);
+});
+
+test('display height follows airborne and seated poses directly and resets on discontinuities',()=>{
+  const level={y:1,grounded:true,mode:'walk' as const};
+  const smooth=createDisplayHeight();
+  smooth(level,0);
+  assert.equal(smooth({...level,y:1.1,grounded:false},16),1.1);
+  assert.equal(smooth({...level,y:1.25},16),1.25);
+  assert.equal(smooth({...level,y:1.4,mode:'fly'},16),1.4);
+  assert.equal(smooth({...level,y:1.45,mode:'swim'},16),1.45);
+  assert.equal(smooth({...level,y:1.5,vehicleAnimation:'entering'},16),1.5);
+  assert.equal(smooth(level,16),1);
+  assert.equal(smooth({...level,y:2},16),2);
+  assert.equal(smooth({...level,y:2.2},16,true),2.2);
+  assert.ok(smooth({...level,y:2.5},0)>=2.5-.24);
 });
 
 test('local resume uses a valid XYZ and falls back if saved coordinates are unsafe', () => {

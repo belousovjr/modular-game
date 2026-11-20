@@ -15,6 +15,7 @@ import type { Scope } from '../../core/modules.ts';
 import { createScope } from '../../core/scope.ts';
 import type { geometryModule } from '../geometry/index.ts';
 import {LOCOMOTION_SPEEDS, type CharacterSnapshot} from './headless.ts';
+import {createDisplayHeight} from './height-presentation.ts';
 import {createCharacterShadowSource} from './shadow-proxy.ts';
 import manifest from '../../../public/models/human/manifest.json' with { type: 'json' };
 
@@ -103,13 +104,14 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     }
   };
   const existing=assets.getContainer();if(existing)load(existing);else void assets.ready.then(load);
+  const sampleHeight=createDisplayHeight();
   let previous: CharacterSnapshot | null = null, speed=0;
   const paused:AnimationGroup[]=[];scope.onDispose(()=>{paused.length=0;});
   function pauseAnimations(){
     for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
     root.metadata.animationCulled=true;
   }
-  return (s: CharacterSnapshot, displayY=s.y) => {
+  return (s: CharacterSnapshot, displayY?:number) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
     if(drawDistance){
@@ -118,7 +120,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       const range=wasVisible?drawDistance.hide:drawDistance.show;
       camera?.getViewMatrix();
       const eye=camera?.globalPosition;
-      const visible=!!eye&&Math.hypot(eye.x-s.x,eye.y-displayY,eye.z-s.z)<=range;
+      const visible=!!eye&&Math.hypot(eye.x-s.x,eye.y-(displayY??s.y),eye.z-s.z)<=range;
       if(wasVisible!==visible)root.setEnabled(visible);
       if(!visible){
         if(wasVisible)pauseAnimations();
@@ -126,8 +128,8 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
         return;
       }
     }
-    root.position.set(s.x,displayY,s.z);
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
+    root.position.set(s.x,displayY??sampleHeight(s,deltaMs,!before),s.z);
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}

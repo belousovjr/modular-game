@@ -57,6 +57,7 @@ test('character shadows share a low-poly rounded proxy, follow the avatar and st
 test('distance-limited avatars hide their model and shadow with hysteresis',t=>{
   const engine=new NullEngine(),scene=new Scene(engine),owner=createScope();
   t.after(()=>{owner.dispose();scene.dispose();engine.dispose();});
+  engine.getDeltaTime=()=>16;
   const camera=new FreeCamera('camera',Vector3.Zero(),scene);
   const view:{render?:ReturnType<typeof createAvatar>}={};
   const probe=defineModule({id:'avatar-probe',title:'Avatar probe',category:'Тесты',requires:{geometry:geometryModule},
@@ -87,11 +88,15 @@ test('distance-limited avatars hide their model and shadow with hysteresis',t=>{
     assert.equal(root.isEnabled(),visible);
     assert.ok(children.every(mesh=>mesh.isEnabled()===visible));
   }
+  camera.position.y=0;
+  render({...npc,y:.2});
+  assert.ok(root.position.y>0&&root.position.y<.2);
   camera.position.y=111;
   render(npc);
   camera.position.set(4,0,0);
-  render({...npc,x:4});
+  render({...npc,x:4,y:.1});
   assert.ok(root.isEnabled());
   assert.equal(root.position.x,4);
+  assert.equal(root.position.y,.1);
   assert.deepEqual(root.getChildMeshes().map(mesh=>mesh.uniqueId),children.map(mesh=>mesh.uniqueId));
 });
