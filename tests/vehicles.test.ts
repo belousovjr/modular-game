@@ -1,10 +1,9 @@
-import {findPedestrianPath} from '../src/modules/npc/headless.ts';
 import {Quaternion,Vec3} from 'cannon-es';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {createVehicleAuthority,createVehicleConnection,CAR_GUIDES,type VehicleCommand} from '../src/modules/vehicles/headless.ts';
+import {createVehicleAuthority,createVehicleConnection,findVehicleApproachPath,CAR_GUIDES,type VehicleCommand} from '../src/modules/vehicles/headless.ts';
 import {createCharacterAuthority} from '../src/modules/characters/headless.ts';
 import type {CollisionWorld} from '../src/modules/world/headless.ts';
 import {createLocalAuthority} from '../src/simulation/authority.ts';
@@ -36,7 +35,7 @@ test('vehicle authority owns boarding, animated doors, driving, braking and safe
 test('vehicle intent validates identity, shape, finite ranges, sequences, rate, stale input and TTL',()=>{
   const s=session();try{
     s.advance(120);
-    for(const value of [null,{},[],{...cmd('enter',120),extra:true},{...cmd('enter',120),characterId:'npc/1'},{...cmd('enter',120),vehicleId:'other'}])assert.equal(s.car.receive(value,'local').accepted,false);
+    for(const value of [null,{},[],{...cmd('enter',120),extra:true},{...cmd('enter',120),characterId:'other-player'},{...cmd('enter',120),vehicleId:'other'}])assert.equal(s.car.receive(value,'local').accepted,false);
     assert.equal(s.car.receive(cmd('enter',120),'other').reason,'owner');assert.equal(s.car.receive(cmd('enter',121),'local').reason,'stale');
     assert.equal(s.car.receive(cmd('enter',120),'local').accepted,true);assert.equal(s.car.receive(cmd('enter',120),'local').reason,'sequence');assert.equal(s.car.receive(cmd('enter',120,121),'local').reason,'rate');
     while(s.car.snapshot().phase!=='driving'&&s.tick<650)s.advance(s.tick+1);
@@ -143,9 +142,9 @@ test('exit at speed plays half the moving exit and leaves the driver door open',
 
 
 test('boarding paths avoid unnecessary grid detours and shorten corners around obstacles',()=>{
-  assert.deepEqual(findPedestrianPath(world,{x:0,z:0},{x:2.3,z:1.7}),[{x:2.3,z:1.7}]);
+  assert.deepEqual(findVehicleApproachPath(world,{x:0,z:0},{x:2.3,z:1.7}),[{x:2.3,z:1.7}]);
   const blocker={id:'wall',minX:1,maxX:2,minZ:-1,maxZ:1,minY:0,maxY:3};
-  const path=findPedestrianPath({...world,blockers:[blocker]},{x:0,z:0},{x:3,z:0});
+  const path=findVehicleApproachPath({...world,blockers:[blocker]},{x:0,z:0},{x:3,z:0});
   assert.ok(path.length>=2);assert.ok(path.length<=4);let p={x:0,z:0};
   for(const next of path){for(let t=0;t<=1;t+=.01){const x=p.x+(next.x-p.x)*t,z=p.z+(next.z-p.z)*t;assert.ok(!(x>.65&&x<2.35&&z>-1.35&&z<1.35));}p=next;}
 });
@@ -240,19 +239,6 @@ test('vehicle moves inside the real Art Institute courtyard and stops at the inn
   }finally{s.car.dispose();}
 });
 
-test('a pedestrian occupying the release point prevents exit until it clears',()=>{
-  const s=session();
-  try {
-    board(s);
-    s.car.observeCharacter(s.actor.snapshot(),()=>false);
-    assert.equal(s.car.receive(cmd('exit',s.tick,1000),'local').reason,'blocked-exit');
-    assert.equal(s.car.snapshot().phase,'driving');
-    s.car.observeCharacter(s.actor.snapshot());
-    assert.ok(s.car.receive(cmd('exit',s.tick,1001),'local').accepted);
-  } finally {
-    s.car.dispose();
-  }
-});
 
 test('position reset frees the vehicle seat without moving or recreating the car',()=>{
   const s=session();

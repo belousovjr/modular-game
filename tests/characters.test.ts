@@ -346,22 +346,6 @@ test('fractional vertical intent follows a flight vector without increasing its 
   assert.ok(descend.y<later.y-10&&descend.z>later.z);
 });
 
-test('a fast flying character must clear another pedestrian vertically before crossing',()=>{
-  const flat={...world,spawn:{x:-2,z:0},slopeX:0,blockers:[],floors:[]};
-  const create=createCharacterAuthorityFactory(flat);
-  const pilot=create(0,undefined,{x:-2,y:.6,z:0},{id:'local-player',ownerId:'local'});
-  const pedestrian=create(0,{x:0,z:0},undefined,{id:'npc/0',ownerId:'npc'});
-  for(let tick=1;tick<=90;tick++){
-    const lift=tick<=30?0:tick<=65?1:0;
-    assert.ok(pilot.receive({...command(tick,1,0),locomotion:{boost:true,lift,flight:tick===1?true:null}},'local').accepted);
-    pilot.step(tick);
-    pedestrian.step(tick);
-    const s=pilot.snapshot();
-    if(tick===30)assert.ok(s.x>=-1&&s.x<=-.7+1e-7);
-    if(Math.abs(s.x)<.7-1e-7)assert.ok(s.y>=1.8-1e-7);
-  }
-  assert.ok(pilot.snapshot().x>1);
-});
 
 test('local position reset restores spawn, clears queued input and keeps authority tick and identity',async()=>{
   const actor=createCharacterAuthorityFactory(world)(20,undefined,{x:-4,y:5,z:4});
@@ -376,16 +360,4 @@ test('local position reset restores spawn, clears queued input and keeps authori
   for(let tick=22;tick<=26;tick++)connection.step(tick);
   assert.equal(actor.snapshot().z,initial.z);
   assert.ok(actor.receive({...command(2,-1,0),tick:26},'local').accepted);
-});
-
-test('position reset leaves the actor in place if another body occupies the spawn',()=>{
-  const create=createCharacterAuthorityFactory(world);
-  const actor=create(0,undefined,{x:-4,y:5,z:4},{id:'local-player',ownerId:'local'});
-  const npc=create(0,undefined,undefined,{id:'npc/0',ownerId:'npc'});
-  const previous=actor.snapshot();
-  assert.throws(()=>actor.resetPosition(),/Стартовая точка/);
-  assert.deepEqual(actor.snapshot(),previous);
-  npc.dispose();
-  actor.resetPosition();
-  assert.equal(actor.snapshot().x,0);
 });

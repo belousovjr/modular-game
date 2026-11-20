@@ -1,6 +1,6 @@
 import {World,Body,Box,ConvexPolyhedron,Material,ContactMaterial,Vec3,Heightfield,RaycastVehicle,SAPBroadphase} from 'cannon-es';
-import {createCharacterAuthorityFactory,type CharacterSnapshot,type CanStand,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
-import {findPedestrianPath} from '../npc/headless.ts';
+import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
+import pathfinding from 'javascript-astar';
 import type {CollisionBox,CollisionWorld} from '../world/headless.ts';
 
 interface Base {readonly vehicleId:string;readonly characterId:string;readonly sequence:number;readonly tick:number}
@@ -121,7 +121,6 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   let approachPath:{x:number;z:number}[]=[],approachNode=0,lastProgress=startTick,lastDistance=Infinity;
   let character:CharacterSnapshot|null=null,entry={x:0,y:0,z:0,yaw:0},exit={x:0,y:0,z:0,yaw:0},release:VehicleCharacterFrame['release']=null;
   let coasting=false,exitCrawling=false,crawlRight=false;
-  let canStand:CanStand=()=>true;
   const point=(x:number,y:number,z:number)=>{const v=body.quaternion.vmult(new Vec3(x,y-ROOT_OFFSET,z));return {x:v.x+body.position.x,y:v.y+body.position.y,z:v.z+body.position.z};};
   const heading=()=>{const v=body.quaternion.vmult(new Vec3(0,0,1));return Math.atan2(v.x,v.z);};
   const speed=()=>body.velocity.length();
@@ -134,13 +133,12 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   }
   function standingPoint(){
     const p=point(CAR_GUIDES.stand.x,0,CAR_GUIDES.stand.z),s=probe(tick,{x:p.x,z:p.z}).snapshot();
-    if(!canStand(s))throw new Error('Occupied vehicle door');
     return {x:s.x,y:s.y,z:s.z,yaw:heading()-Math.PI/2};
   }
   function safeExit(crawl=false){
     if(!crawl){try{return standingPoint();}catch{return null;}}
     for(const side of [-1,1])try{const yaw=heading(),x=body.position.x+side*Math.cos(yaw)*2.6,z=body.position.z-side*Math.sin(yaw)*2.6,p=probe(tick,{x,z}).snapshot();
-      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5||!canStand(p))continue;
+      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5)continue;
       return {x:p.x,y:p.y,z:p.z,yaw:Math.atan2(p.x-body.position.x,p.z-body.position.z)};
     }catch{continue;}
     return null;
@@ -152,7 +150,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       phase='parked';driverId=null;approachPath=[];release=null;
       throttle=steering=0;brake=true;coasting=speed()>.6;
     },
-    observeCharacter(s:CharacterSnapshot,clearance:CanStand=()=>true){character=s;canStand=clearance;},
+    observeCharacter(s:CharacterSnapshot){character=s;},
     receive(value:unknown,owner:string):Receipt{
       if(!value||typeof value!=='object'||Array.isArray(value))return denied('invalid');
       const input:Record<string,unknown>=Object.fromEntries(Object.entries(value));
@@ -170,7 +168,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
         const door=type==='enter'?body.position:point(input.side==='right'?1.9:-1.9,0,-.05);if(Math.hypot(character.x-door.x,character.y-door.y,character.z-door.z)>(type==='enter'?6.5:2.6))return denied('too-far');
       }else if(driverId!==input.characterId)return denied('driver');
       if(type==='enter'){
-        try{const stand=standingPoint();approachPath=findPedestrianPath({...collision,blockers:[...collision.blockers,carBlocker()]},character!,stand);}
+        try{const stand=standingPoint();approachPath=findVehicleApproachPath({...collision,blockers:[...collision.blockers,carBlocker()]},character!,stand);}
         catch{return denied('blocked-door');}
         approachNode=0;lastProgress=tick;lastDistance=Infinity;phase='approaching';coasting=false;since=tick;driverId='local-player';leftOpen=rightOpen=false;
       }
@@ -192,9 +190,8 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;release=null;syncTerrain();
       if(tick>expires){throttle=steering=0;brake=true;}
       if((phase==='approaching'||phase==='entering')&&overturned()){
-        if(phase==='entering')release=safeExit(true)??(canStand(entry)?entry:null);
-        if(phase==='entering'&&!release){phase='driving';message='blocked-exit';}
-        else{phase='parked';driverId=null;approachPath=[];message='overturned';}
+        if(phase==='entering')release=safeExit(true)??entry;
+        phase='parked';driverId=null;approachPath=[];message='overturned';
       }
       if(phase==='approaching'){
         const target=approachPath[approachNode],distance=target?Math.hypot(s.x-target.x,s.z-target.z):0;
@@ -259,8 +256,111 @@ export function createVehicleConnection(authority:ReturnType<typeof createVehicl
     count++;if(drop&&count%drop===0)return Promise.resolve({accepted:false,reason:'dropped'});seed=(Math.imul(seed,1664525)+1013904223)>>>0;
     const due=authority.snapshot().tick+1+latency+Math.floor(seed/0x100000000*(jitter*2+1))-jitter;
     return new Promise(resolve=>queue.push({due,command:{...command},resolve}));
-  },step(tick:number,character:CharacterSnapshot,canStand?:CanStand){authority.observeCharacter(character,canStand);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,resetOccupancy(){
+  },step(tick:number,character:CharacterSnapshot){authority.observeCharacter(character);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,resetOccupancy(){
     authority.resetOccupancy();
     for(const packet of queue.splice(0))packet.resolve({accepted:false,reason:'reset'});
   },close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
+}
+
+function navigationBlocked(o:CollisionBox,x:number,z:number,radius:number){
+  if(x<=o.minX-radius||x>=o.maxX+radius||z<=o.minZ-radius||z>=o.maxZ+radius)return false;
+  if(!o.outline)return true;
+  let inside=false;
+  for(let i=0,j=o.outline.length-1;i<o.outline.length;j=i++){
+    const a=o.outline[j],b=o.outline[i],dx=b[0]-a[0],dz=b[1]-a[1],t=Math.max(0,Math.min(1,((x-a[0])*dx+(z-a[1])*dz)/(dx*dx+dz*dz||1)));
+    if((x-a[0]-dx*t)**2+(z-a[1]-dz*t)**2<radius*radius)return true;
+    if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])inside=!inside;
+  }
+  return inside;
+}
+
+type Waypoint={readonly x:number;readonly z:number};
+type Bounds=CollisionWorld['bounds'];
+
+function segmentClear(blockers:readonly CollisionBox[],a:Waypoint,b:Waypoint,radius:number){
+  const steps=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.z-a.z)/.125));
+  for(let i=0;i<=steps;i++){
+    if(blockers.some(box=>navigationBlocked(box,a.x+(b.x-a.x)*i/steps,a.z+(b.z-a.z)*i/steps,radius)))return false;
+  }
+  return true;
+}
+
+function createGrid(bounds:Bounds, obstacles:readonly CollisionBox[], cell:number, radius:number){
+  const width=Math.floor((bounds.maxX-bounds.minX)/cell)+1,depth=Math.floor((bounds.maxZ-bounds.minZ)/cell)+1;
+  const size=width*depth;
+  if(width<1||depth<1||size>20000)throw new Error('Vehicle approach navigation budget exceeded');
+  const blockers=obstacles.filter(box=>{
+    const margin=radius;
+    return box.maxX>=bounds.minX-margin&&box.minX<=bounds.maxX+margin&&
+      box.maxZ>=bounds.minZ-margin&&box.minZ<=bounds.maxZ+margin;
+  });
+  const point=(id:number):Waypoint=>({x:bounds.minX+(id%width)*cell,z:bounds.minZ+Math.floor(id/width)*cell});
+  const free=new Uint8Array(size);
+  for(let id=0;id<size;id++){
+    const {x,z}=point(id);
+    free[id]=Number(!blockers.some(box=>navigationBlocked(box,x,z,radius)));
+  }
+  const graph=new pathfinding.Graph(Array.from({length:width},(_,x)=>
+    Array.from({length:depth},(_,z)=>free[z*width+x])));
+  const index=(node:{x:number;y:number})=>node.y*width+node.x;
+  const neighbors=graph.neighbors.bind(graph);
+  graph.neighbors=node=>neighbors(node).filter(next=>free[index(next)]&&
+    segmentClear(blockers,point(index(node)),point(index(next)),radius));
+  function find(start:number,goal:number):Waypoint[]|undefined{
+    if(start===goal)return [];
+    const node=(id:number)=>graph.grid[id%width][Math.floor(id/width)];
+    const startNode=node(start);
+    const path=pathfinding.astar.search(graph,startNode,node(goal)).map(index);
+    // The library closes the start node without adding it to the dirty list.
+    graph.markDirty(startNode);
+    if(!path.length)return undefined;
+    return path.filter((id,i)=>i===path.length-1||id-(path[i-1]??start)!==path[i+1]-id).map(point);
+  }
+  return {width,size,free,point,find};
+}
+
+function localPath(bounds:Bounds,blockers:readonly CollisionBox[],start:Waypoint,goal:Waypoint,cell:number){
+  const radius=.35;
+  const clear=(a:Waypoint,b:Waypoint)=>segmentClear(blockers,a,b,radius);
+  if(clear(start,goal))return [goal];
+  if(!clear(start,start)||!clear(goal,goal))return undefined;
+  const grid=createGrid(bounds,blockers,cell,radius);
+  function nearest(endpoint:Waypoint){
+    let best=-1,distance=Infinity;
+    for(let id=0;id<grid.size;id++){
+      if(!grid.free[id])continue;
+      const point=grid.point(id),d=Math.hypot(point.x-endpoint.x,point.z-endpoint.z);
+      if(d<distance&&clear(endpoint,point)){best=id;distance=d;}
+    }
+    return best;
+  }
+  const a=nearest(start),b=nearest(goal);
+  if(a<0||b<0)return undefined;
+  const path=grid.find(a,b);
+  if(!path)return undefined;
+  const candidates=[grid.point(a),...path,goal],result:Waypoint[]=[];
+  let current=start,index=0;
+  while(index<candidates.length){
+    let next=candidates.length-1;
+    while(next>=index&&!clear(current,candidates[next]))next--;
+    if(next<index)return undefined;
+    result.push(candidates[next]);current=candidates[next];index=next+1;
+  }
+  return result;
+}
+
+export function findVehicleApproachPath(world:CollisionWorld,start:Waypoint,goal:Waypoint){
+  const inside=({x,z}:Waypoint)=>x>=world.bounds.minX+.35&&x<=world.bounds.maxX-.35&&
+    z>=world.bounds.minZ+.35&&z<=world.bounds.maxZ-.35;
+  if(!inside(start)||!inside(goal)||Math.hypot(start.x-goal.x,start.z-goal.z)>24)throw new Error('Invalid vehicle approach path');
+  const path=localPath(localBounds(world.bounds,start,goal,5),world.blockers,start,goal,1);
+  if(!path)throw new Error('Blocked vehicle approach path');
+  return path;
+}
+
+function localBounds(world:Bounds,start:Waypoint,goal:Waypoint,margin:number):Bounds{
+  return {minX:Math.max(Math.ceil(world.minX+.35),Math.floor(Math.min(start.x,goal.x))-margin),
+    maxX:Math.min(Math.floor(world.maxX-.35),Math.ceil(Math.max(start.x,goal.x))+margin),
+    minZ:Math.max(Math.ceil(world.minZ+.35),Math.floor(Math.min(start.z,goal.z))-margin),
+    maxZ:Math.min(Math.floor(world.maxZ-.35),Math.ceil(Math.max(start.z,goal.z))+margin)};
 }

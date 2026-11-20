@@ -9,7 +9,7 @@ test('import boundaries reject private, core-to-feature and browser dependencies
   const cwd = mkdtempSync(join(tmpdir(), 'module-boundaries-'));
   const script = fileURLToPath(new URL('../scripts/check-boundaries.mjs', import.meta.url));
   try {
-    for (const dir of ['core', 'simulation', 'modules/a', 'modules/b', 'modules/vehicles', 'modules/npc']) mkdirSync(join(cwd, 'src', dir), { recursive: true });
+    for (const dir of ['core', 'simulation', 'modules/a', 'modules/b', 'modules/vehicles']) mkdirSync(join(cwd, 'src', dir), { recursive: true });
     const run = () => spawnSync(process.execPath, [script], { cwd, encoding: 'utf8' });
     const path = join(cwd, 'src/modules/a/index.ts');
     writeFileSync(path, 'import { b } from "../b/index.ts";');
@@ -19,9 +19,8 @@ test('import boundaries reject private, core-to-feature and browser dependencies
     const physics=join(cwd,'src/modules/vehicles/headless.ts');
     writeFileSync(physics,'import { World } from \"cannon-es\";');
     assert.equal(run().status,0);rmSync(physics);
-    const navigation=join(cwd,'src/modules/npc/headless.ts');
-    writeFileSync(navigation,'import astar from "javascript-astar";');
-    assert.equal(run().status,0);rmSync(navigation);
+    writeFileSync(physics,'import astar from "javascript-astar";');
+    assert.equal(run().status,0);rmSync(physics);
     const headless = join(cwd, 'src/modules/a/headless.ts');
     for (const [file, source] of [
       [headless, 'export { b } from "../b/headless.ts";'],
@@ -51,7 +50,7 @@ test('import boundaries reject private, core-to-feature and browser dependencies
       [path, 'import { b } from "../b/headless.ts";'],
       [headless, 'import { World } from \"cannon-es\";'],
       [headless, 'import astar from "javascript-astar";'],
-      [navigation, 'import astar from "javascript-astar/astar.js";'],
+      [physics, 'import astar from "javascript-astar/astar.js";'],
       [physics, 'import { World } from \"cannon-es/dist/cannon-es.js\";'],
       [headless, 'import type { Scene } from "@babylonjs/core";'],
       [headless, 'import { defineModule } from "../../core/context.ts";'],

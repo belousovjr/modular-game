@@ -1,7 +1,6 @@
-import type { Mesh } from '@babylonjs/core/Meshes/mesh.js';
 import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
-import { createAvatar, createCharacterAssets, type AvatarDrawDistance } from './assets.ts';
+import { createAvatar, createCharacterAssets } from './assets.ts';
 import { CharacterPanel } from './panel.tsx';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
@@ -13,7 +12,7 @@ import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
 import { buildingInteriorsModule } from '../building-interiors/index.ts';
-import type { VehicleCharacterFrame,CharacterSnapshot,CharacterIdentity,CanStand } from './headless.ts';
+import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
 import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export { clearLocalPosition } from './local-position.ts';
 export type { MoveCommand, CharacterSnapshot, CharacterStance, Receipt } from './headless.ts';
@@ -26,7 +25,7 @@ export const charactersModule = defineModule({
     const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision);
     const start = deps.simulation.snapshot().tick;
     const position = readLocalPosition();
-    const authority = createAuthority(start, undefined, position, {id:'local-player',ownerId:'local'});
+    const authority = createAuthority(start, undefined, position);
     scope.onDispose(authority.dispose);
     const connection = createLocalConnection(authority);
     scope.onDispose(connection.close);
@@ -37,13 +36,13 @@ export const charactersModule = defineModule({
       if (saveLocalPosition(next)) saved=next;
     });
     let resetVehicleOccupancy:(()=>void)|undefined;
-    let vehicleStep:((tick:number,character:CharacterSnapshot,canStand:CanStand)=>VehicleCharacterFrame)|null=null;
-    deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot(),authority.canStandAmongPeople));connection.step(tick);}, scope);
+    let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
+    deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
     const assets=createCharacterAssets(core.scene,scope);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
-    const createView=(owner: Scope, drawDistance?:AvatarDrawDistance, overheadMarker?:Mesh)=>{
+    const createView=(owner: Scope)=>{
       if(stopped)throw new Error('Персонаж остановлен');
-      return createAvatar(core.scene,deps.geometry,assets,owner,drawDistance,overheadMarker);
+      return createAvatar(core.scene,deps.geometry,assets,owner);
     };
     const render = createView(scope);
     const sampleHeight=createDisplayHeight();
@@ -73,11 +72,7 @@ export const charactersModule = defineModule({
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{stopped=true;});
     return {
-      createNpcCharacter(tick:number,spawn:{x:number;z:number},identity:CharacterIdentity){
-        if(stopped)throw new Error('Персонаж остановлен');
-        return createAuthority(tick,spawn,undefined,identity);
-      },
-      registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot,canStand:CanStand)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
+      registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
         if(stopped)throw new Error('Персонаж остановлен');
         if(vehicleStep)throw new Error('Vehicle authority already connected');
         vehicleStep=step;resetVehicleOccupancy=resetOccupancy;

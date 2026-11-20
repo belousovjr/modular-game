@@ -45,8 +45,8 @@ test('skin geometry is closed under the shirt collar', async () => {
   const indices = primitive.getIndices()?.getArray();
   assert.ok(position && uv && indices);
   const key = (vertex: number) => {
-    const [x, y, z] = position.getElement(vertex, []);
-    const [u, v] = uv.getElement(vertex, []);
+    const [x, y, z] = position.getElement(vertex, [0, 0, 0]);
+    const [u, v] = uv.getElement(vertex, [0, 0]);
     if (Math.abs(x) >= .15 || y <= 1.42 || y >= 1.56 || u < .5 || v < .5) return undefined;
     return [x, y, z].map(value => Math.round(value * 1e5)).join(',');
   };

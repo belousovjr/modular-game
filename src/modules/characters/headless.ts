@@ -27,10 +27,8 @@ function validLocomotion(value:unknown):value is LocomotionInput{
     &&'lift' in value&&typeof value.lift==='number'&&Number.isFinite(value.lift)&&Math.abs(value.lift)<=1
     &&'flight' in value&&(typeof value.flight==='boolean'||value.flight===null);
 }
-export interface CharacterIdentity {readonly id:string;readonly ownerId:string}
-export type CanStand = (position:{x:number;y:number;z:number})=>boolean;
 export class CharacterSpawnBlockedError extends Error {}
-const LOCAL_PLAYER:CharacterIdentity={id:'local-player',ownerId:'local'};
+const LOCAL_PLAYER={id:'local-player',ownerId:'local'};
 
 export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
@@ -121,13 +119,8 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  const people=new Map<string,()=>CollisionBox|null>();
-  const vehicleBlockers=new Map<string,CollisionBox>();
-  const sharedEntrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
-  let sharedDoorTick=-1;
-  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number},member?:CharacterIdentity)=>{
-  const {id,ownerId:owner}=member??LOCAL_PLAYER;
-  if(!id.trim()||!owner.trim()||(member&&people.has(id)))throw new Error('Invalid or duplicate character identity');
+  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
+  const {id,ownerId:owner}=LOCAL_PLAYER;
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
@@ -135,37 +128,9 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
   let stance:CharacterStance='standing',stanceRequest:CharacterStance|undefined;
   let vx=0,vy=0,vz=0;
-  const entrances=member ? sharedEntrances : interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  const entrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
   let vehicleFrame:VehicleCharacterFrame|null=null;
   let closed=false;
-  let lastBody:CollisionBox|undefined;
-  function body():CollisionBox|null {
-    if(vehicleFrame?.pose)return null;
-    if(!lastBody||lastBody.minX!==x-RADIUS||lastBody.minZ!==z-RADIUS||lastBody.minY!==y||lastBody.maxY!==y+HEIGHT[stance]){
-      lastBody={id,minX:x-RADIUS,maxX:x+RADIUS,minZ:z-RADIUS,maxZ:z+RADIUS,minY:y,maxY:y+HEIGHT[stance]};
-    }
-    return lastBody;
-  }
-  function* otherPeople(){
-    if(!member)return;
-    for(const [other,read] of people){
-      if(other===id)continue;
-      const box=read();
-      if(box)yield box;
-    }
-  }
-  function overlapsPerson(b:CollisionBox,px:number,pz:number){
-    return px>b.minX-RADIUS+1e-7&&px<b.maxX+RADIUS-1e-7&&
-      pz>b.minZ-RADIUS+1e-7&&pz<b.maxZ+RADIUS-1e-7;
-  }
-  function peopleBlock(px:number,pz:number,py:number,height:number){
-    for(const b of otherPeople()){
-      if(py<b.maxY-1e-7&&py+height>b.minY+1e-7&&overlapsPerson(b,px,pz))return true;
-    }
-    return false;
-  }
-  const vehicles=()=>member ? vehicleBlockers.values() : vehicleFrame ? [vehicleFrame.blocker] : [];
-
   function sample(px:number,pz:number,low:number,high:number) {
     return interiors.at(px,pz,low,high);
   }
@@ -177,13 +142,10 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       const radius=b.id==='stair-tread' ? 0 : area.onStairs ? .215 : RADIUS;
       if(b.maxY<=y+.3 && overlapsAt(b,px,pz,radius))height=Math.max(height,b.maxY);
     }
-    for(const b of otherPeople()) {
-      if(b.maxY<=y+1e-7&&overlapsPerson(b,px,pz))height=Math.max(height,b.maxY);
-    }
     return height;
   }
   const obstacles=(px:number,pz:number,py:number,inside:readonly CollisionBox[])=>[
-    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...vehicles(),
+    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame ? [vehicleFrame.blocker] : []),
   ];
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
   function touches(b:CollisionBox,px:number,pz:number,radius=RADIUS) {
@@ -202,7 +164,6 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   }
   function blocked(px: number, pz: number, py: number, checkStep=true,height=HEIGHT[stance]) {
     if (px < bounds.minX + RADIUS || px > bounds.maxX - RADIUS || pz < bounds.minZ + RADIUS || pz > bounds.maxZ - RADIUS || (checkStep&&py-y>.3)) return true;
-    if(peopleBlock(px,pz,py,height))return true;
     const area=sample(px,pz,py,py+height);
     if(area.slabs.some(s=>py<s.maxY-1e-7&&py+height>s.minY+1e-7))return true;
     const radius=area.onStairs ? .215 : RADIUS;
@@ -279,12 +240,10 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     }
   }
   if (blocked(x,z,y)) throw new CharacterSpawnBlockedError('Character spawn is blocked');
-  if(member)people.set(id,body);
   return {
     dispose(){
       if(closed)return;
       closed=true;
-      if(member){people.delete(id);vehicleBlockers.delete(id);}
     },
     resetPosition(){
       if(closed)throw new Error('Character authority disposed');
@@ -296,13 +255,6 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       resetMotion();
       if(vehicleFrame)vehicleFrame={blocker:vehicleFrame.blocker,pose:null,release:null};
     },
-    navigationObstacles():readonly CollisionBox[]{
-      const height=HEIGHT[stance];
-      return [...otherPeople(),...vehicles()].filter(box=>box.maxY>y+1e-7&&box.minY<y+height-1e-7);
-    },
-    canStandAmongPeople(position: Parameters<CanStand>[0]){
-      return !peopleBlock(position.x,position.z,position.y,HEIGHT.standing);
-    },
     setVehicleFrame(frame:VehicleCharacterFrame|null){
       if(frame){
         if(frame.approach&&(![frame.approach.x,frame.approach.z,frame.approach.yaw].every(Number.isFinite)||!frame.approach.vehicleId.trim()))throw new Error('Invalid vehicle approach');
@@ -313,10 +265,6 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       }
       if(vehicleFrame?.approach&&!frame?.approach&&!frame?.pose){dx=dz=0;run=false;facing=null;expiry=tick;}
       vehicleFrame=frame;
-      if(member){
-        if(frame)vehicleBlockers.set(id,frame.blocker);
-        else vehicleBlockers.delete(id);
-      }
     },
     receive(input: unknown, ownerId: string): Receipt {
       if(closed)return {accepted:false,reason:'closed'};
@@ -349,18 +297,13 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       if (nextTick !== tick + 1) throw new Error('Character ticks must be consecutive');
       tick = nextTick;
       moving = false;
-      if(entrances&&(!member||sharedDoorTick<tick)){
+      if(entrances){
         const blockers=(door:NonNullable<CollisionWorld['doors']>[number])=>[
           ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
           ...sample(door.x,door.z,door.y,door.y+door.height).boxes,
-          ...vehicles(),
+          ...(vehicleFrame ? [vehicleFrame.blocker] : []),
         ];
-        if(member){
-          sharedDoorTick=tick;
-          const bodies=[];
-          for(const read of people.values()){const box=read();if(box)bodies.push(box);}
-          entrances.stepBodies(bodies,blockers);
-        }else entrances.step({x,y,z},RADIUS,HEIGHT[stance],blockers);
+        entrances.step(vehicleFrame?.pose ? null : {x,y,z},RADIUS,HEIGHT[stance],blockers);
       }
       if(vehicleFrame?.pose)return;
       if(vehicleFrame?.approach){resetMotion();stanceRequest='standing';const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
@@ -416,11 +359,6 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
           if(!overlapsAt(b,x,z,radius))continue;
           if (verticalSpeed <= 0 && y >= b.maxY-1e-8) support = Math.max(support,b.maxY);
           if (verticalSpeed > 0 && y+height <= b.minY && nextY+height >= b.minY) { nextY=b.minY-height;verticalSpeed=0; }
-        }
-        for(const b of otherPeople()){
-          if(!overlapsPerson(b,x,z))continue;
-          if(verticalSpeed<=0&&y>=b.maxY-1e-7)support=Math.max(support,b.maxY);
-          if(verticalSpeed>0&&y+height<=b.minY+1e-7&&nextY+height>=b.minY){nextY=b.minY-height;verticalSpeed=0;}
         }
         if (nextY <= support) { nextY=support;verticalSpeed=0;grounded=true;landedTick=tick; }
         y=nextY;

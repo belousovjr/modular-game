@@ -60,21 +60,13 @@ export function createCharacterAssets(scene: Scene, owner: Scope) {
   return { ready, reportError, createShadowProxy, shouldAnimate, getContainer:()=>source, getStatus:()=>status, subscribe(listener:()=>void) { if(stopped)return ()=>{};listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }
 
-export interface AvatarDrawDistance {readonly show:number;readonly hide:number}
-export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope, drawDistance?:AvatarDrawDistance, overheadMarker?:Mesh) {
+export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryModule.setup>, assets: ReturnType<typeof createCharacterAssets>, scope: Scope) {
   let disposed = false, entries: InstantiatedEntries | null = null, active: AnimationGroup | undefined;
   const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
   const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
   const clips=new Map<string,AnimationGroup>(),playing=new Set<AnimationGroup>();
   root.metadata = { assetStatus:'loading' };
-  if(drawDistance)root.setEnabled(false);
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null;clips.clear();playing.clear();root.dispose(); });
-  if(overheadMarker){
-    const marker=overheadMarker.clone('character/overhead-marker',root);
-    scope.onDispose(()=>marker.dispose());
-    marker.isPickable=false;
-    marker.setEnabled(true);
-  }
   const shadow=assets.createShadowProxy(root,scope);
   geometry.registerMeshes([shadow],scope);
   const loading=createScope();scope.onDispose(loading.dispose);
@@ -118,31 +110,17 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
     root.metadata.animationCulled=true;
   }
-  return (s: CharacterSnapshot, displayY?:number, horizontal?:{x:number;z:number}) => {
+  return (s: CharacterSnapshot, displayY?:number) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
-    if(drawDistance){
-      const camera=scene.activeCamera;
-      const wasVisible=root.isEnabled();
-      const range=wasVisible?drawDistance.hide:drawDistance.show;
-      camera?.getViewMatrix();
-      const eye=camera?.globalPosition;
-      const visible=!!eye&&Math.hypot(eye.x-s.x,eye.y-(displayY??s.y),eye.z-s.z)<=range;
-      if(wasVisible!==visible)root.setEnabled(visible);
-      if(!visible){
-        if(wasVisible)pauseAnimations();
-        previous=null;speed=0;
-        return;
-      }
-    }
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
     const targetHeight=displayY??sampleHeight(s,deltaMs,!before);
-    const x=horizontal?.x??s.x,z=horizontal?.z??s.z;
+    const x=s.x,z=s.z;
     const dx=x-root.position.x,dy=targetHeight-root.position.y,dz=z-root.position.z;
     const gap=Math.hypot(dx,dy,dz);
     if(displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
       const blend=1-Math.exp(-deltaMs/45);
-      root.position.set(horizontal?x:root.position.x+dx*blend,root.position.y+dy*blend,horizontal?z:root.position.z+dz*blend);
+      root.position.set(root.position.x+dx*blend,root.position.y+dy*blend,root.position.z+dz*blend);
     }else root.position.set(x,targetHeight,z);
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;

@@ -4,7 +4,6 @@ export interface Authority {
   advance(elapsedMs: number): void;
   addSystem(step: (tick: number) => void): () => void;
   snapshot(): Snapshot;
-  frameProgress(): number;
 }
 // shortcut: local authority has no transport, add a remote adapter when a server exists.
 export function createLocalAuthority(): Authority {
@@ -21,7 +20,6 @@ export function createLocalAuthority(): Authority {
       const target = Math.min(due, tick + 240);
       while (tick < target) { tick++; for (const step of systems) step(tick); }
     },
-    frameProgress() { return Math.max(0,Math.min(1,elapsed/STEP_MS-tick)); },
     snapshot() {
       return Object.freeze({ tick, seconds: tick / 60, pendingTicks: Math.max(0, Math.floor((elapsed + 1e-7) / STEP_MS) - tick) });
     },

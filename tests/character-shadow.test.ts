@@ -1,10 +1,3 @@
-import {Observable} from '@babylonjs/core/Misc/observable.js';
-import {defineModule} from '../src/core/context.ts';
-import {startModules} from '../src/core/modules.ts';
-import {createPanels} from '../src/core/panels.ts';
-import {createAvatar} from '../src/modules/characters/assets.ts';
-import {createCharacterAuthority} from '../src/modules/characters/headless.ts';
-import {geometryModule} from '../src/modules/geometry/index.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {NullEngine} from '@babylonjs/core/Engines/nullEngine.js';
@@ -14,7 +7,6 @@ import {FreeCamera} from '@babylonjs/core/Cameras/freeCamera.js';
 import {DirectionalLight} from '@babylonjs/core/Lights/directionalLight.js';
 import {Vector3} from '@babylonjs/core/Maths/math.vector.js';
 import {MeshBuilder} from '@babylonjs/core/Meshes/meshBuilder.js';
-import {Mesh} from '@babylonjs/core/Meshes/mesh.js';
 import {createScope} from '../src/core/scope.ts';
 import {createCharacterShadowSource} from '../src/modules/characters/shadow-proxy.ts';
 import {createShadows} from '../src/modules/shadows/resources.ts';
@@ -53,67 +45,4 @@ test('character shadows share a low-poly rounded proxy, follow the avatar and st
   assert.equal(sun.getShadowGenerator()?.getShadowMap()?.renderList?.includes(human),false);
   shadowScope.dispose();human.dispose();views.dispose();roots.forEach(root=>root.dispose());owner.dispose();
   assert.equal(scene.geometries.length,0);assert.equal(scene.materials.length,0);
-});
-
-test('distance-limited avatars hide their model, marker and shadow with hysteresis',t=>{
-  const engine=new NullEngine(),scene=new Scene(engine),owner=createScope();
-  t.after(()=>{owner.dispose();scene.dispose();engine.dispose();});
-  engine.getDeltaTime=()=>16;
-  const camera=new FreeCamera('camera',Vector3.Zero(),scene);
-  const view:{render?:ReturnType<typeof createAvatar>;markerSource?:Mesh}={};
-  const probe=defineModule({id:'avatar-probe',title:'Avatar probe',category:'Тесты',requires:{geometry:geometryModule},
-    setup({deps,scope}){
-      const source=MeshBuilder.CreateSphere('marker-source',{diameter:.2},scene);
-      scope.onDispose(()=>source.dispose());
-      source.position.y=2.12;
-      source.setEnabled(false);
-      view.markerSource=source;
-      view.render=createAvatar(scene,deps.geometry,{
-        createShadowProxy:createCharacterShadowSource(scene,scope),
-        ready:Promise.resolve(null),reportError:()=>{},shouldAnimate:()=>true,
-        getContainer:()=>null,getStatus:()=>({state:'loading',error:null}),subscribe:()=>()=>{},
-      },scope,{show:100,hide:110},source);
-      return {};
-    },
-  });
-  const session=startModules([geometryModule,probe],[probe.id],{scene,onFrame:new Observable<number>(),panels:createPanels()});
-  owner.onDispose(()=>session.dispose());
-  const {render}=view;
-  assert.ok(render);
-  const actor=createCharacterAuthority({bounds:{minX:-10,maxX:10,minZ:-10,maxZ:10},baseHeight:0,slopeX:0,
-    spawn:{x:0,z:0},blockers:[],floors:[]}).snapshot();
-  const npc={...actor,id:'npc/0'};
-  render(npc);
-  const root=scene.getTransformNodeByName('character/npc/0');
-  assert.ok(root);
-  const children=root.getChildMeshes();
-  assert.equal(children.length,3);
-  const marker=children.find(mesh=>mesh.name==='character/overhead-marker');
-  assert.ok(marker instanceof Mesh);
-  assert.equal(marker.geometry,view.markerSource?.geometry);
-  assert.equal(marker.isPickable,false);
-  assert.equal(marker.position.y,2.12);
-  for(const [distance,visible] of [[110,true],[111,false],[105,false],[100,true]] as const){
-    camera.position.y=distance;
-    render(npc);
-    assert.equal(root.isEnabled(),visible);
-    assert.ok(children.every(mesh=>mesh.isEnabled()===visible));
-  }
-  camera.position.y=0;
-  render({...npc,y:.2});
-  assert.ok(root.position.y>0&&root.position.y<.2);
-  render({...npc,tick:npc.tick+1,x:.03});
-  const afterStep=root.position.x;
-  assert.ok(afterStep>0&&afterStep<.03);
-  render({...npc,tick:npc.tick+1,x:.03});
-  assert.ok(root.position.x>afterStep&&root.position.x<.03);
-  camera.position.y=111;
-  render(npc);
-  camera.position.set(4,0,0);
-  render({...npc,x:4,y:.1});
-  assert.ok(root.isEnabled());
-  assert.equal(root.position.x,4);
-  assert.equal(root.position.y,.1);
-  assert.deepEqual(root.getChildMeshes().map(mesh=>mesh.uniqueId),children.map(mesh=>mesh.uniqueId));
-  assert.ok(Math.abs(marker.computeWorldMatrix(true).getTranslation().y-2.22)<1e-6);
 });
