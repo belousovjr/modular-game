@@ -184,7 +184,7 @@ test('animation visibility ignores distant and offscreen avatars without changin
  }finally{owner.dispose();scene.dispose();engine.dispose();}
 });
 
-test('starting a phased NPC clip keeps the outgoing pose until the fade begins',async()=>{
+test('starting a clip keeps the outgoing pose until the fade begins',async()=>{
   const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
   const {Scene}=await import('@babylonjs/core/scene.js');
   const {AnimationGroup}=await import('@babylonjs/core/Animations/animationGroup.js');
@@ -201,11 +201,11 @@ test('starting a phased NPC clip keeps the outgoing pose until the fade begins',
       group.addTargetedAnimation(clip,target);
       return group;
     });
-    startAvatarClip(walking,1,0);
+    startAvatarClip(walking,1);
     assert.equal(target.position.x,2);
     scene._animate(0);
     const before=target.position.x;
-    startAvatarClip(idle,0,.6);
+    startAvatarClip(idle,0);
     assert.equal(target.position.x,before);
     blendAnimations([walking,idle],idle,16);
     scene._animate(16);

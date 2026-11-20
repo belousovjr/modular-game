@@ -1,5 +1,5 @@
 import pathfinding from 'javascript-astar';
-import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, LOCOMOTION_SPEEDS, type CharacterIdentity, type CharacterSnapshot, type MoveCommand } from '../characters/headless.ts';
+import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, createLocalConnection, LOCOMOTION_SPEEDS, type CharacterIdentity, type CharacterSnapshot, type MoveCommand } from '../characters/headless.ts';
 import type { CollisionWorld } from '../world/headless.ts';
 
 export interface Patrol {
@@ -144,8 +144,10 @@ function pedestrianMove(s:CharacterSnapshot,target:Waypoint|undefined):MoveComma
   const desired=distance?Math.atan2(dx,dz):s.yaw;
   const turn=Math.atan2(Math.sin(desired-s.yaw),Math.cos(desired-s.yaw));
   const yaw=s.yaw+Math.max(-.12,Math.min(.12,turn));
-  const speedScale=Math.max(0,Math.cos(turn))/Math.max(distance,LOCOMOTION_SPEEDS.walk/60);
-  return {type:'move',characterId:s.id,sequence:s.lastSequence+1,tick:s.tick,x:dx*speedScale,z:dz*speedScale,
+  const remaining=Math.atan2(Math.sin(desired-yaw),Math.cos(desired-yaw));
+  const alignment=Math.max(0,1-Math.abs(remaining)/.3);
+  const speedScale=Math.min(1,distance/(LOCOMOTION_SPEEDS.walk/60))*alignment;
+  return {type:'move',characterId:s.id,sequence:s.lastSequence+1,tick:s.tick,x:Math.sin(yaw)*speedScale,z:Math.cos(yaw)*speedScale,
     run:false,jump:false,facing:Math.atan2(Math.sin(yaw),Math.cos(yaw))};
 }
 
@@ -170,7 +172,7 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
       try {
         const authority=create(startTick,route.points[point],identity);
         const detour:Waypoint[]=[];
-        return {authority,route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0,detour,nextPlan:startTick,waitForClearUntil:startTick};
+        return {authority,connection:createLocalConnection(authority),route,goal:(point+1)%route.points.length,node:0,waitUntil:startTick,arrivals:0,stalled:0,detour,nextPlan:startTick};
       } catch(error) {
         if(!(error instanceof CharacterSpawnBlockedError))throw error;
       }
@@ -178,7 +180,9 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
     throw new Error('NPC spawn capacity exceeded');
   }
   const actors:ReturnType<typeof spawnActor>[]=[];
-  const dispose=()=>{for(const actor of actors.splice(0))actor.authority.dispose();};
+  const dispose=()=>{
+    for(const actor of actors.splice(0)){actor.connection.close();actor.authority.dispose();}
+  };
   try {
     for(let i=0;i<count;i++)actors.push(spawnActor(i));
   } catch(error) {
@@ -211,7 +215,6 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
           const ahead={x:s.x+dx*scale,z:s.z+dz*scale};
           if(!segmentClear(obstacles,s,ahead,.35)){
             steering=undefined;
-            actor.waitForClearUntil=tick+6;
             if(tick>=actor.nextPlan){
               actor.nextPlan=tick+12+i%3;
               const dx=target.x-s.x,dz=target.z-s.z,scale=Math.min(1,5/(Math.hypot(dx,dz)||1));
@@ -226,16 +229,15 @@ export function createNpcAuthority(world: CollisionWorld, patrols: readonly Patr
               if(detour){
                 actor.detour=detour;
                 steering=detour[0];
-                actor.waitForClearUntil=tick;
               }
             }
-          }else if(tick<actor.waitForClearUntil)steering=undefined;
+          }
         }
         const command=pedestrianMove(s,steering);
-        const receipt=actor.authority.receive(command,s.ownerId);
-        if(!receipt.accepted)throw new Error(`NPC intent rejected: ${receipt.reason}`);
-        actor.authority.step(tick);
-        const after=actor.authority.snapshot();
+        void actor.connection.send(command);
+        actor.connection.step(tick);
+        const after=actor.connection.snapshot();
+        if(after.lastSequence!==command.sequence)throw new Error('NPC move command was not applied');
         const progress=steering?Math.hypot(steering.x-s.x,steering.z-s.z)-Math.hypot(steering.x-after.x,steering.z-after.z):0;
         actor.stalled=steering&&progress<.003&&Math.abs(command.x)+Math.abs(command.z)>.1 ? actor.stalled+1 : 0;
         // shortcut: if the collision solver sees an obstacle outside the planar map, wait and retry.

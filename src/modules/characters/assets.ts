@@ -103,7 +103,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
         if(!group.name.endsWith('_Loop'))for(const track of group.targetedAnimations)track.animation.loopMode=Animation.ANIMATIONLOOPMODE_CONSTANT;
       }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
-      if(idle&&root.isEnabled()) { idle.enableBlending=false;idle.start(true);idle.weight=1;idle.goToFrame(idle.from);active=idle;playing.add(idle); }
+      if(idle&&root.isEnabled()) { idle.enableBlending=false;startAvatarClip(idle,1);active=idle;playing.add(idle); }
       loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
     } catch(error) {
       entries?.dispose();entries=null;assets.reportError(error);root.metadata={assetStatus:'error',error:error instanceof Error?error.message:String(error)};
@@ -118,7 +118,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
     root.metadata.animationCulled=true;
   }
-  return (s: CharacterSnapshot, displayY?:number) => {
+  return (s: CharacterSnapshot, displayY?:number, horizontal?:{x:number;z:number}) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
     if(drawDistance){
@@ -137,12 +137,13 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     }
     const before=previous,deltaMs=scene.getEngine().getDeltaTime();
     const targetHeight=displayY??sampleHeight(s,deltaMs,!before);
-    const dx=s.x-root.position.x,dy=targetHeight-root.position.y,dz=s.z-root.position.z;
+    const x=horizontal?.x??s.x,z=horizontal?.z??s.z;
+    const dx=x-root.position.x,dy=targetHeight-root.position.y,dz=z-root.position.z;
     const gap=Math.hypot(dx,dy,dz);
     if(displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
       const blend=1-Math.exp(-deltaMs/45);
-      root.position.addInPlaceFromFloats(dx*blend,dy*blend,dz*blend);
-    }else root.position.set(s.x,targetHeight,s.z);
+      root.position.set(horizontal?x:root.position.x+dx*blend,root.position.y+dy*blend,horizontal?z:root.position.z+dz*blend);
+    }else root.position.set(x,targetHeight,z);
     if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
@@ -160,9 +161,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     if (!next) return;
     if (next!==active) {
       if(!next.isPlaying) {
-        const ordinal=Number(s.id.slice(s.id.lastIndexOf('/')+1));
-        const phase=Number.isSafeInteger(ordinal)&&name.endsWith('_Loop')?ordinal*.61803398875%1:0;
-        startAvatarClip(next,active?0:1,phase);
+        startAvatarClip(next,active?0:1);
         playing.add(next);
       }
       active=next;
@@ -192,13 +191,11 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   };
 }
 
-export function startAvatarClip(group:AnimationGroup,weight:number,phase:number) {
+export function startAvatarClip(group:AnimationGroup,weight:number) {
   group.start(true);
   group.weight=weight;
-  const frame=group.from+(group.to-group.from)*phase;
-  // Apply the first pose immediately; subsequent phase changes must respect the crossfade.
-  if(weight===1)group.goToFrame(frame);
-  else if(phase)group.goToFrame(frame,true);
+  // Only the first clip applies its pose immediately. Transitions use weighted playback.
+  if(weight===1)group.goToFrame(group.from);
 }
 
 type GroundGait=Pick<CharacterSnapshot,'moving'|'running'|'boosted'>;

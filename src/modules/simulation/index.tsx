@@ -25,7 +25,7 @@ export const simulationModule = defineModule({
     scope.onDispose(() => core.onFrame.remove(observer));
     scope.onDispose(core.panels.register('simulation', 'Симуляция',
       <SimulationInfo authority={authority} onFrame={core.onFrame} />));
-    return { snapshot: () => authority.snapshot(),
+    return { snapshot: () => authority.snapshot(), frameProgress: authority.frameProgress,
       registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
     };
   },

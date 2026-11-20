@@ -9,6 +9,7 @@ import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { charactersModule } from '../characters/index.ts';
 import { worldModule } from '../world/index.ts';
 import { simulationModule } from '../simulation/index.tsx';
+import { interpolateNpcPosition } from './presentation.ts';
 import { createNpcAuthority, downtownPatrols } from './headless.ts';
 
 const DRAW_DISTANCE={show:100,hide:110};
@@ -26,6 +27,22 @@ function createMarkerSource(scene:Scene,scope:Scope){
   return marker;
 }
 
+function createNpcViews(scene:Scene,scope:Scope,authority:ReturnType<typeof createNpcAuthority>,
+  simulation:ReturnType<typeof simulationModule.setup>,createView:ReturnType<typeof charactersModule.setup>['createView']){
+  let current=authority.snapshot().actors,previous=current;
+  const marker=createMarkerSource(scene,scope);
+  const views=current.map(()=>createView(scope,DRAW_DISTANCE,marker));
+  simulation.registerSystem(tick=>{
+    authority.step(tick);
+    previous=current;
+    current=authority.snapshot().actors;
+  },scope);
+  return ()=>{
+    const progress=simulation.frameProgress();
+    for(const [i,actor] of current.entries())views[i](actor,undefined,interpolateNpcPosition(previous[i],actor,progress));
+  };
+}
+
 export const npcModule=defineModule({
   id:'npc',title:'Пешеходы',category:'Игра',
   requires:{characters:charactersModule,world:worldModule,simulation:simulationModule},
@@ -33,10 +50,7 @@ export const npcModule=defineModule({
     let stopped=false;scope.onDispose(()=>{stopped=true;});
     const authority=createNpcAuthority(deps.world.collision,downtownPatrols,8,deps.simulation.snapshot().tick,'npc',deps.characters.createNpcCharacter);
     scope.onDispose(authority.dispose);
-    deps.simulation.registerSystem(authority.step,scope);
-    const marker=createMarkerSource(core.scene,scope);
-    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope,DRAW_DISTANCE,marker));
-    const render=()=>{for(const [i,s] of authority.snapshot().actors.entries())views[i](s);};
+    const render=createNpcViews(core.scene,scope,authority,deps.simulation,deps.characters.createView);
     render();const observer=core.scene.onBeforeRenderObservable.add(render,-1,true);
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(observer));
     return {snapshot(){if(stopped)throw new Error('Пешеходы остановлены');return authority.snapshot();}};
@@ -44,9 +58,7 @@ export const npcModule=defineModule({
   test:{durationSeconds:8,setup({core,deps,scope,report}){
     const authority=createNpcAuthority(deps.world.collision,downtownPatrols,16,deps.simulation.snapshot().tick,'npc-test');
     scope.onDispose(authority.dispose);
-    deps.simulation.registerSystem(authority.step,scope);
-    const marker=createMarkerSource(core.scene,scope);
-    const views=authority.snapshot().actors.map(()=>deps.characters.createView(scope,DRAW_DISTANCE,marker));
+    const render=createNpcViews(core.scene,scope,authority,deps.simulation,deps.characters.createView);
     const camera=core.scene.activeCamera;
     if(camera instanceof ArcRotateCamera){const upper=camera.upperRadiusLimit;scope.onDispose(()=>{camera.upperRadiusLimit=upper;});camera.upperRadiusLimit=150;}
     let visibleMin=16;
@@ -61,7 +73,7 @@ export const npcModule=defineModule({
     const observer=core.scene.onBeforeRenderObservable.add(()=>{
       const camera=core.scene.activeCamera;
       if(camera instanceof ArcRotateCamera){camera.setTarget(target);camera.radius=85;}
-      for(const [i,s] of authority.snapshot().actors.entries())views[i](s);
+      render();
     },-1,true);
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{const s=authority.snapshot();report({actors:s.actors.length,visibleMin,arrivals:s.arrivals,moving:s.actors.filter(a=>a.moving).length,tick:s.tick});});

@@ -1,3 +1,4 @@
+import {interpolateNpcPosition} from '../src/modules/npc/presentation.ts';
 import {createCharacterAuthorityFactory,createLocalConnection} from '../src/modules/characters/headless.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -105,11 +106,28 @@ test('a patrol turns by command and takes a local detour around a stationary pla
   const flat={...world,spawn:{x:0,z:0},blockers:[]};
   const create=createCharacterAuthorityFactory(flat);
   const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
-  const npc=createNpcAuthority(flat,[patrol],1,0,'npc',(tick,spawn,identity)=>create(tick,spawn,undefined,identity));
+  const mirror=createLocalConnection(createCharacterAuthorityFactory(flat)(0,{x:-6,z:0}));
+  const npc=createNpcAuthority(flat,[patrol],1,0,'npc',(tick,spawn,identity)=>{
+    const actor=create(tick,spawn,undefined,identity);
+    return {...actor,receive(input:unknown,owner:string){
+      assert.ok(input&&typeof input==='object'&&'x' in input&&'z' in input&&'facing' in input);
+      const {x,z,facing}=input;
+      assert.ok(typeof x==='number'&&typeof z==='number'&&typeof facing==='number');
+      if(Math.hypot(x,z)>1e-6){
+        const angle=Math.atan2(x,z)-facing;
+        assert.ok(Math.abs(Math.atan2(Math.sin(angle),Math.cos(angle)))<1e-8,'NPC stepped sideways before finishing its turn');
+      }
+      const state=mirror.snapshot();
+      void mirror.send({type:'move',characterId:state.id,sequence:state.tick+1,tick:state.tick,x,z,run:false,jump:false,facing});
+      return actor.receive(input,owner);
+    }};
+  });
   let before=npc.snapshot().actors[0],detour=0;
   for(let tick=1;tick<=500;tick++){
-    player.step(tick);npc.step(tick);
+    player.step(tick);npc.step(tick);mirror.step(tick);
     const position=npc.snapshot().actors[0];
+    const controlled=mirror.snapshot();
+    assert.deepEqual([position.x,position.y,position.z,position.yaw],[controlled.x,controlled.y,controlled.z,controlled.yaw]);
     const turn=Math.atan2(Math.sin(position.yaw-before.yaw),Math.cos(position.yaw-before.yaw));
     assert.ok(Math.abs(turn)<=.12+1e-9);
     assert.ok(Math.abs(position.x)>=.7-1e-7||Math.abs(position.z)>=.7-1e-7);
@@ -119,7 +137,7 @@ test('a patrol turns by command and takes a local detour around a stationary pla
   }
   assert.ok(detour>=.7);
   assert.ok(npc.snapshot().arrivals>=1);
-  npc.dispose();player.dispose();
+  npc.dispose();player.dispose();mirror.close();
 });
 
 
@@ -141,7 +159,7 @@ test('local detours go around low props without stepping onto them',()=>{
   npc.dispose();player.dispose();
 });
 
-test('a moving blocker that flickers across a full destination does not restart the patrol every other tick',()=>{
+test('a patrol resumes on the first tick after a moving blocker clears',()=>{
   const flat={...world,spawn:{x:2,z:.71},blockers:[]};
   const create=createCharacterAuthorityFactory(flat);
   const player=create(0,undefined,undefined,{id:'local-player',ownerId:'local'});
@@ -151,15 +169,32 @@ test('a moving blocker that flickers across a full destination does not restart 
     for(let tick=1;tick<=75;tick++){player.step(tick);npc.step(tick);}
     const before=npc.snapshot().actors[0];
     assert.ok(before.x>-.4&&before.x<.6);
-    for(let tick=76;tick<=105;tick++){
+    for(const [tick,z] of [[76,-1],[77,1]] as const){
       const s=player.snapshot();
-      const z=tick%2===0?-1:1;
       assert.ok(player.receive({type:'move',characterId:s.id,sequence:tick,tick:s.tick,x:0,z,run:false,jump:false},s.ownerId).accepted);
       player.step(tick);npc.step(tick);
-      assert.equal(npc.snapshot().actors[0].x,before.x);
+      if(tick===76)assert.equal(npc.snapshot().actors[0].x,before.x);
+      else assert.ok(npc.snapshot().actors[0].x>before.x);
     }
     player.dispose();
-    for(let tick=106;tick<=210;tick++)npc.step(tick);
+    for(let tick=78;tick<=210;tick++)npc.step(tick);
     assert.ok(npc.snapshot().arrivals>=1);
   } finally {npc.dispose();player.dispose();}
+});
+
+test('presentation keeps NPC speed even when frames alternate between one and two simulation ticks',()=>{
+  const clock=createLocalAuthority();
+  let previous={x:0,z:0},current=previous;
+  clock.addSystem(tick=>{previous=current;current={x:tick*.03,z:0};});
+  clock.advance(STEP_MS*2);
+  let position=interpolateNpcPosition(previous,current,clock.frameProgress());
+  for(let frame=0;frame<40;frame++){
+    const delta=frame%2===0?STEP_MS*1.25:STEP_MS*1.75;
+    clock.advance(delta);
+    const next=interpolateNpcPosition(previous,current,clock.frameProgress());
+    assert.ok(Math.abs(next.x-position.x-1.8*delta/1000)<1e-9);
+    position=next;
+  }
+  clock.advance(10000);
+  assert.equal(clock.frameProgress(),1);
 });
