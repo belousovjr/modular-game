@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { LOCOMOTION_SPEEDS } from '../src/modules/characters/headless.ts';
 import { streetSelection } from '../src/modules/npcs/spacing.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { createNpcAuthority, createNpcNavigation, deriveNpcCycle, npcPose, trafficConflict, createStreetSchedule, sampleNpc, spreadWalkLeg, crowdTiming, crowdTrack, crowdCycles, type NpcCrowd, type NpcSeed } from '../src/modules/npcs/headless.ts';
@@ -31,7 +32,11 @@ test('city recipes vary by seed, generate jobs from the map and reproduce arbitr
   assert.equal(deriveNpcCycle(nav,{...seed,anchor:'p//-44'}),undefined);
   assert.equal(deriveNpcCycle(nav,{...seed,seed:NaN}),undefined);
   const runners=Array.from({length:10},(_,i)=>deriveNpcCycle(nav,{...seed,personality:1,seed:i+1})!);
-  assert.ok(runners.some(cycle=>cycle.legs.some(l=>l.mode==='run')));
+  const run=runners.flatMap(cycle=>cycle.legs)
+    .find(leg=>leg.mode==='run'&&leg.length>=2);
+  assert.ok(run);
+  const speed=run.length*1000/((run.until-run.from)*STEP_MS);
+  assert.ok(speed>LOCOMOTION_SPEEDS.run*.94 && speed<=LOCOMOTION_SPEEDS.run);
   const roads=nav.roadNodes.filter(n=>nav.parking(n)&&Math.hypot(n.point[0]-nav.spawn.x,n.point[2]-nav.spawn.z)<220);
   assert.ok(roads.some(n=>{
     const c=deriveNpcCycle(nav,{...seed,personality:3,anchor:n.id,home:n.id})!;

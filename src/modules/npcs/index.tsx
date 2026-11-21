@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { defineModule, type CoreContext } from '../../core/context.ts';
 import { createScope } from '../../core/scope.ts';
 import { SceneCamera } from '../../core/fly-camera.ts';
+import { geometryModule } from '../geometry/index.ts';
 import { charactersModule } from '../characters/index.ts';
 import { worldModule } from '../world/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
@@ -13,14 +14,17 @@ import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { createTrafficCarAssets } from '../vehicles/index.tsx';
 import { crowdTiming, crowdTrack, NPC_RADIUS, TRAFFIC_RADIUS } from './headless.ts';
 
-import { streetSelection } from './spacing.ts';
+import { streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
 import { createPlanner } from './planner.ts';
-import { displayNpcPose } from './presentation.ts';
+import { displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
 import type { PlannerPlan } from './planner-protocol.ts';
 
 type Pose = NonNullable<ReturnType<typeof displayNpcPose>>;
 type Actor = {id:string;cycle:Extract<PlannerPlan,{kind:'resident'}>['plan']['cycle'];phase?:number;pace?:number};
 type Candidate = Actor & {d:number;car:boolean;cell:string;existing:boolean;onScreen:boolean};
+type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number;
+  draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
+
 type Diagnostics = { population: number; subscribed: number; people: number; cars: number; ready: boolean; error: string };
 
 function NpcInfo({read,onFrame}: {read:()=>Diagnostics; onFrame:CoreContext['onFrame']}) {
@@ -47,24 +51,27 @@ function NpcInfo({read,onFrame}: {read:()=>Diagnostics; onFrame:CoreContext['onF
 
 export const npcsModule=defineModule({
   id:'npcs', title:'Жители города', category:'Игра',
-  requires:{world:worldModule, simulation:simulationModule, characters:charactersModule, interiors:buildingInteriorsModule, rendering:objectRenderingModule},
+  requires:{geometry:geometryModule,world:worldModule, simulation:simulationModule, characters:charactersModule, interiors:buildingInteriorsModule, rendering:objectRenderingModule},
   setup({core,deps,scope}) {
     const planner=createPlanner(deps.world.getNavigationSource(),deps.world.collision,
       deps.world.getBuildingInteriorSources,scope);
-    const cars=createTrafficCarAssets(core.scene,scope);
-    const views=new Map<string,{owner:ReturnType<typeof createScope>; car:boolean; born:number; draw:(pose:Pose,tick:number,id:string)=>void; fade?:(coverage:number)=>void}>();
+    const cars=createTrafficCarAssets(core.scene,deps.geometry,scope);
+    const views=new Map<string,View>();
+    const reusable:View[]=[];
     const doorPoses=new Map<string,number>();
     deps.interiors.registerTrafficDoors(id=>doorPoses.get(id)??0,scope);
     scope.onDispose(()=>{
       for (const view of views.values()) view.owner.dispose();
       views.clear();
+      while (reusable.length) reusable.pop()!.owner.dispose();
     });
 
     const probe=Vector3.Zero();
     let subscribed=0;
     let displayed: Actor[]=[];
+    let selected=new Set<string>();
     let lastTick=-Infinity,lastX=Infinity,lastY=Infinity,lastZ=Infinity,lastFlyover=false,drawnTick=-1,lastRevision=-1;
-    const observer=core.onFrame.add(()=>{
+    const observer=core.onFrame.add(delta=>{
       const origin=deps.rendering.getDistanceOrigin();
       const x=origin?.x??Infinity,y=origin?.y??Infinity,z=origin?.z??Infinity;
       const flyover=core.scene.activeCamera instanceof SceneCamera;
@@ -82,7 +89,7 @@ export const npcsModule=defineModule({
           const pose=displayNpcPose(cycle,tick,phase,pace);
           if (!pose) return;
           const dx=x-pose.point[0],dy=flyover?0:y-pose.point[1],dz=z-pose.point[2];
-          const existing=views.has(id),limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?8:0);
+          const existing=views.has(id),limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
           const d=dx*dx+dy*dy+dz*dz;
           if (d>limit*limit || !Number.isFinite(d)) return;
           probe.set(pose.point[0],pose.point[1]+.9,pose.point[2]);
@@ -107,63 +114,77 @@ export const npcsModule=defineModule({
           }
         }
         displayed=streetSelection(candidates);
+        selected=new Set(displayed.map(actor=>actor.id));
       }
-      if (!refresh && drawnTick===tick && views.size===displayed.length) return;
+      const moved=refresh||drawnTick!==tick;
       drawnTick=tick;
-      doorPoses.clear();
-      const visible=displayed.flatMap(({id,cycle,phase,pace})=>{
-        const pose=displayNpcPose(cycle,tick,phase,pace);
-        return pose?[{id,pose}]:[];
-      });
-      for (const {pose} of visible)
-        if (pose.door) doorPoses.set(pose.door,Math.max(doorPoses.get(pose.door)??0,pose.doorOpen));
-      const active=new Set(visible.map(a=>a.id));
-      const reusable=[...views.keys()].filter(id=>!active.has(id)&&!views.get(id)?.car);
-      let created=0;
-      for (const {id,pose} of visible) {
-        let view=views.get(id);
-        if (!view && pose.mode!=='drive') {
-          const oldId=reusable.pop();
-          if (oldId) {
-            view=views.get(oldId)!;
-            views.delete(oldId);
-            view.born=tick;
-            views.set(id,view);
+      if (moved) doorPoses.clear();
+      let people=0,activeCars=0;
+      const step=delta/NPC_LOD_MS;
+      for (const [id,view] of views) {
+        if (!selected.has(id)) {
+          view.progress=Math.max(0,view.progress-step);
+          if (view.progress===0) {
+            views.delete(id);
+            if (view.car) view.owner.dispose(); else reusable.push(view);
+            continue;
           }
         }
-        if (!view && created<2) {
-          const owner=createScope();
-          try {
-            if (pose.mode==='drive') {
-              cars.load();
-              const draw=cars.create(owner,id);
-              if (draw) view={owner,car:true,born:tick,draw};
-            } else {
-              const draw=deps.characters.createView(owner);
-              view={owner,car:false,born:tick,fade:draw.setFade,draw(p,tick,id) {
-                draw({tick,id,ownerId:'authority',x:p.point[0],y:p.point[1],z:p.point[2],yaw:p.yaw,
-                  grounded:true,verticalSpeed:0,airborneTicks:0,landedTick:0,mode:'walk',stance:'standing',
-                  boosted:false,moving:p.mode!=='idle',running:p.mode==='run',lastSequence:0},p.point[1]);
-              }};
+        if (view.car) activeCars++; else people++;
+      }
+      function show(view:View,pose:Pose,updatePose:boolean) {
+        const distance=Math.hypot(x-pose.point[0],flyover?0:y-pose.point[1],z-pose.point[2]);
+        view.fade(npcLodCoverage(view.progress,distance,view.car));
+        if (updatePose) view.draw(pose,tick,view.actor.id);
+      }
+      for (const [id,view] of views) if (!selected.has(id)) {
+        const {cycle,phase,pace}=view.actor;
+        const pose=displayNpcPose(cycle,tick,phase,pace);
+        if (pose) show(view,pose,moved);
+      }
+      let created=0;
+      for (const actor of displayed) {
+        const {id,cycle,phase,pace}=actor;
+        const pose=displayNpcPose(cycle,tick,phase,pace);
+        if (!pose) continue;
+        if (moved && pose.door) doorPoses.set(pose.door,Math.max(doorPoses.get(pose.door)??0,pose.doorOpen));
+        let view=views.get(id);
+        const car=pose.mode==='drive';
+        const needsView=!view;
+        if (!view && (car?activeCars<CAR_LIMIT:people<PEOPLE_LIMIT)) {
+          view=car?undefined:reusable.pop();
+          if (!view && created<2) {
+            const owner=createScope();
+            try {
+              if (car) {
+                cars.load();
+                const assets=cars.create(owner,id);
+                if (assets) view={owner,actor,car,progress:0,draw:assets.draw,fade:assets.setFade};
+              } else {
+                const draw=deps.characters.createView(owner);
+                view={owner,actor,car,progress:0,fade:draw.setFade,draw(p,tick,id) {
+                  draw({tick,id,ownerId:'authority',x:p.point[0],y:p.point[1],z:p.point[2],yaw:p.yaw,
+                    grounded:true,verticalSpeed:0,airborneTicks:0,landedTick:0,mode:'walk',stance:'standing',
+                    boosted:false,moving:p.mode!=='idle',running:p.mode==='run',lastSequence:0},p.point[1]);
+                }};
+              }
+            } finally {
+              if (!view) owner.dispose();
             }
-          } finally {
-            if (!view) owner.dispose();
+            if (view) created++;
           }
           if (view) {
             views.set(id,view);
-            created++;
+            if (car) activeCars++; else people++;
           }
         }
-        if (view?.fade) {
-          const d=Math.hypot(x-pose.point[0],flyover?0:y-pose.point[1],z-pose.point[2]);
-          view.fade(Math.max(0,Math.min(1,(tick-view.born)/14,(NPC_RADIUS+8-d)/16)));
+        if (view) {
+          view.actor=actor;
+          view.progress=needsView?0:Math.min(1,view.progress+step);
+          show(view,pose,needsView||moved);
         }
-        view?.draw(pose,tick,id);
       }
-      for (const [id,view] of views) if (!active.has(id)) {
-        view.owner.dispose();
-        views.delete(id);
-      }
+      while (reusable.length) reusable.pop()!.owner.dispose();
     });
     scope.onDispose(()=>core.onFrame.remove(observer));
     const diagnostics=()=>{

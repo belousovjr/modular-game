@@ -81,7 +81,7 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
   }};
 }
 
-export function createTrafficCarAssets(scene: Scene,scope: Scope) {
+export function createTrafficCarAssets(scene: Scene,geometry:ReturnType<typeof geometryModule.setup>,scope: Scope) {
   const controller=new AbortController();
   scope.onDispose(()=>controller.abort());
   let container: Awaited<ReturnType<typeof loadCar>>;
@@ -107,11 +107,22 @@ export function createTrafficCarAssets(scene: Scene,scope: Scope) {
           rotation:node.rotationQuaternion?.clone()??Quaternion.FromEulerVector(node.rotation)}];
       });
       if (wheels.length!==4) { error='GLB: не найдены четыре колеса фоновой машины'; return; }
-      for (const mesh of root.getChildMeshes()) {
+      const meshes=root.getChildMeshes().filter((mesh):mesh is Mesh=>mesh instanceof Mesh && mesh.getTotalVertices()>0);
+      for (const mesh of meshes) {
         mesh.isPickable=false;
         mesh.metadata={...mesh.metadata,shadowCaster:false};
+        mesh.setEnabled(false);
       }
-      return (pose: { point: readonly [number,number,number]; yaw: number; steering: number; wheelDistance: number; pitch: number })=>{
+      let coverage=0;
+      const setFade=(next:number)=>{
+        if (coverage===next) return;
+        coverage=next;
+        for (const mesh of meshes) {
+          mesh.setEnabled(coverage>0);
+          geometry.setMeshFade(mesh,0,coverage||1);
+        }
+      };
+      const draw=(pose: { point: readonly [number,number,number]; yaw: number; steering: number; wheelDistance: number; pitch: number })=>{
         root.position.set(pose.point[0],pose.point[1],pose.point[2]);
         root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(pose.pitch,pose.yaw,0));
         const spin=Quaternion.RotationAxis(Vector3.Right(),pose.wheelDistance/.43);
@@ -119,6 +130,7 @@ export function createTrafficCarAssets(scene: Scene,scope: Scope) {
         for (const {node,front,rotation} of wheels)
           node.rotationQuaternion=(front?steer.multiply(spin):spin).multiply(rotation);
       };
+      return {draw,setFade};
     },
   };
 }

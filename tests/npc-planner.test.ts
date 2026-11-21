@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { Worker } from 'node:worker_threads';
-import { createNpcNavigation } from '../src/modules/npcs/headless.ts';
-import { displayNpcPose } from '../src/modules/npcs/presentation.ts';
+import { createNpcNavigation, NPC_RADIUS, TRAFFIC_RADIUS } from '../src/modules/npcs/headless.ts';
+import { displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN } from '../src/modules/npcs/presentation.ts';
 import { plannerPackets } from '../src/modules/npcs/planner-input.ts';
 import { plannerQueryDue, type PlannerRequest, type PlannerResponse } from '../src/modules/npcs/planner-protocol.ts';
 import type { CitySource } from '../src/modules/world-generation/headless.ts';
@@ -96,4 +96,15 @@ test('clock polling skips intermediate ticks and still fetches moved or pending 
   assert.equal(plannerQueryDue(previous,{...previous,tick:66},false),true);
   assert.equal(plannerQueryDue(previous,{...previous,tick:61,origin:{x:4,z:0}},false),true);
   assert.equal(plannerQueryDue(previous,previous,true),true);
+});
+
+test('people and cars ease in and out and fade before their outer distance cutoff',()=>{
+  for (const [car,radius] of [[false,NPC_RADIUS],[true,TRAFFIC_RADIUS]] as const) {
+    assert.equal(npcLodCoverage(0,0,car),0);
+    assert.equal(npcLodCoverage(.25,0,car),.15625);
+    assert.equal(npcLodCoverage(.5,0,car),.5);
+    assert.equal(npcLodCoverage(1,0,car),1);
+    assert.ok(npcLodCoverage(1,radius,car)>npcLodCoverage(1,radius+4,car));
+    assert.equal(npcLodCoverage(1,radius+NPC_LOD_MARGIN,car),0);
+  }
 });

@@ -1,4 +1,5 @@
 import { STEP_MS } from '../../simulation/authority.ts';
+import { LOCOMOTION_SPEEDS } from '../characters/headless.ts';
 import { interiorLayout, stairWalkPath } from '../building-interiors/headless.ts';
 import type { BuildingInteriorSource, CollisionBox, CollisionWorld } from '../world/headless.ts';
 import type { CityMesh, CitySource } from '../world-generation/headless.ts';
@@ -400,8 +401,9 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
     }
     return parents;
   }
+  const mapVersion=`${city.id}/${revision.toString(16)}`;
   return {
-    version:`${city.id}/${revision.toString(16)}`, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
+    version:`${mapVersion}/15`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
     node(id: string) {
       if (id.startsWith('r/')) return driving.get(id);
       const [kind,x,z]=id.split('/');
@@ -555,7 +557,7 @@ export function deriveNpcCycle(nav: NpcNavigation, scenario: NpcSeed): Cycle|und
     time+=duration;
     walked+=length;
   }
-  const car=profile.travel==='drive', cruise=car?6+rng()*4:1.45+rng()*.55;
+  const car=profile.travel==='drive', cruise=car?6+rng()*4:LOCOMOTION_SPEEDS.walk*(.9+rng()*.2);
   const activities=car?1:2+Math.floor(rng()*3);
   const carPoint=parked;
   const favorites=nav.visits.filter(v=>distance(home.point,v.node.point)<185)
@@ -583,15 +585,15 @@ export function deriveNpcCycle(nav: NpcNavigation, scenario: NpcSeed): Cycle|und
       addLeg(carPoint.approach,points[0],'drive',3,0,undefined,true);
     }
     const running=!car&&rng()<profile.running;
-    for (let i=1;i<points.length;i++) addLeg(points[i-1],points[i],car?'drive':running?'run':'walk',running?4.4:cruise);
+    for (let i=1;i<points.length;i++) addLeg(points[i-1],points[i],car?'drive':running?'run':'walk',running?LOCOMOTION_SPEEDS.run:cruise);
     node=path.at(-1)!;
     if (visit) {
       const pathInside=visit.paths[Math.floor(rng()*visit.paths.length)];
       const pause=Math.floor(150+rng()*480);
       const enter=time;
-      for (let i=1;i<pathInside.length;i++) addLeg(pathInside[i-1],pathInside[i],'walk',1.35,0,i<=2?visit.id:undefined);
+      for (let i=1;i<pathInside.length;i++) addLeg(pathInside[i-1],pathInside[i],'walk',LOCOMOTION_SPEEDS.walk*.85,0,i<=2?visit.id:undefined);
       addLeg(pathInside.at(-1)!,pathInside.at(-1)!,'idle',1,pause);
-      for (let i=pathInside.length-1;i>0;i--) addLeg(pathInside[i],pathInside[i-1],'walk',1.35,0,i<=2?visit.id:undefined);
+      for (let i=pathInside.length-1;i>0;i--) addLeg(pathInside[i],pathInside[i-1],'walk',LOCOMOTION_SPEEDS.walk*.85,0,i<=2?visit.id:undefined);
       reservations.push({id:visit.id,from:enter,until:time});
     }
     if (!car) addLeg(node.point,node.point,'idle',1,Math.floor(75+rng()*260));
@@ -637,7 +639,7 @@ function closeWalkingCycle(nav: NpcNavigation,recipe: NpcSeed,cycle: Cycle): Cyc
   for (const b of points) {
     const length=distance(a,b);
     if (!length) continue;
-    const until=from+Math.ceil(length*1000/(1.8*STEP_MS));
+    const until=from+Math.ceil(length*1000/(LOCOMOTION_SPEEDS.walk*STEP_MS));
     const yaw=Math.atan2(b[0]-a[0],b[2]-a[2]);
     const pitch=-Math.atan2(b[1]-a[1],Math.hypot(b[0]-a[0],b[2]-a[2]));
     legs.push({a,b,mode:'walk',from,until,distance:walked,length,yaw,pitch,into:0,out:0});
@@ -708,7 +710,8 @@ export function sampleNpc(cycle: Cycle,tick: number,phase?: number,pace=1) {
   const start=cycle.legs[0].from, span=cycle.endTick-start;
   const elapsed=(tick-start)*pace+phase*span;
   const position=((elapsed%span)+span)%span;
-  return npcPose(cycle,start+position);
+  const pose=npcPose(cycle,start+position);
+  return pose && {...pose,speed:pose.speed*pace};
 }
 
 export function spreadWalkLeg(nav: NpcNavigation,a: Point,b: Point,sign: number,fraction: number,reach: number) {
@@ -783,7 +786,7 @@ function outdoorTracks(nav: NpcNavigation,full: Cycle,recipe: NpcSeed) {
       const path=nav.route(stops[i-1],stops[i],profile,seed,200,visited)??treePath(stops[i-1],stops[i]);
       for (const node of path.slice(0,-1)) visited.add(node);
       const points=footPoints(path);
-      const run=rng()<profile.running*.65,speed=run?3.7:1.4+rng()*.5;
+      const run=rng()<profile.running*.65,speed=run?LOCOMOTION_SPEEDS.run:LOCOMOTION_SPEEDS.walk*(.9+rng()*.2);
       for (let j=1;j<points.length;j++) {
         const a=points[j-1],b=points[j];
         const bend=spreadWalkLeg(nav,a,b,variant%2?1:-1,.35+rng()*.3,8+rng()*7);
@@ -952,7 +955,7 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
       return conflicts(booking.pattern,shift,car);
     },
     book(pattern:Float64Array,desired:number) {
-      for (let trial=0;trial<16;trial++) {
+      for (let trial=0;trial<20;trial++) {
         const shift=(desired+trial*31)%SCHEDULE_SLOTS;
         if (conflicts(pattern,shift)) continue;
         markAmbient(pattern,shift);
@@ -1080,7 +1083,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   }
   const divisions=16,{minX,minZ,maxX,maxZ}=nav.bounds;
   const width=(maxX-minX)/divisions,depth=(maxZ-minZ)/divisions;
-  const rank=random(hash(nav.version));
+  const rank=random(hash(nav.mapVersion));
   const districts=Array.from({length:divisions**2},(_,i)=>{
     const ix=i%divisions,iz=Math.floor(i/divisions);
     const x=minX+ix*width,z=minZ+iz*depth;
@@ -1149,7 +1152,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   }
   const coverage=new Map<string,number>();
   const available=[...nav.walkSites];
-  const crowdRandom=random(hash(`crowds/${nav.version}`));
+  const crowdRandom=random(hash(`crowds/${nav.mapVersion}`));
   function seedCrowd(birth:number,local?:{x:number;z:number}):void {
     if (!available.length) return;
     let chosen=-1,best=Infinity;
@@ -1176,7 +1179,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
           Math.floor(anchor.point[2]/WALK_COVERAGE_CELL)!==site.z) continue;
       const id=`street/${site.key}`;
       const recipe:NpcSeed=Object.freeze({id,personality:hash(id)%3,crowd:true,
-        seed:hash(id,hash(nav.version))||1,anchor:anchor.id,home:anchor.id,startTick:birth,navigation:nav.version});
+        seed:hash(id,hash(nav.mapVersion))||1,anchor:anchor.id,home:anchor.id,startTick:birth,navigation:nav.version});
       const full=deriveNpcCycle(nav,recipe)!;
       if (full.legs.at(-1)!.distance<55) return;
       const target=Math.min(crowdSize,crowdTarget-crowdPopulation);
