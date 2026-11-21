@@ -65,6 +65,7 @@ export const buildingInteriorsModule = defineModule({
     let doorway: BuildingDoor | undefined;
     let open = 0, opening = false;
     scope.onDispose(() => deps.materials.setDoorway(null));
+    scope.onDispose(() => deps.materials.setInteriorBuilding(0));
     scope.onDispose(() => deps.world.setInteriorView(false));
     function selectDoor(door: BuildingDoor | undefined) {
       if (door === doorway) return;
@@ -237,7 +238,7 @@ export const buildingInteriorsModule = defineModule({
       }, scope, deps.world.buildingDetailRange);
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {
-      if (!active.size) {selectDoor(undefined);deps.world.setInteriorView(false);return;}
+      if (!active.size) {selectDoor(undefined);deps.world.setInteriorView(false);deps.materials.setInteriorBuilding(0);return;}
       const camera = core.scene.activeCamera;
       camera?.getViewMatrix();
       const opacity = camera instanceof SceneCamera ? .8 : 1;
@@ -267,6 +268,7 @@ export const buildingInteriorsModule = defineModule({
         open=opening?Math.min(1,open+step):Math.max(0,open-step);
       }
       uploadAvailable=true;
+      let interiorBuilding=0;
       const maxSwing=ENTRANCE_SWING*Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
       for (const [id,view] of active) {
         const selectedDoor=selected?.id===id?selected:undefined;
@@ -277,6 +279,7 @@ export const buildingInteriorsModule = defineModule({
         const right=Math.max(traffic,presentedDoors?state?.right??0:visualOpen);
         const preparingEntrance=!!selectedDoor&&(left>0||right>0||!!actor&&doorDistance(selectedDoor,actor)<=3.5);
         const ready=view.update(point,opacity,actor,preparingEntrance);
+        if (ready && id===selected?.id && insideSelected) interiorBuilding=deps.world.getCoarseBuildingKey(id);
         view.doorReady=(left>0||right>0)&&(ready||view.doorReady||traffic>0);
         for (const {mesh,direction} of view.leaves) {
           const angle=view.doorReady?direction*ENTRANCE_SWING*(direction>0?left:right):0;
@@ -284,6 +287,7 @@ export const buildingInteriorsModule = defineModule({
           if(change)mesh.rotation.y+=Math.max(-maxSwing,Math.min(maxSwing,change));
         }
       }
+      deps.materials.setInteriorBuilding(interiorBuilding);
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {

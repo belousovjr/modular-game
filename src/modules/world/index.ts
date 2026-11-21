@@ -51,6 +51,7 @@ export const worldModule = defineModule({
     const lamps: typeof buildings = new Set();
     const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass'&&p.templateId!=='city/tree');
     const buildingCount=city.colliders.length;
+    const coarseBuildingKeys=new Map(city.colliders.map(({id},index)=>[id,index+1]));
     const lampCount = placements.filter(p => p.templateId === 'city/signal' || p.templateId === 'world/lamp').length;
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
     for (const placement of placements) {
@@ -180,6 +181,7 @@ export const worldModule = defineModule({
           const material=distant?surface.surface.slice(0,-band.id.length-1):surface.surface;
           const mesh=deps.geometry.createSurfaceMesh(`${chunk.id}/${surface.surface}`,material,surface.positions,surface.indices,owner,surface.uvs);
           if ('doorWindows' in surface && surface.doorWindows) mesh.setVerticesData('cityDoorWindows', new Float32Array(surface.doorWindows), false, 4);
+          if ('buildings' in surface && surface.buildings) mesh.setVerticesData('cityBuilding',Float32Array.from(surface.buildings),false,1);
           if ('trim' in surface && surface.trim) {
             mesh.setVerticesData('cityTrim', new Float32Array(surface.trim), false, 4);
           }
@@ -249,6 +251,7 @@ export const worldModule = defineModule({
       getMap: () => getWorldMap(city),
       getNavigationSource: () => city,
       getBuildingProfile,
+      getCoarseBuildingKey: (id:string) => coarseBuildingKeys.get(id)??0,
       getBuildingInteriorSources: () => getBuildingInteriorSources(city),
       setInteriorView(inside: boolean) { interiorView = inside; },
       buildingDetailRange: detailRange,

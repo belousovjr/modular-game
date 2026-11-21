@@ -8,6 +8,7 @@ import { Observable } from '@babylonjs/core/Misc/observable.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
 import { defaultPixelShader } from '@babylonjs/core/Shaders/default.fragment.js';
 import { defaultVertexShader } from '@babylonjs/core/Shaders/default.vertex.js';
+import { CityFacade } from '../src/modules/materials/city-surface.ts';
 import { DoorwayCut } from '../src/modules/materials/doorway.ts';
 import { SurfaceScale } from '../src/modules/materials/surface-scale.ts';
 import { bumpFragment } from '@babylonjs/core/Shaders/ShadersInclude/bumpFragment.js';
@@ -180,4 +181,16 @@ test('doorway cut extends below the threshold only on vertical geometry',t=>{
   assert.match(shader,/float doorBottom=\.015;/);
   assert.match(shader,/#ifdef NORMAL[\s\S]+if\(abs\(normalize\(vNormalW\)\.y\)<\.25\)doorBottom=-\.025;\s+#endif/);
   assert.match(shader,/doorLocal\.y>doorBottom/);
+});
+
+test('city facade masks coarse building keys through the Standard vertex hook',t=>{
+  const engine=new NullEngine();
+  const scene=new Scene(engine);
+  t.after(()=>{scene.dispose();engine.dispose();});
+  const facade=new CityFacade(new StandardMaterial('facade',scene));
+  const {CUSTOM_VERTEX_MAIN_END:code}=facade.getCustomCode('vertex')!;
+  assert.match(defaultVertexShader.shader,/#define CUSTOM_VERTEX_MAIN_END/);
+  assert.match(code,/#ifdef CITY_COARSE_BUILDING/);
+  assert.match(code,/cityInteriorBuilding>0\. && cityBuilding==cityInteriorBuilding/);
+  assert.match(code,/gl_Position=vec4\(2\.,2\.,2\.,1\.\)/);
 });

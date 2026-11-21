@@ -302,3 +302,27 @@ test('underwater view attaches when the near plane crosses water and detaches ov
   owner.dispose();
   assert.equal(engine.postProcesses.length, 0);
 });
+
+test('grass at 250 South Wacker stays outside the building footprint',async()=>{
+  const {groupGrass,sampleGrass}=await import('../src/modules/world/grass.ts');
+  const building=citySource.colliders.find(b=>b.id==='osm/w147350207/0/0/1')!;
+  const patches=[...groupGrass(citySource).values()].filter(p=>p.buildings.includes(building));
+  const inside=({x,z}:{x:number;z:number})=>{
+    let crossings=0;
+    for(const [i,[ax,az]] of building.outline.entries()){
+      const [bx,bz]=building.outline[(i+1)%building.outline.length];
+      if ((az>z)!==(bz>z) && x<ax+(bx-ax)*(z-az)/(bz-az)) crossings++;
+    }
+    return crossings%2===1;
+  };
+  assert.ok(patches.flatMap(p=>sampleGrass({...p,buildings:[]})).some(inside));
+  const roots=patches.flatMap(sampleGrass);
+  assert.ok(roots.length>0 && !roots.some(inside));
+
+  const patch={bounds:{minX:0,maxX:8,minZ:0,maxZ:8},triangles:[
+    {positions:[0,0,0,8,0,0,0,0,8],a:0,b:3,c:6},
+  ],buildings:[{...building,minX:0,maxX:8,minZ:0,maxZ:8,outline:[[0,0],[8,0],[8,8],[0,8]],
+    parts:[[[0,0],[2,0],[2,8],[0,8]],[[6,0],[8,0],[8,8],[6,8]]]}]};
+  const courtyard=sampleGrass(patch);
+  assert.ok(courtyard.length>0 && courtyard.every(({x})=>x>=2&&x<6));
+});

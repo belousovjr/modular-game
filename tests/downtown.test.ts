@@ -528,6 +528,23 @@ test('skyline batches preserve fitted UVs and geometry across tile boundaries',a
   const oldCount=chunks.flatMap(c=>c.meshes.filter(m=>m.surface.startsWith('city-'))).length;
   const groups=groupBuildingSurfaces(citySource);
   assert.ok(groups.flatMap(g=>g.meshes).length<oldCount/2);
+  const key=citySource.colliders.findIndex(b=>b.id==='osm/w147350207/0/0/1')+1;
+  assert.ok(key>0);
+  let wackerFaces=0;
+  let wackerInteriorWall=false;
+  for(const {meshes} of groups) for(const mesh of meshes){
+    assert.equal(mesh.buildings?.length,mesh.positions.length/3);
+    const buildings=mesh.buildings!;
+    assert.ok(mesh.indices.every((index,i)=>buildings[index]>0&&buildings[index]===buildings[mesh.indices[i-i%3]]));
+    for(let i=0;i<mesh.indices.length;i+=3){
+      const a=mesh.indices[i];
+      if(buildings[a]!==key)continue;
+      wackerFaces++;
+      if(mesh.indices.slice(i,i+3).some(vertex=>Math.abs(mesh.positions[vertex*3]+563.3976)<.001 &&
+          Math.abs(mesh.positions[vertex*3+2]+624.633)<.001))wackerInteriorWall=true;
+    }
+  }
+  assert.ok(wackerFaces>0 && wackerInteriorWall);
   const bounds={minX:0,maxX:128,minZ:0,maxZ:128};
   const wall={surface:'city-glass-tall',positions:[0,0,0,0,10,0,4,0,0],indices:[0,1,2],uvs:[128,0,128,3,129,0]};
   const next={...wall,positions:wall.positions.map((v,i)=>i%3===0?v+128:v),uvs:[129,0,129,3,130,0]};

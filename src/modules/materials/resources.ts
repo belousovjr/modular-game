@@ -120,6 +120,10 @@ export function createMaterials(scene: Scene, geometry: ReturnType<typeof geomet
   scope.onDispose(() => { stopped = true; changed.clear(); });
   return {
     getSnapshot: () => snapshot,
+    setInteriorBuilding(key:number){
+      if(stopped||!Number.isSafeInteger(key)||key<0)throw new Error('Invalid interior building');
+      for(const facade of facades)facade.interiorBuilding=key;
+    },
     setDoorway(door:Doorway|null){
       if(stopped)throw new Error('Материалы остановлены');
       if(door&&(![door.x,door.y,door.z,door.tx,door.tz,door.width,door.height].every(Number.isFinite)||

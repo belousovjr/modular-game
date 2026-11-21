@@ -1,3 +1,4 @@
+import {containsBuildingFootprint} from './footprint.ts';
 import '@babylonjs/core/Meshes/thinInstanceMesh.js';
 import { MaterialPluginBase } from '@babylonjs/core/Materials/materialPluginBase.js';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js';
@@ -25,7 +26,7 @@ export function grassLodDistance(distance: number, indoors: boolean) {
 
 type Triangle = { positions: readonly number[]; a: number; b: number; c: number };
 
-type GrassPatch = { bounds: SectionBounds; triangles: Triangle[] };
+type GrassPatch = { bounds: SectionBounds; triangles: Triangle[]; buildings: CitySource['colliders'][number][] };
 
 export function groupGrass(city: CitySource) {
   const patches = new Map<string, GrassPatch>();
@@ -42,12 +43,17 @@ export function groupGrass(city: CitySource) {
         const key = `${x}/${z}`;
         let patch = patches.get(key);
         if (!patch) {
-          patch = { bounds: { minX: x * PATCH, minZ: z * PATCH, maxX: (x + 1) * PATCH, maxZ: (z + 1) * PATCH }, triangles: [] };
+          patch = { bounds: { minX: x * PATCH, minZ: z * PATCH, maxX: (x + 1) * PATCH, maxZ: (z + 1) * PATCH }, triangles: [], buildings: [] };
           patches.set(key, patch);
         }
         patch.triangles.push(triangle);
       }
     }
+  }
+  for (const building of city.colliders) {
+    for (let x=Math.floor(building.minX/PATCH);x<=Math.floor(building.maxX/PATCH);x++)
+      for (let z=Math.floor(building.minZ/PATCH);z<=Math.floor(building.maxZ/PATCH);z++)
+        patches.get(`${x}/${z}`)?.buildings.push(building);
   }
   return patches;
 }
@@ -80,12 +86,13 @@ function hash(x: number, z: number, salt: number) {
   return ((Math.imul(n ^ (n >>> 16), 668265263) ^ (n >>> 13)) >>> 0) / 4294967296;
 }
 
-export function sampleGrass({bounds, triangles}: GrassPatch) {
+export function sampleGrass({bounds, triangles, buildings}: GrassPatch) {
   const roots: { x: number; y: number; z: number; order: number }[] = [];
   for (let row = bounds.minZ / STEP; row < bounds.maxZ / STEP; row++) {
     for (let col = bounds.minX / STEP; col < bounds.maxX / STEP; col++) {
       const x = (col + hash(col, row, 1)) * STEP;
       const z = (row + hash(col, row, 2)) * STEP;
+      if (buildings.some(building=>containsBuildingFootprint(building,x,z))) continue;
       for (const {positions: p, a, b, c} of triangles) {
         const bx = p[b] - p[a], bz = p[b + 2] - p[a + 2];
         const cx = p[c] - p[a], cz = p[c + 2] - p[a + 2];
