@@ -2,7 +2,7 @@ import { createAuthClient } from '@neon/auth';
 import { SupabaseAuthAdapter } from '@neon/auth/vanilla/adapters';
 import { Badge, Box, Button, Callout, Card, Flex, Heading, Text, TextField, Theme } from '@radix-ui/themes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { createPanels } from './core/panels.ts';
+import { createPanels, usePanels } from './core/panels.ts';
 import { createViewport } from './core/scene.ts';
 import { modules } from './registry.ts';
 
@@ -36,12 +36,14 @@ async function characterRequest<T>(name?: string): Promise<T> {
 function Game({ character, leave }: { character: Character; leave(): void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [fps, setFps] = useState(0);
+  const [panels] = useState(createPanels);
+  const minimap = usePanels(panels).find(panel => panel.id === 'minimap');
   const [connection, setConnection] = useState({ message: 'Подключение…', inRoom: false });
   useEffect(() => {
     if (!canvas.current) return;
     let viewport: ReturnType<typeof createViewport> | undefined;
     try {
-      viewport = createViewport(canvas.current, value => setFps(Math.round(value)), createPanels(), () => {}, {
+      viewport = createViewport(canvas.current, value => setFps(Math.round(value)), panels, () => {}, {
         characterId: character.id,
         accessToken,
         status: (message, inRoom) => setConnection({ message, inRoom }),
@@ -53,9 +55,10 @@ function Game({ character, leave }: { character: Character; leave(): void }) {
       return;
     }
     return () => viewport.dispose();
-  }, [character.id]);
+  }, [character.id, panels]);
   return <main className="play-stage">
     <canvas ref={canvas} aria-label="Трёхмерная сцена" tabIndex={0} style={{ visibility: connection.inRoom ? 'visible' : 'hidden' }} />
+    {connection.inRoom && minimap && <aside className="scene-overlay" aria-label={minimap.title}>{minimap.content}</aside>}
     {connection.inRoom && <Box className="fps"><Badge aria-label="Частота кадров">{fps || '—'} FPS</Badge></Box>}
     <Flex className="play-game-menu" gap="3" align="center" justify="end" wrap="wrap">
       <Badge role="status" color={connection.message === 'В сети' ? 'green' : 'amber'}>
