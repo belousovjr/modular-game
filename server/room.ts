@@ -3,7 +3,7 @@ import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
-import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, type CharacterTerrainTile } from '../src/modules/characters/headless.ts';
+import { CharacterSpawnBlockedError, characterBody, createCharacterAuthorityFactory, type CharacterTerrainTile } from '../src/modules/characters/headless.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record, SNAPSHOT_TICKS } from '../src/simulation/online-protocol.ts';
 import type { BuildingInteriorSource, CollisionWorld } from '../src/modules/world/headless.ts';
@@ -137,8 +137,16 @@ export function startRoom(
 
   clock.addSystem(tick => {
     const start = performance.now();
-    makeActor.stepSharedDoors([...players.values()].filter(player => player.socket).map(player => player.actor.snapshot()));
-    for (const player of players.values()) player.actor.step(tick);
+    const roster = [...players.values()];
+    const poses = roster.map(player => player.actor.snapshot());
+    makeActor.stepSharedDoors(poses.filter((_,index) => roster[index].socket));
+    const bodies = poses.map(characterBody);
+    for (const [index, { actor }] of roster.entries()) {
+      actor.setTrafficBlockers(bodies.filter((_, other) => other !== index));
+      actor.step(tick);
+      // Later actors in the same tick collide with positions already committed by earlier actors.
+      bodies[index] = characterBody(actor.snapshot());
+    }
     const duration = performance.now() - start;
     ticks++;
     tickMs += duration;

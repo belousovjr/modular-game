@@ -144,3 +144,67 @@ test('two clients receive the same room-level entrance state', { timeout: 8000 }
     assert.fail('Shared entrance did not fully open');
   } finally { await room.close(); }
 });
+
+test('players cannot run through one another and can back away after contact', { timeout: 10_000 }, async () => {
+  const origin='http://localhost:5175';
+  const collision={
+    spawn:{x:-2,z:0},baseHeight:0,slopeX:0,bounds:{minX:-20,maxX:20,minZ:-20,maxZ:20},
+    floors:[],blockers:[],
+  };
+  let spawning=0;
+  const room=startRoom(collision,'contact-test',0,origin,async()=>true,undefined,[],[],
+    () => ({x:spawning++ ? 2 : -2,z:0}));
+  try {
+    await once(room.server,'listening');
+    const address=room.server.address();
+    assert.ok(address && typeof address!=='string');
+    const url=`ws://127.0.0.1:${address.port}/room`;
+    let direction=1;
+    const frames: Packet[]=[];
+    async function join(characterId:string, otherSide:boolean) {
+      const socket=new WebSocket(url,{origin});
+      await once(socket,'open');
+      let seq=0, lastTick=-6;
+      const welcome=once(socket,'message');
+      socket.on('message',bytes=>{
+        const packet:Packet=JSON.parse(bytes.toString());
+        if(packet.type!=='frame')return;
+        if(!otherSide)frames.push(packet);
+        if(packet.players.length!==2||packet.tick-lastTick<6)return;
+        lastTick=packet.tick;
+        const x=otherSide ? (direction===1?-1:0) : direction;
+        socket.send(JSON.stringify({type:'input',command:{
+          type:'move',characterId,sequence:++seq,tick:packet.tick,x,z:0,run:true,jump:false,
+        }}));
+      });
+      socket.send(JSON.stringify({type:'join',protocol:PROTOCOL,world:'contact-test',characterId,accessToken:'test'}));
+      await welcome;
+    }
+    await join('left',false);
+    await join('right',true);
+    function poses(packet:Packet) {
+      return [packet.players.find(player=>player.id==='left')!,packet.players.find(player=>player.id==='right')!];
+    }
+    async function observe(matches:(packet:Packet)=>boolean) {
+      for(let attempt=0;attempt<90;attempt++){
+        const packet=frames.find(frame=>frame.players.length===2&&matches(frame));
+        if(packet)return packet;
+        await new Promise(resolve=>setTimeout(resolve,50));
+      }
+      assert.fail('Expected contact state did not appear');
+    }
+    const contact=await observe(packet=>{
+      const [left,right]=poses(packet);
+      return right.x-left.x<.9 && left.lastSequence>0 && right.lastSequence>0 && !left.moving && !right.moving;
+    });
+    const held=await observe(packet=>packet.tick>=contact.tick+30);
+    assert.deepEqual(poses(held).map(actor=>actor.x),poses(contact).map(actor=>actor.x));
+    for(const packet of frames.filter(frame=>frame.players.length===2)){
+      const [left,right]=poses(packet);
+      assert.ok(right.x-left.x>=.7-1e-8);
+    }
+    direction=-1;
+    const retreated=await observe(packet=>packet.tick>held.tick&&poses(packet)[0].x<poses(contact)[0].x-.5);
+    assert.equal(poses(retreated)[1].x,poses(contact)[1].x);
+  } finally { await room.close(); }
+});

@@ -34,6 +34,11 @@ const LOCAL_PLAYER={id:'local-player',ownerId:'local'};
 
 const RADIUS = 0.35;
 const HEIGHT = {standing:1.8,crouching:1.3,prone:.65};
+
+export function characterBody(actor: Pick<CharacterSnapshot,'id'|'x'|'y'|'z'|'stance'>): CollisionBox {
+  return { id: `character/${actor.id}`, minX:actor.x-RADIUS, maxX:actor.x+RADIUS,
+    minZ:actor.z-RADIUS, maxZ:actor.z+RADIUS, minY:actor.y, maxY:actor.y+HEIGHT[actor.stance] };
+}
 const CELL = 32;
 type Triangle={minX:number;maxX:number;minZ:number;maxZ:number;vertices:readonly number[];denominator:number};
 const terrainIndices=new WeakMap<readonly (readonly number[])[],{cells:Map<string,Triangle[]>;entries:number}>();
