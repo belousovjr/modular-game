@@ -2,9 +2,10 @@ import type {TrafficContact, TrafficPoint, TrafficSample} from '../../simulation
 import type {CollisionBox} from '../world/index.ts';
 import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
+import { createScope } from '../../core/scope.ts';
 import { createAvatar, createCharacterAssets } from './assets.ts';
 import { CharacterPanel } from './panel.tsx';
-import {readAppearance,saveAppearance,type Appearance} from './appearance.ts';
+import {npcAppearance,readAppearance,saveAppearance,type Appearance} from './appearance.ts';
 export {npcAppearance} from './appearance.ts';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
@@ -28,13 +29,16 @@ export const charactersModule = defineModule({
     let stopped=false;
     const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision);
     const start = deps.simulation.snapshot().tick;
-    const position = readLocalPosition();
+    const position = core.play ? undefined : readLocalPosition();
     const authority = createAuthority(start, undefined, position);
     scope.onDispose(authority.dispose);
     const connection = createLocalConnection(authority, {}, deps.simulation.session);
     scope.onDispose(connection.close);
+    const online = deps.simulation.online;
+    const snapshot = () => online.self() ?? connection.snapshot();
     let saved=connection.snapshot();
     trackLocalCheckpoint(core.onFrame,scope,()=>{
+      if (core.play) return;
       const next=connection.snapshot();
       if (next.x===saved.x && next.y===saved.y && next.z===saved.z) return;
       if (saveLocalPosition(next)) saved=next;
@@ -54,7 +58,7 @@ export const charactersModule = defineModule({
       if(stopped)throw new Error('Персонаж остановлен');
       return createAvatar(core.scene,deps.geometry,assets,owner,appearance);
     };
-    const appearance=readAppearance();
+    const appearance=core.play ? npcAppearance(core.play.characterId) : readAppearance();
     const render=createView(scope,appearance);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{
       assets,initial:appearance,onChange(next){
@@ -63,9 +67,14 @@ export const charactersModule = defineModule({
       },
     })));
     const sampleHeight=createDisplayHeight();
-    let displayY=sampleHeight(connection.snapshot(),0);
+    let displayY=sampleHeight(snapshot(),0);
+    let displayX=snapshot().x, displayZ=snapshot().z;
+    let displayedIdentity='';
+    const remoteViews=new Map<string, { owner: ReturnType<typeof createScope>; render: ReturnType<typeof createView> }>();
+    scope.onDispose(() => { for (const view of remoteViews.values()) view.owner.dispose(); });
     deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
     const reset=core.onResetView?.add(()=>{
+      if (core.play) return;
       connection.resetPosition();
       resetVehicleOccupancy?.();
       const snapshot=connection.snapshot();
@@ -74,14 +83,35 @@ export const charactersModule = defineModule({
     });
     if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
     const smoothing=core.onFrame.add(delta=>{
-      const snapshot=connection.snapshot();
-      displayY=sampleHeight(snapshot,delta);
-      deps.interiors.presentDoorSnapshot(snapshot.entranceDoors);
+      const state=snapshot();
+      const identity=online.identity();
+      const reset=identity!==displayedIdentity || Math.hypot(state.x-displayX,state.z-displayZ)>3;
+      displayedIdentity=identity;
+      const blend=identity&&!reset ? 1-Math.exp(-delta/55) : 1;
+      displayX+=(state.x-displayX)*blend;
+      displayZ+=(state.z-displayZ)*blend;
+      displayY=sampleHeight(state,delta,reset);
+      deps.interiors.presentDoorSnapshot(state.entranceDoors);
     });
     scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {
-      const snapshot=connection.snapshot();
-      render(snapshot,displayY);
+      const state=snapshot();
+      render(online.self() ? { ...state, x: displayX, z: displayZ } : state,displayY);
+      const remote=online.remote();
+      for (const [id, view] of remoteViews) if (!remote.some(actor => actor.id===id)) {
+        view.owner.dispose();
+        remoteViews.delete(id);
+      }
+      for (const actor of remote) {
+        let view=remoteViews.get(actor.id);
+        if (!view) {
+          const owner=createScope();
+          try { view={ owner, render:createView(owner,npcAppearance(actor.id)) }; }
+          catch (error) { owner.dispose(); throw error; }
+          remoteViews.set(actor.id,view);
+        }
+        view.render(actor);
+      }
     };
     scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));
     update();
@@ -91,6 +121,7 @@ export const charactersModule = defineModule({
     return {
       registerTrafficAuthority(provider:NonNullable<typeof traffic>,owner:Scope){
         if(stopped||traffic)throw new Error('Traffic authority already connected or stopped');
+        deps.simulation.blockOnline(owner);
         traffic=provider;
         owner.onDispose(()=>{traffic=undefined;authority.setTrafficBlockers([]);});
       },
@@ -99,10 +130,16 @@ export const charactersModule = defineModule({
       registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
         if(stopped)throw new Error('Персонаж остановлен');
         if(vehicleStep)throw new Error('Vehicle authority already connected');
+        deps.simulation.blockOnline(owner);
         vehicleStep=step;resetVehicleOccupancy=resetOccupancy;
         owner.onDispose(()=>{vehicleStep=null;resetVehicleOccupancy=undefined;authority.setVehicleFrame(null);});
       },
-      send: connection.send, snapshot: connection.snapshot, displayHeight:()=>displayY, createView,
+      enableOnline(owner: Scope) {
+        const world=deps.world.getNavigationSource();
+        deps.simulation.enableOnline(`${world.id}/${world.version}`,owner);
+      },
+      send: (command: Parameters<typeof connection.send>[0]) => online.self() ? online.send(command) : connection.send(command),
+      snapshot, displayHeight:()=>displayY, displayPosition:()=>({x:displayX,z:displayZ}), createView,
       getAssetStatus:assets.getStatus, subscribeAssetStatus:assets.subscribe,
     };
   },

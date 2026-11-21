@@ -1,6 +1,6 @@
 # Клиентская инфраструктура core
 
-`context.ts` задаёт `CoreContext`: Babylon `scene`, кадровое событие `onFrame` с монотонной разницей времени в миллисекундах и `panels`. `defineModule` создаётся через `moduleFactory<CoreContext>()`. Потребители — клиентские модули; сборка приложения и регистрация находятся в `src/main.tsx` и `src/registry.ts`.
+`context.ts` задаёт `CoreContext`: Babylon `scene`, кадровое событие `onFrame` с монотонной разницей времени в миллисекундах и `panels`. `defineModule` создаётся через `moduleFactory<CoreContext>()`. Потребители — клиентские модули; сборка приложения и регистрация находятся в `src/main.tsx` и `src/registry.ts`. Оболочка `src/play.tsx` передаёт опциональный PlaySession в createViewport и CoreContext. Он содержит ID выбранного персонажа, получение токена и колбэк статуса. В игровом профиле core пропускает локальное сохранение камеры.
 
 ## Контракты и жизненный цикл
 

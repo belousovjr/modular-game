@@ -120,8 +120,8 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number})=>{
-  const {id,ownerId:owner}=LOCAL_PLAYER;
+  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number}, identity=LOCAL_PLAYER)=>{
+  const {id,ownerId:owner}=identity;
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
   let tick = startTick, x = spawn.x, z = spawn.z, y = ground(x,z), yaw = 0;
@@ -246,6 +246,9 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     dispose(){
       if(closed)return;
       closed=true;
+    },
+    stopInput() {
+      expiry=tick;dx=dz=0;run=false;facing=null;jump=false;boost=false;lift=0;flightRequest=null;stanceRequest=undefined;
     },
     resetPosition(){
       if(closed)throw new Error('Character authority disposed');
