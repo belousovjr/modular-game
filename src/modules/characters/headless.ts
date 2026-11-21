@@ -1,3 +1,5 @@
+import { createLocalSession, type DeliveryOptions, type Receipt } from '../../simulation/session.ts';
+export type { DeliveryOptions, Receipt } from '../../simulation/session.ts';
 import { pedestrianBlockers, type CollisionWorld, type CollisionBox, type BuildingInteriorSource } from '../world/headless.ts';
 import {createEntranceMotion,createInteriorCollision,type DoorPose} from '../building-interiors/headless.ts';
 
@@ -30,7 +32,6 @@ function validLocomotion(value:unknown):value is LocomotionInput{
 export class CharacterSpawnBlockedError extends Error {}
 const LOCAL_PLAYER={id:'local-player',ownerId:'local'};
 
-export interface Receipt { readonly accepted: boolean; readonly reason: string }
 const RADIUS = 0.35;
 const HEIGHT = {standing:1.8,crouching:1.3,prone:.65};
 const CELL = 32;
@@ -367,42 +368,29 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id, ownerId:owner, x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:[...vehicleFrame.pose.rotation]}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id, ownerId:owner, x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:Object.freeze([...vehicleFrame.pose.rotation])}:{})}:{}) }); },
   };
   };
 }
 
-export interface DeliveryOptions { readonly latencyTicks?: number; readonly jitterTicks?: number; readonly dropEvery?: number; readonly seed?: number }
-export function createLocalConnection(authority: ReturnType<typeof createCharacterAuthority>, options: DeliveryOptions = {}) {
-  const owner=authority.snapshot().ownerId;
-  const latency = options.latencyTicks ?? 0, jitter = options.jitterTicks ?? 0, dropEvery = options.dropEvery ?? 0;
-  let seed = options.seed ?? 2026;
-  if (![latency,jitter,dropEvery,seed].every(Number.isSafeInteger) || latency < 0 || latency > 120 || jitter < 0 || jitter > 120 || dropEvery < 0 || seed < 0 || seed > 0xffffffff) throw new Error('Invalid delivery configuration');
-  const queue: { due: number; command: MoveCommand; resolve(value: Receipt): void }[] = [];
-  let count = 0, stopped = false;
+export function createLocalConnection(
+  authority: ReturnType<typeof createCharacterAuthority>, options: DeliveryOptions = {}, session = createLocalSession(),
+) {
+  const { id, ownerId } = authority.snapshot();
+  const channel = session.connect<MoveCommand, CharacterSnapshot>(
+    id, authority.snapshot, command => authority.receive(command, ownerId), options,
+  );
   return {
-    send(command: MoveCommand): Promise<Receipt> {
-      if (stopped) return Promise.resolve({ accepted: false, reason: 'closed' });
-      if (queue.length >= 64) return Promise.resolve({ accepted: false, reason: 'queue' });
-      count++;
-      if (dropEvery && count % dropEvery === 0) return Promise.resolve({ accepted: false, reason: 'dropped' });
-      seed = (Math.imul(seed,1664525) + 1013904223) >>> 0;
-      const delay = Math.max(0, latency + Math.floor(seed / 0x100000000 * (jitter * 2 + 1)) - jitter);
-      return new Promise(resolve => queue.push({ command: { ...command,...(command.locomotion?{locomotion:{...command.locomotion}}:{}) }, due: authority.snapshot().tick + delay + 1, resolve }));
-    },
+    send: channel.send, snapshot: channel.snapshot, close: channel.close,
     step(tick: number) {
-      queue.sort((a,b) => a.due - b.due);
-      while (queue.length && queue[0].due <= tick) {
-        const delivery = queue.shift();
-        if (delivery) delivery.resolve(authority.receive(delivery.command,owner));
-      }
+      channel.deliver(tick);
       authority.step(tick);
+      channel.publish();
     },
-    snapshot: authority.snapshot,
     resetPosition() {
       authority.resetPosition();
-      for(const item of queue.splice(0))item.resolve({accepted:false,reason:'reset'});
+      channel.clear('reset');
+      channel.publish();
     },
-    close() { stopped = true; for (const item of queue.splice(0)) item.resolve({ accepted: false, reason: 'closed' }); },
   };
 }

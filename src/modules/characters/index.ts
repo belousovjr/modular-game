@@ -31,7 +31,7 @@ export const charactersModule = defineModule({
     const position = readLocalPosition();
     const authority = createAuthority(start, undefined, position);
     scope.onDispose(authority.dispose);
-    const connection = createLocalConnection(authority);
+    const connection = createLocalConnection(authority, {}, deps.simulation.session);
     scope.onDispose(connection.close);
     let saved=connection.snapshot();
     trackLocalCheckpoint(core.onFrame,scope,()=>{

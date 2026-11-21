@@ -4,6 +4,8 @@ import { defineModule, type CoreContext } from '../../core/context.ts';
 import type { Scope } from '../../core/modules.ts';
 import { createLocalAuthority, type Authority } from '../../simulation/authority.ts';
 
+import { createLocalSession } from '../../simulation/session.ts';
+
 function SimulationInfo({ authority, onFrame }: { authority: Authority; onFrame: CoreContext['onFrame'] }) {
   const [snapshot, setSnapshot] = useState(() => authority.snapshot());
   useEffect(() => {
@@ -21,11 +23,13 @@ export const simulationModule = defineModule({
   id: 'simulation', category: 'Системы', title: 'Симуляция', requires: {},
   setup({ core, scope }) {
     const authority = createLocalAuthority();
+    const session = createLocalSession();
     const observer = core.onFrame.add(delta => authority.advance(delta));
     scope.onDispose(() => core.onFrame.remove(observer));
     scope.onDispose(core.panels.register('simulation', 'Симуляция',
       <SimulationInfo authority={authority} onFrame={core.onFrame} />));
-    return { snapshot: () => authority.snapshot(),
+    return { snapshot: () => authority.snapshot(), session,
+      worldSnapshot: () => ({ clock: authority.snapshot(), entities: session.snapshot() }),
       registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
     };
   },
