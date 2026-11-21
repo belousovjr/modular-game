@@ -1,3 +1,5 @@
+import type {TrafficContact, TrafficPoint, TrafficSample} from '../../simulation/traffic.ts';
+import type {CollisionBox} from '../world/index.ts';
 import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
 import { createAvatar, createCharacterAssets } from './assets.ts';
@@ -37,7 +39,14 @@ export const charactersModule = defineModule({
     });
     let resetVehicleOccupancy:(()=>void)|undefined;
     let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
-    deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
+    let traffic:{step:(tick:number,hero:CharacterSnapshot)=>readonly CollisionBox[];
+      around:(point:TrafficPoint)=>readonly TrafficSample[]; contacts:(hits:readonly TrafficContact[])=>void}|undefined;
+    deps.simulation.registerSystem(tick=>{
+      const hero=authority.snapshot();
+      authority.setTrafficBlockers(traffic?.step(tick,hero)??[]);
+      if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,hero));
+      connection.step(tick);
+    }, scope);
     const assets=createCharacterAssets(core.scene,scope);
     scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
     const createView=(owner: Scope)=>{
@@ -72,6 +81,13 @@ export const charactersModule = defineModule({
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{stopped=true;});
     return {
+      registerTrafficAuthority(provider:NonNullable<typeof traffic>,owner:Scope){
+        if(stopped||traffic)throw new Error('Traffic authority already connected or stopped');
+        traffic=provider;
+        owner.onDispose(()=>{traffic=undefined;authority.setTrafficBlockers([]);});
+      },
+      vehicleTraffic(point:TrafficPoint){return traffic?.around(point)??[];},
+      vehicleTrafficContacts(hits:readonly TrafficContact[]){traffic?.contacts(hits);},
       registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
         if(stopped)throw new Error('Персонаж остановлен');
         if(vehicleStep)throw new Error('Vehicle authority already connected');

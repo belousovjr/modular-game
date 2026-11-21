@@ -122,9 +122,9 @@ export function createTrafficCarAssets(scene: Scene,geometry:ReturnType<typeof g
           geometry.setMeshFade(mesh,0,coverage||1);
         }
       };
-      const draw=(pose: { point: readonly [number,number,number]; yaw: number; steering: number; wheelDistance: number; pitch: number })=>{
+      const draw=(pose: { point: readonly [number,number,number]; yaw: number; steering: number; wheelDistance: number; pitch: number; rotation?:readonly [number,number,number,number] })=>{
         root.position.set(pose.point[0],pose.point[1],pose.point[2]);
-        root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(pose.pitch,pose.yaw,0));
+        root.rotationQuaternion?.copyFrom(pose.rotation?Quaternion.FromArray(pose.rotation):Quaternion.FromEulerAngles(pose.pitch,pose.yaw,0));
         const spin=Quaternion.RotationAxis(Vector3.Right(),pose.wheelDistance/.43);
         const steer=Quaternion.RotationAxis(Vector3.Up(),-pose.steering);
         for (const {node,front,rotation} of wheels)

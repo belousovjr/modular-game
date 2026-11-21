@@ -12,15 +12,14 @@ import { objectRenderingModule } from '../object-rendering/index.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { createTrafficCarAssets } from '../vehicles/index.tsx';
-import { crowdTiming, crowdTrack, NPC_RADIUS, TRAFFIC_RADIUS } from './headless.ts';
+import { crowdTiming, crowdTrack, createTrafficActors, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor } from './headless.ts';
 
 import { streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
 import { createPlanner } from './planner.ts';
-import { displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
-import type { PlannerPlan } from './planner-protocol.ts';
+import { npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
 
-type Pose = NonNullable<ReturnType<typeof displayNpcPose>>;
-type Actor = {id:string;cycle:Extract<PlannerPlan,{kind:'resident'}>['plan']['cycle'];phase?:number;pace?:number};
+type Pose = NonNullable<ReturnType<ReturnType<typeof createTrafficActors>['pose']>>;
+type Actor = TrafficActor;
 type Candidate = Actor & {d:number;car:boolean;cell:string;existing:boolean;onScreen:boolean};
 type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number;
   draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
@@ -53,8 +52,29 @@ export const npcsModule=defineModule({
   id:'npcs', title:'Жители города', category:'Игра',
   requires:{geometry:geometryModule,world:worldModule, simulation:simulationModule, characters:charactersModule, interiors:buildingInteriorsModule, rendering:objectRenderingModule},
   setup({core,deps,scope}) {
+    let available:Actor[]=[];
+    let subscribed=0;
+    const traffic=createTrafficActors(job=>planner.recover(job));
     const planner=createPlanner(deps.world.getNavigationSource(),deps.world.collision,
-      deps.world.getBuildingInteriorSources,scope);
+      deps.world.getBuildingInteriorSources,scope,traffic.rejoin,plans=>{
+        available=[];
+        subscribed=0;
+        for (const selection of plans) {
+          subscribed++;
+          if (selection.kind==='resident') {
+            const {seed,cycle}=selection.plan;
+            available.push({id:seed.id,cycle});
+          } else {
+            const {group,full,outdoors}=selection.plan;
+            for(let slot=0;slot<group.count;slot++){
+              const cycle=crowdTrack(full,outdoors,group,slot);
+              available.push({id:`${group.recipe.id}/crowd/${slot}`,cycle,...crowdTiming(cycle,group,slot)});
+            }
+          }
+        }
+        traffic.replace(available);
+      });
+    deps.characters.registerTrafficAuthority(traffic,scope);
     const cars=createTrafficCarAssets(core.scene,deps.geometry,scope);
     const views=new Map<string,View>();
     const reusable:View[]=[];
@@ -67,7 +87,6 @@ export const npcsModule=defineModule({
     });
 
     const probe=Vector3.Zero();
-    let subscribed=0;
     let displayed: Actor[]=[];
     let selected=new Set<string>();
     let lastTick=-Infinity,lastX=Infinity,lastY=Infinity,lastZ=Infinity,lastFlyover=false,drawnTick=-1,lastRevision=-1;
@@ -76,17 +95,19 @@ export const npcsModule=defineModule({
       const x=origin?.x??Infinity,y=origin?.y??Infinity,z=origin?.z??Infinity;
       const flyover=core.scene.activeCamera instanceof SceneCamera;
       const tick=deps.simulation.snapshot().tick;
-      planner.update({origin:origin?{x,z}:null,tick});
+      const hero=deps.characters.snapshot();
+      const contactOrigin=Math.hypot(hero.x-x,hero.z-z)>8?{x:hero.x,z:hero.z}:null;
+      planner.update({origin:origin?{x,z}:null,contactOrigin,tick});
       const revision=planner.revision();
       const refresh=revision!==lastRevision || tick-lastTick>=6 || Math.hypot(x-lastX,flyover?0:y-lastY,z-lastZ)>=4 || flyover!==lastFlyover;
       if (refresh) {
-        lastTick=tick; lastX=x; lastY=y; lastZ=z; lastFlyover=flyover; lastRevision=revision;
-        subscribed=0;
+        lastTick=tick; lastX=x; lastY=y; lastZ=z; lastFlyover=flyover;
         const candidates: Candidate[]=[];
         const camera=core.scene.activeCamera;
         const frustum=camera?Frustum.GetPlanes(camera.getTransformationMatrix()):[];
-        function consider(id: string,cycle: Actor['cycle'],phase?: number,pace?: number) {
-          const pose=displayNpcPose(cycle,tick,phase,pace);
+        function consider(actor:Actor) {
+          const {id}=actor;
+          const pose=traffic.pose(actor,tick);
           if (!pose) return;
           const dx=x-pose.point[0],dy=flyover?0:y-pose.point[1],dz=z-pose.point[2];
           const existing=views.has(id),limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
@@ -94,25 +115,14 @@ export const npcsModule=defineModule({
           if (d>limit*limit || !Number.isFinite(d)) return;
           probe.set(pose.point[0],pose.point[1]+.9,pose.point[2]);
           const onScreen=frustum.every(plane=>plane.dotCoordinate(probe)>-3);
-          candidates.push({id,cycle,phase,pace,existing,onScreen,
+          candidates.push({...actor,existing,onScreen,
             cell:`${Math.floor(pose.point[0]/9)}/${Math.floor(pose.point[2]/9)}`,
-            d:d-(existing?limit*limit:0)+(onScreen?0:20000),car:pose.mode==='drive'});
+            d:d-(existing?limit*limit:0)+(onScreen?0:20000)-(d<144?30000:0),car:pose.mode==='drive'});
         }
-        for (const selection of planner.plans()) {
-          subscribed++;
-          if (selection.kind==='resident') {
-            const {seed,cycle}=selection.plan;
-            if (tick>=seed.startTick) consider(seed.id,cycle);
-          } else {
-            const {group,full,outdoors}=selection.plan;
-            if (tick<group.recipe.startTick) continue;
-            for (let slot=0;slot<group.count;slot++) {
-              const cycle=crowdTrack(full,outdoors,group,slot);
-              const {phase,pace}=crowdTiming(cycle,group,slot);
-              consider(`${group.recipe.id}/crowd/${slot}`,cycle,phase,pace);
-            }
-          }
-        }
+        lastRevision=revision;
+        const current=new Map(available.map(actor=>[actor.id,actor]));
+        for(const actor of traffic.exceptions())current.set(actor.id,actor);
+        for(const actor of current.values())consider(actor);
         displayed=streetSelection(candidates);
         selected=new Set(displayed.map(actor=>actor.id));
       }
@@ -138,14 +148,13 @@ export const npcsModule=defineModule({
         if (updatePose) view.draw(pose,tick,view.actor.id);
       }
       for (const [id,view] of views) if (!selected.has(id)) {
-        const {cycle,phase,pace}=view.actor;
-        const pose=displayNpcPose(cycle,tick,phase,pace);
+        const pose=traffic.pose(view.actor,tick);
         if (pose) show(view,pose,moved);
       }
       let created=0;
       for (const actor of displayed) {
-        const {id,cycle,phase,pace}=actor;
-        const pose=displayNpcPose(cycle,tick,phase,pace);
+        const {id}=actor;
+        const pose=traffic.pose(actor,tick);
         if (!pose) continue;
         if (moved && pose.door) doorPoses.set(pose.door,Math.max(doorPoses.get(pose.door)??0,pose.doorOpen));
         let view=views.get(id);

@@ -249,3 +249,33 @@ test('position reset frees the vehicle seat without moving or recreating the car
     assert.deepEqual(s.car.snapshot(),{...before,phase:'parked',driverId:null});
   } finally {s.car.dispose();}
 });
+
+test('traffic proxies take a physical impulse only on contact and report the settled car pose',()=>{
+  const s=session();
+  const npc={id:'npc/car',car:true,point:[3.5,0,15],yaw:0,pitch:0,velocity:[0,0,0]} as const;
+  try{
+    board(s);
+    let tick=s.tick;
+    const tickCar=(near:boolean)=>{
+      tick++;
+      s.actor.setVehicleFrame(s.car.step(tick,s.actor.snapshot(),near?[npc]:[]));
+      s.actor.step(tick);
+    };
+    for(let i=0;i<300&&!s.car.trafficContacts().length;i++){
+      if(tick%6===0)s.car.receive(drive(tick+1),'local');
+      tickCar(true);
+    }
+    assert.ok(s.car.trafficContacts().length>0);
+    assert.equal(s.car.trafficContacts()[0]?.id,npc.id);
+    assert.equal(s.car.trafficContacts()[0].settled,false);
+    let settled;
+    for(let i=0;i<480;i++){
+      tickCar(false);
+      settled=s.car.trafficContacts().find(hit=>hit.settled);
+      if(settled)break;
+    }
+    assert.ok(settled);
+    assert.ok(Math.hypot(settled.point[0]-npc.point[0],settled.point[2]-npc.point[2])>.15);
+    assert.ok(settled.rotation.every(Number.isFinite));
+  }finally{s.car.dispose();s.actor.dispose();}
+});

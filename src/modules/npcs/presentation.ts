@@ -1,10 +1,7 @@
-import { NPC_RADIUS, sampleNpc, TRAFFIC_RADIUS } from './headless.ts';
+import { liveNpcPose, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor } from './headless.ts';
 
-export function displayNpcPose(cycle: Parameters<typeof sampleNpc>[0],tick: number,phase?: number,pace?: number): ReturnType<typeof sampleNpc> {
-  if (phase!==undefined || tick<cycle.endTick) return sampleNpc(cycle,tick,phase,pace);
-  // Until the planner issues a successor, the old plan still reserves its endpoint.
-  const last=sampleNpc(cycle,cycle.endTick)!;
-  return {...last,mode:last.mode==='drive'?'drive':'idle',speed:0,steering:0,door:undefined,doorOpen:0};
+export function displayNpcPose(cycle:TrafficActor['cycle'],tick:number,phase?:number,pace?:number) {
+  return liveNpcPose({id:'',cycle,phase,pace},tick);
 }
 
 function smoothCoverage(value:number) {

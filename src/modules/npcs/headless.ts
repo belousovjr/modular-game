@@ -1,3 +1,5 @@
+import type {TrafficContact, TrafficPoint, TrafficRotation, TrafficSample} from '../../simulation/traffic.ts';
+import type {CharacterSnapshot} from '../characters/headless.ts';
 import { STEP_MS } from '../../simulation/authority.ts';
 import { LOCOMOTION_SPEEDS } from '../characters/headless.ts';
 import { interiorLayout, stairWalkPath } from '../building-interiors/headless.ts';
@@ -428,6 +430,45 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
       if (!origin || Math.abs(origin.point[1]-a[1])>.32 ||
           target.cost>origin.cost+.3 || (marked(a[0],a[2])&&!marked(x,z))) return;
       return target.point;
+    },
+    recovery(job:TrafficRecovery):TrafficRejoin|null {
+      if(job.origin.length!==3||!job.origin.every(Number.isFinite)||!Number.isFinite(job.yaw))return null;
+      const angle=(a:number,b:number)=>Math.abs(Math.atan2(Math.sin(a-b),Math.cos(a-b)));
+      const shortest=[...job.points.slice(0,24)].sort((a,b)=>distance(job.origin,a.point)-distance(job.origin,b.point));
+      for(const target of shortest){
+        if(target.point.length!==3||!target.point.every(Number.isFinite)||!Number.isFinite(target.yaw)||!Number.isSafeInteger(target.tick))continue;
+        const [ax,,az]=job.origin,[bx,,bz]=target.point;
+        const length=distance(job.origin,target.point);
+        if(length<1||length>16)continue;
+        const heading=Math.atan2(bx-ax,bz-az);
+        if(job.avoid){
+          if(length>5)continue;
+          const blocker=job.avoid;
+          const allowed=(p:Point)=>Math.hypot(p[0]-blocker[0],p[2]-blocker[2])>=.78;
+          for(const side of [-1,1]){
+            const x=(ax+bx)/2+side*1.45*Math.cos(heading),z=(az+bz)/2-side*1.45*Math.sin(heading);
+            const bend=ground(x,z);
+            if(!bend || bend.cost>1.7 || Math.abs(bend.point[1]-job.origin[1])>.25)continue;
+            const safe=(p:Point)=>{const surface=ground(p[0],p[2]);
+              return allowed(p)&&!!surface&&surface.cost<=1.7&&Math.abs(surface.point[1]-p[1])<.30&&clear(p[0],p[2]);};
+            if(samples(job.origin,bend.point,safe)&&samples(bend.point,target.point,safe))
+              return {...target,via:bend.point};
+          }
+          continue;
+        }
+        if(angle(heading,job.yaw)>.75||angle(heading,target.yaw)>.65)continue;
+        const turn=Math.atan2(Math.sin(target.yaw-job.yaw),Math.cos(target.yaw-job.yaw));
+        if(samples(job.origin,target.point,p=>{
+          const yaw=job.yaw+turn*distance(job.origin,p)/length;
+          for(const u of [-.95,.95])for(const v of [-1.9,0,1.9]){
+            const x=p[0]+u*Math.cos(yaw)+v*Math.sin(yaw),z=p[2]-u*Math.sin(yaw)+v*Math.cos(yaw);
+            const road=ground(x,z,true);
+            if(!road||Math.abs(road.point[1]-p[1])>.38||!clear(x,z,.2))return false;
+          }
+          return true;
+        }))return target;
+      }
+      return null;
     },
     roadPoint(x: number,z: number) { return ground(x,z,true)?.point; },
   };
@@ -1342,3 +1383,208 @@ function sweptDiscs(start:Body[],end:Body[],otherStart:Body[],otherEnd:Body[]) {
   }));
 }
 
+
+export type TrafficActor = {id:string;cycle:Cycle;phase?:number;pace?:number};
+type TrafficPose = NonNullable<ReturnType<typeof sampleNpc>> & {rotation?:TrafficRotation};
+export type TrafficRejoin = {point:TrafficPoint;tick:number;yaw:number;via?:TrafficPoint};
+export type TrafficRecovery = {id:string;token:number;points:readonly TrafficRejoin[];origin:TrafficPoint;yaw:number;avoid?:TrafficPoint};
+
+export function liveNpcPose({cycle,phase,pace}:TrafficActor,tick:number):TrafficPose|undefined {
+  if (tick<cycle.legs[0].from) return;
+  const pose=sampleNpc(cycle,Math.min(tick,phase===undefined?cycle.endTick:Infinity),phase,pace);
+  if (!pose || phase!==undefined || tick<cycle.endTick) return pose;
+  return {...pose,mode:pose.mode==='drive'?'drive':'idle',speed:0,steering:0,door:undefined,doorOpen:0};
+}
+
+const idlePose=(pose:TrafficPose):TrafficPose=>({...pose,mode:pose.mode==='drive'?'drive':'idle',speed:0,steering:0,door:undefined,doorOpen:0});
+function nearHero(pose:TrafficPose,hero:CharacterSnapshot,margin:number) {
+  const [x,y,z]=pose.point;
+  if (hero.y+1.5<y || hero.y>y+1.65) return false;
+  const dx=hero.x-x,dz=hero.z-z;
+  if (pose.mode!=='drive') return dx*dx+dz*dz<(.70+margin)**2;
+  const sin=Math.sin(pose.yaw),cos=Math.cos(pose.yaw);
+  return Math.abs(dx*cos-dz*sin)<1.36+margin && Math.abs(dx*sin+dz*cos)<2.48+margin;
+}
+
+function trafficBlocker(id:string,pose:TrafficPose):CollisionBox {
+  const [x,y,z]=pose.point;
+  if(pose.mode!=='drive')return {id,minX:x-.3,maxX:x+.3,minZ:z-.3,maxZ:z+.3,minY:y,maxY:y+1.7};
+  const c=Math.cos(pose.yaw),s=Math.sin(pose.yaw);
+  // An overturned car still gets a blocker around the displaced chassis.
+  const outline=[[-1,-2.12],[1,-2.12],[1,2.12],[-1,2.12]]
+    .map(([u,v])=>[x+u*c+v*s,z-u*s+v*c]);
+  return {id,outline,minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),
+    minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),minY:y-.2,maxY:y+1.55};
+}
+
+export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void) {
+  type Reaction={actor:TrafficActor;delay:number;contactUntil:number;wreck?:TrafficPose;request?:number;waited?:number;
+    rejoin?:{target:TrafficRejoin;from:number;until:number}};
+  const reactions=new Map<string,Reaction>();
+  let actors:readonly TrafficActor[]=[];
+  let pending:readonly TrafficActor[]|undefined;
+  let tick=0,requestToken=0;
+  const replies:{id:string;token:number;target:TrafficRejoin|null}[]=[];
+  function applyRejoin(id:string,token:number,target:TrafficRejoin|null) {
+    const state=reactions.get(id);
+    if(!state || state.request!==token)return;
+    if(!target){
+      if(!state.wreck)state.request=undefined;
+      return;
+    }
+    state.wreck??=pose(state.actor,tick);
+    if(!state.wreck)return;
+    const start=state.wreck.point;
+    const length=target.via?distance(start,target.via)+distance(target.via,target.point):distance(start,target.point);
+    const duration=Math.max(18,Math.ceil(length*60/(target.via?1.8:2.8)));
+    state.rejoin={target,from:tick,until:tick+duration};
+  }
+  const nearHeroActors:TrafficActor[]=[], nearVehicleActors:TrafficActor[]=[];
+  type Neighborhood={tick:number;point:Point;actors:TrafficActor[]};
+  const heroArea:Neighborhood={tick:-Infinity,point:[Infinity,Infinity,Infinity],actors:nearHeroActors};
+  const vehicleArea:Neighborhood={tick:-Infinity,point:[Infinity,Infinity,Infinity],actors:nearVehicleActors};
+  function nearby(area:Neighborhood,point:Point) {
+    if(tick-area.tick<6 && distance(area.point,point)<2)return area.actors;
+    area.tick=tick;area.point=point;area.actors.length=0;
+    for(const actor of actors){
+      const current=pose(actor,tick);
+      if(current&&distance(current.point,point)<20)area.actors.push(actor);
+    }
+    for(const [id,state] of reactions){
+      if(state.wreck && distance(state.wreck.point,point)<20 && !area.actors.some(actor=>actor.id===id))area.actors.push(state.actor);
+    }
+    return area.actors;
+  }
+  function pose(actor:TrafficActor,at:number):TrafficPose|undefined {
+    const state=reactions.get(actor.id);
+    if(state?.wreck){
+      if(!state.rejoin)return state.wreck;
+      const {target,from,until}=state.rejoin;
+      const t=Math.max(0,Math.min(1,(at-from)/(until-from)));
+      const origin=state.wreck;
+      if(target.via){
+        const first=distance(origin.point,target.via),second=distance(target.via,target.point);
+        const travelled=(first+second)*t;
+        const a=travelled<first?origin.point:target.via,b=travelled<first?target.via:target.point;
+        const f=travelled<first?travelled/first:(travelled-first)/second;
+        return {...origin,point:mix(a,b,f),yaw:Math.atan2(b[0]-a[0],b[2]-a[2]),mode:'walk',speed:1.8};
+      }
+      const delta=Math.atan2(Math.sin(target.yaw-origin.yaw),Math.cos(target.yaw-origin.yaw));
+      return {...origin,rotation:undefined,point:mix(origin.point,target.point,t),yaw:origin.yaw+delta*t,speed:distance(origin.point,target.point)*60/(until-from),
+        wheelDistance:origin.wheelDistance+distance(origin.point,target.point)*t};
+    }
+    const active=state?.actor??actor;
+    const result=liveNpcPose(active,state?Math.max(active.cycle.legs[0].from,at-state.delay):at);
+    return result && state && state.contactUntil>=at ? idlePose(result) : result;
+  }
+  function applyPlans(next:readonly TrafficActor[]) {
+    actors=next;
+    const byId=new Map(next.map(actor=>[actor.id,actor]));
+    for(const [id,state] of reactions){
+      const actor=byId.get(id);
+      if(state.wreck)continue;
+      if(!actor)reactions.delete(id);
+      else if(actor.cycle===state.actor.cycle)state.actor=actor;
+    }
+    heroArea.tick=vehicleArea.tick=-Infinity;
+  }
+  return {
+    replace(next:readonly TrafficActor[]) {pending=next;},
+    pose,
+    exceptions() {return [...reactions.values()].filter(state=>state.wreck).map(state=>state.actor);},
+    step(current:number,hero:CharacterSnapshot) {
+      tick=current;
+      if(pending){applyPlans(pending);pending=undefined;}
+      for(const {id,token,target} of replies.splice(0))applyRejoin(id,token,target);
+      for(const [id,state] of reactions) {
+        if(state.rejoin && current>=state.rejoin.until){
+          state.delay=current-state.rejoin.target.tick;
+          state.wreck=undefined;state.rejoin=undefined;state.request=undefined;state.waited=0;
+          heroArea.tick=vehicleArea.tick=-Infinity;
+        }
+        if(!state.wreck && state.actor.phase===undefined && current-state.delay>=state.actor.cycle.endTick){
+          const next=actors.find(actor=>actor.id===id && actor.cycle!==state.actor.cycle);
+          if(next){state.actor=next;state.delay=current-next.cycle.legs[0].from;}
+        }
+      }
+      if(hero.vehicleId && hero.vehicleAnimation!=='approaching'){
+        for(const state of reactions.values())if(!state.wreck&&state.contactUntil>=current)state.delay++;
+        return [];
+      }
+      const blockers:CollisionBox[]=[];
+      for(const actor of nearby(heroArea,[hero.x,hero.y,hero.z])){
+        const next=pose(actor,current);
+        if(!next)continue;
+        let state=reactions.get(actor.id);
+        const previous=pose(actor,current-1);
+        const closing=!previous || Math.hypot(next.point[0]-hero.x,next.point[2]-hero.z)<
+          Math.hypot(previous.point[0]-hero.x,previous.point[2]-hero.z)+1e-7;
+        if(state?.rejoin && closing && nearHero(next,hero,.08)){
+          state.rejoin.from++;state.rejoin.until++;
+        } else if(!state?.wreck && closing && nearHero(next,hero,next.mode==='drive'?.6:.16)){
+          if(!state){state={actor,delay:0,contactUntil:current};reactions.set(actor.id,state);}
+          state.delay++;state.contactUntil=current+1;
+          state.waited=(state.waited??0)+1;
+          if(next.mode!=='drive' && state.waited%45===0 && !state.request){
+            state.request=++requestToken;
+            const held=pose(actor,current)!;
+            const points:TrafficRejoin[]=[];
+            for(let offset=45;offset<=180;offset+=15){
+              const at=current-state.delay+offset,p=liveNpcPose(state.actor,at);
+              if(p&&p.mode!=='drive'&&p.speed>0)points.push({point:p.point,tick:at,yaw:p.yaw});
+            }
+            requestRecovery({id:actor.id,token:state.request,origin:held.point,yaw:held.yaw,points,avoid:[hero.x,hero.y,hero.z]});
+          }
+        } else if(state && !state.wreck){
+          if(state.contactUntil>=current)state.delay++;
+          state.waited=0;
+          state.request=undefined;
+        }
+        const actual=pose(actor,current);
+        if(actual && distance(actual.point,[hero.x,hero.y,hero.z])<7 && !nearHero(actual,hero,-.17))
+          blockers.push(trafficBlocker(actor.id,actual));
+      }
+      return blockers;
+    },
+    around(point:TrafficPoint):TrafficSample[] {
+      return nearby(vehicleArea,point).flatMap(actor=>{
+        const a=pose(actor,tick), b=pose(actor,tick+1);
+        if(!a||!b||distance(a.point,point)>13)return [];
+        const velocity:TrafficPoint=a.speed===0?[0,0,0]:
+          [(b.point[0]-a.point[0])*60,(b.point[1]-a.point[1])*60,(b.point[2]-a.point[2])*60];
+        return [{id:actor.id,car:a.mode==='drive',point:a.point,yaw:a.yaw,pitch:a.pitch,rotation:a.rotation,velocity}];
+      }).sort((a,b)=>distance(a.point,point)-distance(b.point,point)).slice(0,12);
+    },
+    contacts(hits:readonly TrafficContact[]) {
+      for(const hit of hits){
+        const actor=reactions.get(hit.id)?.actor??actors.find(actor=>actor.id===hit.id);
+        if(!actor)continue;
+        const current=pose(actor,tick);
+        if(!current)continue;
+        let state=reactions.get(hit.id);
+        if(!state){state={actor,delay:0,contactUntil:0};reactions.set(hit.id,state);}
+        if(current.mode!=='drive'){
+          state.contactUntil=tick+12;
+          state.delay++;
+          continue;
+        }
+        const [x,y,z,w]=hit.rotation;
+        const up=1-2*(x*x+z*z);
+        const yaw=Math.atan2(2*(x*z+w*y),1-2*(x*x+y*y));
+        const pitch=Math.asin(Math.max(-1,Math.min(1,2*(w*x-y*z))));
+        state.wreck={...idlePose(current),point:hit.point,rotation:hit.rotation,yaw,pitch};
+        if(!hit.settled){state.rejoin=undefined;state.request=undefined;continue;}
+        if(state.request || up<.8)continue;
+        state.request=++requestToken;
+        const points:TrafficRecovery['points'][number][]=[];
+        for(let offset=24;offset<=540;offset+=24){
+          const at=tick-state.delay+offset;
+          const p=liveNpcPose(state.actor,at);
+          if(p&&p.speed>1)points.push({point:p.point,tick:at,yaw:p.yaw});
+        }
+        requestRecovery({id:hit.id,token:state.request,origin:hit.point,yaw,points});
+      }
+    },
+    rejoin(id:string,token:number,target:TrafficRejoin|null) {replies.push({id,token,target});},
+  };
+}

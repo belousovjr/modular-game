@@ -3,6 +3,7 @@ import { type PlannerData, type PlannerPlan, type PlannerQuery, type PlannerRequ
 
 type Init = Extract<PlannerRequest,{type:'init'}>;
 let init:Init|undefined;
+let navigation:ReturnType<typeof createNpcNavigation>|undefined;
 let authority:ReturnType<typeof createNpcAuthority>|undefined;
 const data:PlannerData[]=[];
 let query:PlannerQuery|undefined;
@@ -28,13 +29,14 @@ function prepare(start:Init) {
   data.length=0;
   const nav=createNpcNavigation({...start.map,chunks,roads,trafficLayout:{crosswalks}},
     {spawn:start.spawn,blockers,doors},interiors);
+  navigation=nav;
   return createNpcAuthority(nav,0);
 }
 
 function publish(current:NonNullable<typeof authority>,target:PlannerQuery) {
   const plans=new Map<string,PlannerPlan>();
-  if (target.origin) {
-    const {x,z}=target.origin;
+  for (const origin of [target.contactOrigin,target.origin]) if (origin) {
+    const {x,z}=origin;
     for (const plan of current.presentation(x,z)) {
       const id=plan.seed.id;
       plans.set(id,{kind:'resident',id,plan});
@@ -95,6 +97,9 @@ self.onmessage=({data:message}:MessageEvent<PlannerRequest>)=>{
       authority=prepare(init);
       send({type:'ready'});
     } catch (cause) { fail(cause); }
+  } else if(message.type==='recover') {
+    try {send({type:'recovered',id:message.job.id,token:message.job.token,target:navigation?.recovery(message.job)??null});}
+    catch(cause){fail(cause);}
   } else {
     query=message.query;
     initialOrigin??=query.origin??init?.spawn;
