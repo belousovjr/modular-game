@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {createVehicleAuthority,createVehicleConnection,findVehicleApproachPath,CAR_GUIDES,type VehicleCommand} from '../src/modules/vehicles/headless.ts';
 import {createCharacterAuthority} from '../src/modules/characters/headless.ts';
 import type {CollisionWorld} from '../src/modules/world/headless.ts';
+import type {TrafficSample} from '../src/simulation/traffic.ts';
 import {createLocalAuthority} from '../src/simulation/authority.ts';
 const world:CollisionWorld={bounds:{minX:-100,maxX:100,minZ:-100,maxZ:100},baseHeight:0,slopeX:0,spawn:{x:0,z:0},blockers:[],floors:[]};
 const cmd=(type:'enter'|'exit',tick:number,sequence=tick):VehicleCommand=>({type,vehicleId:'car/0',characterId:'local-player',sequence,tick});
@@ -50,6 +51,31 @@ test('Cannon chassis collides with a wall and parked car blocks the walking cont
     board(s);s.advance(s.tick+402,t=>{if(t%6===1)s.car.receive(drive(t),'local');});assert.ok(s.car.snapshot().position[2]<13.3);
   }finally{s.car.dispose();}
   const onFoot=session();try{onFoot.advance(120);onFoot.advance(240,t=>{if(t%6===1)onFoot.actor.receive({type:'move',characterId:'local-player',sequence:t,tick:t-1,x:1,z:0,run:false,jump:false},'local');});assert.ok(onFoot.actor.snapshot().x<2.3);}finally{onFoot.car.dispose();}
+});
+
+test('a driven or unoccupied rolling car does not pass through an on-foot hero',()=>{
+  for(const occupied of [true,false]){
+    const s=session();
+    try{
+      board(s);
+      s.advance(s.tick+36,t=>{if(t%6===1)s.car.receive(drive(t),'local');});
+      const initial=s.car.snapshot();
+      const z=initial.position[2]+3.3;
+      const hero:TrafficSample={id:'hero',car:false,point:[initial.position[0],0,z],yaw:0,pitch:0,velocity:[0,0,0]};
+      if(!occupied)s.car.resetOccupancy();
+      assert.ok(initial.speed>1);
+      let furthest=initial.position[2];
+      for(let tick=s.tick+1;tick<=s.tick+110;tick++){
+        if(occupied&&tick%6===1)s.car.receive(drive(tick),'local');
+        const frame=s.car.step(tick,occupied?s.actor.snapshot():null,[hero]);
+        s.actor.setVehicleFrame(frame);s.actor.step(tick);
+        furthest=Math.max(furthest,s.car.snapshot().position[2]);
+        assert.ok(furthest<z-1.9);
+      }
+      assert.ok(furthest>initial.position[2]+.4);
+      assert.equal(s.car.snapshot().driverId,occupied?'local-player':null);
+    }finally{s.car.dispose();}
+  }
 });
 
 test('vehicle fixed-step physics matches different render FPS and a retained long pause',()=>{

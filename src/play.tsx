@@ -1,6 +1,6 @@
 import { createAuthClient } from '@neon/auth';
 import { SupabaseAuthAdapter } from '@neon/auth/vanilla/adapters';
-import { Badge, Box, Button, Callout, Card, Flex, Heading, Text, TextField, Theme } from '@radix-ui/themes';
+import { Badge, Box, Button, Callout, Card, Flex, Heading, Popover, Text, TextField, Theme } from '@radix-ui/themes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPanels, usePanels } from './core/panels.ts';
 import { createViewport } from './core/scene.ts';
@@ -8,7 +8,7 @@ import { modules } from './registry.ts';
 
 const url = import.meta.env.VITE_NEON_AUTH_URL;
 const auth = url ? createAuthClient(url, { adapter: SupabaseAuthAdapter({ fetchOptions: { timeout: 12_000 } }) }) : undefined;
-const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution'];
+const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution', 'vehicles'];
 type Character = { id: string; name: string };
 type User = { id: string; name: string };
 function accountView(user: { id: string; email?: string; user_metadata: Record<string, unknown> }): User {
@@ -37,7 +37,9 @@ function Game({ character, leave }: { character: Character; leave(): void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [fps, setFps] = useState(0);
   const [panels] = useState(createPanels);
-  const minimap = usePanels(panels).find(panel => panel.id === 'minimap');
+  const entries = usePanels(panels);
+  const minimap = entries.find(panel => panel.id === 'minimap');
+  const vehicle = entries.find(panel => panel.id === 'vehicles');
   const [connection, setConnection] = useState({ message: 'Подключение…', inRoom: false });
   useEffect(() => {
     if (!canvas.current) return;
@@ -64,6 +66,10 @@ function Game({ character, leave }: { character: Character; leave(): void }) {
       <Badge role="status" color={connection.message === 'В сети' ? 'green' : 'amber'}>
         {connection.message}
       </Badge>
+      {connection.inRoom && vehicle && <Popover.Root>
+        <Popover.Trigger><Button color="gray" variant="soft">Автомобиль</Button></Popover.Trigger>
+        <Popover.Content>{vehicle.content}</Popover.Content>
+      </Popover.Root>}
       <Button color="gray" onClick={leave}>К персонажам</Button>
     </Flex>
   </main>;

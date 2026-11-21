@@ -34,6 +34,7 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
   let pending = !!play;
   const observer = onFrame.add(delta => {
     authority.advance(delta);
+    online.samplePresentation();
     if (pending) {
       pending = false;
       if (!map || blockers) play?.status('Игровой профиль недоступен.', false);
@@ -50,14 +51,17 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
     read: snapshot,
     api: {
       snapshot: authority.snapshot, session, onlineDayHour: online.dayHour,
-      worldSnapshot: () => ({ clock: snapshot(), doors: online.doors() ?? localDoors?.() ?? [], entities: online.self()
-        ? Object.fromEntries(online.latest().map(actor => [actor.id, actor]))
-        : session.snapshot() }),
+      worldSnapshot() {
+        const vehicle = online.vehicle();
+        return { clock: snapshot(), doors: online.doors() ?? localDoors?.() ?? [], entities: vehicle
+          ? Object.fromEntries([...online.latest(), vehicle].map(entity => [entity.id, entity]))
+          : session.snapshot() };
+      },
       registerDoors(read: () => readonly DoorPose[], owner: Scope) { localDoors = read; owner.onDispose(() => { localDoors = undefined; }); },
       registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
       enableOnline(world: string, owner: Scope) { map = world; owner.onDispose(() => { map = ''; online.dispose(); }); },
       blockOnline(owner: Scope) { blockers++; online.dispose(); owner.onDispose(() => { blockers--; }); },
-      online: { doors: online.displayDoors, self: online.self, remote: online.remote, send: online.send, identity: online.identity },
+      online: { connected: online.connected, vehicle: online.vehicle, displayVehicle: online.displayVehicle, displaySelf: online.displaySelf, doors: online.displayDoors, self: online.self, remote: online.remote, send: online.send, identity: online.identity },
     },
   };
 }

@@ -6,7 +6,7 @@ import type { BuildingInteriorSource } from '../src/modules/world/headless.ts';
 
 const SIZE = 128;
 const LIMIT = 64;
-export type TerrainTile = CharacterTerrainTile;
+export type TerrainTile = CharacterTerrainTile & { readonly vehicleBlockers?: readonly CollisionBox[] };
 export type RoomMap = { world: string; collision: CollisionWorld; tiles: readonly string[] };
 
 function tileKey(x: number, z: number) {
@@ -14,13 +14,13 @@ function tileKey(x: number, z: number) {
 }
 
 export function partitionTerrain(world: CollisionWorld, interiors: readonly BuildingInteriorSource[] = []) {
-  const result = new Map<string, { triangles: (readonly number[])[]; water: (readonly number[])[]; blockers: CollisionBox[]; interiors: BuildingInteriorSource[] }>();
+  const result = new Map<string, { triangles: (readonly number[])[]; water: (readonly number[])[]; blockers: CollisionBox[]; vehicleBlockers: CollisionBox[]; interiors: BuildingInteriorSource[] }>();
   function distribute(bounds: CollisionWorld['bounds'], add: (tile: NonNullable<ReturnType<typeof result.get>>) => void) {
     for (let x = Math.floor((bounds.minX - 1) / SIZE); x <= Math.floor((bounds.maxX + 1) / SIZE); x++) {
       for (let z = Math.floor((bounds.minZ - 1) / SIZE); z <= Math.floor((bounds.maxZ + 1) / SIZE); z++) {
         const key = tileKey(x, z);
         let tile = result.get(key);
-        if (!tile) { tile = { triangles: [], water: [], blockers: [], interiors: [] }; result.set(key, tile); }
+        if (!tile) { tile = { triangles: [], water: [], blockers: [], vehicleBlockers: [], interiors: [] }; result.set(key, tile); }
         add(tile);
       }
     }
@@ -36,6 +36,7 @@ export function partitionTerrain(world: CollisionWorld, interiors: readonly Buil
   add(world.triangles, 'triangles');
   add(world.water?.triangles, 'water');
   for (const blocker of pedestrianBlockers(world)) distribute(blocker, tile => tile.blockers.push(blocker));
+  for (const blocker of world.blockers) distribute(blocker, tile => tile.vehicleBlockers.push(blocker));
   for (const source of interiors) distribute(source.bounds, tile => tile.interiors.push(source));
   return result;
 }

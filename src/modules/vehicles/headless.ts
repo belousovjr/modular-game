@@ -1,7 +1,7 @@
 import { createLocalSession, type DeliveryOptions, type Receipt } from '../../simulation/session.ts';
 import type {TrafficSample, TrafficContact, TrafficPoint} from '../../simulation/traffic.ts';
 import {World,Body,Box,ConvexPolyhedron,Material,ContactMaterial,Vec3,Heightfield,RaycastVehicle,SAPBroadphase} from 'cannon-es';
-import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame} from '../characters/headless.ts';
+import {createCharacterAuthorityFactory,type CharacterSnapshot,type CharacterTerrainTile,type VehicleCharacterFrame} from '../characters/headless.ts';
 import pathfinding from 'javascript-astar';
 import type {CollisionBox,CollisionWorld} from '../world/headless.ts';
 
@@ -9,7 +9,7 @@ interface Base {readonly vehicleId:string;readonly characterId:string;readonly s
 export type VehicleCommand = (Base & {readonly type:'enter'|'exit'}) | (Base & {readonly type:'door';readonly side:'left'|'right'}) | (Base & {readonly type:'drive';readonly throttle:number;readonly steer:number;readonly brake:boolean});
 export interface VehicleSnapshot {
   readonly id:string;readonly tick:number;readonly position:readonly number[];readonly rotation:readonly number[];
-  readonly wheels:readonly {readonly position:readonly number[];readonly rotation:readonly number[]}[];
+  readonly wheels:readonly {readonly position:readonly number[];readonly rotation:readonly number[];readonly spin:number}[];
   readonly speed:number;readonly steering:number;readonly driverId:string|null;readonly phase:'parked'|'approaching'|'entering'|'driving'|'exiting';
   readonly leftDoor:number;readonly rightDoor:number;readonly message:string;
 }
@@ -62,9 +62,19 @@ function buildingShapes(b:CollisionBox){
     return {shape:new ConvexPolyhedron({vertices,faces:[ids.map((_,i)=>i),ids.map((_,i)=>2*n-1-i),...ids.map((_,i)=>[i+n,(i+1)%n+n,(i+1)%n,i])]}),offset:new Vec3(cx,0,cz)};
   });
 }
-export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
+export function createVehicleAuthority(collision:CollisionWorld,startTick=0,
+  readTerrain?: (x:number,z:number)=>CharacterTerrainTile & { readonly vehicleBlockers?: readonly CollisionBox[] },
+){
+  function nearbyBlockers(x:number,z:number,radius:number){
+    if(!readTerrain)return collision.blockers;
+    const result=new Map<string,CollisionBox>();
+    for(const cx of [x-radius,x+radius])for(const cz of [z-radius,z+radius]){
+      for(const blocker of readTerrain(cx,cz).vehicleBlockers??[])result.set(blocker.id,blocker);
+    }
+    return [...result.values()];
+  }
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid vehicle tick');
-  const probe=createCharacterAuthorityFactory(collision);
+  const probe=createCharacterAuthorityFactory(collision,[],undefined,undefined,readTerrain);
   const triangles=new Map<string,(readonly number[])[]>();
   for(const t of collision.triangles??[]){
     for(let x=Math.floor(Math.min(t[0],t[3],t[6])/TILE);x<=Math.floor(Math.max(t[0],t[3],t[6])/TILE);x++)for(let z=Math.floor(Math.min(t[2],t[5],t[8])/TILE);z<=Math.floor(Math.max(t[2],t[5],t[8])/TILE);z++){
@@ -74,7 +84,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   function ground(x:number,z:number){
     let y=collision.baseHeight+collision.slopeX*x;
     for(const f of collision.floors)if(x>=f.minX&&x<=f.maxX&&z>=f.minZ&&z<=f.maxZ)y=Math.max(y,collision.baseHeight+collision.slopeX*x+f.elevation);
-    for(const p of triangles.get(`${Math.floor(x/TILE)}/${Math.floor(z/TILE)}`)??[]){
+    for(const p of readTerrain?.(x,z).triangles??triangles.get(`${Math.floor(x/TILE)}/${Math.floor(z/TILE)}`)??[]){
       const den=(p[5]-p[8])*(p[0]-p[6])+(p[6]-p[3])*(p[2]-p[8]);if(Math.abs(den)<1e-9)continue;
       const a=((p[5]-p[8])*(x-p[6])+(p[6]-p[3])*(z-p[8]))/den,b=((p[8]-p[2])*(x-p[6])+(p[0]-p[6])*(z-p[8]))/den;
       if(a>=-1e-7&&b>=-1e-7&&a+b<=1+1e-7)y=Math.max(y,a*p[1]+b*p[4]+(1-a-b)*p[7]);
@@ -165,14 +175,15 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
     }
     for(const [id,b] of terrain)if(!wanted.has(id)){physics.removeBody(b);terrain.delete(id);}
     const keep=new Set<string>();
-    for(const b of [...collision.blockers,...barriers]){
+    for(const b of [...nearbyBlockers((ix+.5)*TILE,(iz+.5)*TILE,1.5*TILE),...barriers]){
       if(b.maxX<(ix-1)*TILE||b.minX>(ix+2)*TILE||b.maxZ<(iz-1)*TILE||b.minZ>(iz+2)*TILE)continue;
       keep.add(b.id);if(obstacles.has(b.id))continue;
       const obstacle=new Body({mass:0});for(const {shape,offset} of buildingShapes(b))obstacle.addShape(shape,offset);obstacle.position.set((b.maxX+b.minX)/2,(b.maxY+b.minY)/2,(b.maxZ+b.minZ)/2);physics.addBody(obstacle);obstacles.set(b.id,obstacle);
     }
     for(const[id,b]of obstacles)if(!keep.has(id)){physics.removeBody(b);obstacles.delete(id);}
   }
-  let tick=startTick,sequence=0,acceptedTick=-1,expires=startTick,throttle=0,steering=0,steeringAngle=0,brake=true;
+  const accepted=new Map<string,{sequence:number;tick:number}>();
+  let tick=startTick,expires=startTick,throttle=0,steering=0,steeringAngle=0,brake=true;
   let phase:VehicleSnapshot['phase']='parked',since=startTick,driverId:string|null=null,message='';
   let leftDoor=0,rightDoor=0,leftOpen=false,rightOpen=false;
   let approachPath:{x:number;z:number}[]=[],approachNode=0,lastProgress=startTick,lastDistance=Infinity;
@@ -182,38 +193,52 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   const heading=()=>{const v=body.quaternion.vmult(new Vec3(0,0,1));return Math.atan2(v.x,v.z);};
   const speed=()=>body.velocity.length();
   const overturned=()=>body.quaternion.vmult(new Vec3(0,1,0)).y<.35;
-  const denied=(reason:string):Receipt=>{message=reason;return {accepted:false,reason};};
+  const denied=(reason:string):Receipt=>({accepted:false,reason});
   function carBlocker(){
     const p=body.position,c=Math.cos(heading()),sn=Math.sin(heading());
     const outline=[[-1.15,-2.45],[1.15,-2.45],[1.15,2.45],[-1.15,2.45]].map(([x,z])=>[p.x+x*c+z*sn,p.z-x*sn+z*c]);
     return {id:ID,minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),minY:p.y-ROOT_OFFSET,maxY:p.y-ROOT_OFFSET+CAR_GUIDES.height,outline};
   }
+  let peers:readonly CollisionBox[]=[];
+  function clearOfPeers(p:{x:number;y:number;z:number}){
+    return !peers.some(b=>p.x+.35>b.minX&&p.x-.35<b.maxX&&p.z+.35>b.minZ&&p.z-.35<b.maxZ&&p.y+1.8>b.minY&&p.y<b.maxY);
+  }
   function standingPoint(){
     const p=point(CAR_GUIDES.stand.x,0,CAR_GUIDES.stand.z),s=probe(tick,{x:p.x,z:p.z}).snapshot();
+    if(!clearOfPeers(s))throw new Error('Standing point occupied');
     return {x:s.x,y:s.y,z:s.z,yaw:heading()-Math.PI/2};
   }
   function safeExit(crawl=false){
     if(!crawl){try{return standingPoint();}catch{return null;}}
     for(const side of [-1,1])try{const yaw=heading(),x=body.position.x+side*Math.cos(yaw)*2.6,z=body.position.z-side*Math.sin(yaw)*2.6,p=probe(tick,{x,z}).snapshot();
-      if(Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5)continue;
+      if(!clearOfPeers(p)||Math.hypot(p.x-body.position.x,p.z-body.position.z)<2.5)continue;
       return {x:p.x,y:p.y,z:p.z,yaw:Math.atan2(p.x-body.position.x,p.z-body.position.z)};
     }catch{continue;}
     return null;
   }
-  function snapshot():VehicleSnapshot{return Object.freeze({id:ID,tick,position:Object.freeze(Object.values(point(0,0,0))),rotation:Object.freeze([body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]),wheels:Object.freeze(car.wheelInfos.map(w=>{const t=w.worldTransform;return Object.freeze({position:Object.freeze([t.position.x,t.position.y,t.position.z]),rotation:Object.freeze([t.quaternion.x,t.quaternion.y,t.quaternion.z,t.quaternion.w])});})),speed:speed(),steering:steeringAngle,driverId,phase,leftDoor,rightDoor,message});}
+  function snapshot():VehicleSnapshot{return Object.freeze({id:ID,tick,position:Object.freeze(Object.values(point(0,0,0))),rotation:Object.freeze([body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w]),wheels:Object.freeze(car.wheelInfos.map(w=>{const t=w.worldTransform;return Object.freeze({position:Object.freeze([t.position.x,t.position.y,t.position.z]),spin:w.rotation,rotation:Object.freeze([t.quaternion.x,t.quaternion.y,t.quaternion.z,t.quaternion.w])});})),speed:speed(),steering:steeringAngle,driverId,phase,leftDoor,rightDoor,message});}
   return {
     resetOccupancy(){
       if(!driverId)return;
       phase='parked';driverId=null;approachPath=[];release=null;
       throttle=steering=0;brake=true;coasting=speed()>.6;
     },
-    observeCharacter(s:CharacterSnapshot){character=s;},
+    driver: ()=>driverId,
+    blocker: carBlocker,
+    lastSequence: (id:string)=>accepted.get(id)?.sequence??0,
+    forgetCharacter(id:string){
+      if(driverId===id)this.resetOccupancy();
+      accepted.delete(id);
+    },
+    stopInput(){throttle=steering=0;brake=true;},
+    observeCharacter(s:CharacterSnapshot,blockers:readonly CollisionBox[]=[]){character=s;peers=blockers;},
     receive(value:unknown,owner:string):Receipt{
       if(!value||typeof value!=='object'||Array.isArray(value))return denied('invalid');
       const input:Record<string,unknown>=Object.fromEntries(Object.entries(value));
-      if(owner!=='local')return denied('owner');
-      if(input.vehicleId!==ID||input.characterId!=='local-player'||!Number.isSafeInteger(input.sequence)||typeof input.sequence!=='number'||input.sequence<=0||typeof input.tick!=='number'||!Number.isSafeInteger(input.tick)||input.tick<0)return denied('invalid');
-      if(input.sequence<=sequence)return denied('sequence');if(input.tick>tick||tick-input.tick>30)return denied('stale');if(acceptedTick===tick)return denied('rate');
+      if(!character||owner!==character.ownerId)return denied('owner');
+      if(input.vehicleId!==ID||input.characterId!==character.id||!Number.isSafeInteger(input.sequence)||typeof input.sequence!=='number'||input.sequence<=0||typeof input.tick!=='number'||!Number.isSafeInteger(input.tick)||input.tick<0)return denied('invalid');
+      const previous=accepted.get(character.id);
+      if(input.sequence<=(previous?.sequence??0))return denied('sequence');if(input.tick>tick||tick-input.tick>30)return denied('stale');if(previous?.tick===tick)return denied('rate');
       const type=input.type;
       const keys=type==='drive'?['type','vehicleId','characterId','sequence','tick','throttle','steer','brake']:type==='door'?['type','vehicleId','characterId','sequence','tick','side']:['type','vehicleId','characterId','sequence','tick'];
       if(Object.keys(input).length!==keys.length||Object.keys(input).some(k=>!keys.includes(k))||!['drive','enter','exit','door'].includes(String(type)))return denied('invalid');
@@ -221,13 +246,13 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(type==='door'&&input.side!=='left'&&input.side!=='right')return denied('invalid');
       if(type==='enter'&&overturned())return denied('overturned');
       if(type==='enter'||type==='door'){
-        if(!character||phase!=='parked'||speed()>.6||!character.grounded)return denied('unavailable');
+        if(phase!=='parked'||speed()>.6||!character.grounded||character.mode!=='walk')return denied('unavailable');
         const door=type==='enter'?body.position:point(input.side==='right'?1.9:-1.9,0,-.05);if(Math.hypot(character.x-door.x,character.y-door.y,character.z-door.z)>(type==='enter'?6.5:2.6))return denied('too-far');
       }else if(driverId!==input.characterId)return denied('driver');
       if(type==='enter'){
-        try{const stand=standingPoint();approachPath=findVehicleApproachPath({...collision,blockers:[...collision.blockers,carBlocker()]},character!,stand);}
+        try{const stand=standingPoint();approachPath=findVehicleApproachPath({...collision,blockers:[...nearbyBlockers(character.x,character.z,16),carBlocker()]},character,stand);}
         catch{return denied('blocked-door');}
-        approachNode=0;lastProgress=tick;lastDistance=Infinity;phase='approaching';coasting=false;since=tick;driverId='local-player';leftOpen=rightOpen=false;
+        approachNode=0;lastProgress=tick;lastDistance=Infinity;phase='approaching';coasting=false;since=tick;driverId=character.id;leftOpen=rightOpen=false;
       }
       if(type==='exit'){
         if(phase==='approaching'){phase='parked';driverId=null;approachPath=[];}
@@ -241,18 +266,18 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       if(type==='drive'){
         if(phase!=='driving')return denied('unavailable');throttle=typeof input.throttle==='number'?input.throttle:0;steering=typeof input.steer==='number'?input.steer:0;brake=input.brake===true;expires=tick+12;body.wakeUp();
       }
-      sequence=input.sequence;acceptedTick=tick;message='';return {accepted:true,reason:'accepted'};
+      accepted.set(character.id,{sequence:input.sequence,tick});message='';return {accepted:true,reason:'accepted'};
     },
     trafficContacts:()=>trafficContacts,
     trafficOrigin:():TrafficPoint=>[body.position.x,body.position.y,body.position.z],
-    step(nextTick:number,s:CharacterSnapshot,traffic:readonly TrafficSample[]=[]):VehicleCharacterFrame{
-      if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;release=null;syncTerrain();
+    step(nextTick:number,s:CharacterSnapshot|null,traffic:readonly TrafficSample[]=[],blockers:readonly CollisionBox[]=[]):VehicleCharacterFrame{
+      if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;peers=blockers;release=null;syncTerrain();
       if(tick>expires){throttle=steering=0;brake=true;}
       if((phase==='approaching'||phase==='entering')&&overturned()){
         if(phase==='entering')release=safeExit(true)??entry;
         phase='parked';driverId=null;approachPath=[];message='overturned';
       }
-      if(phase==='approaching'){
+      if(phase==='approaching'&&s){
         const target=approachPath[approachNode],distance=target?Math.hypot(s.x-target.x,s.z-target.z):0;
         if(distance<lastDistance-.005){lastDistance=distance;lastProgress=tick;}
         if(target&&distance<.08){approachNode++;lastDistance=Infinity;lastProgress=tick;}
@@ -289,7 +314,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       const blocker=carBlocker();
       let pose:VehicleCharacterFrame['pose']=null;
       let approach:VehicleCharacterFrame['approach'];
-      if(phase==='approaching'){
+      if(phase==='approaching'&&s){
         const p=approachPath[approachNode]??approachPath.at(-1);
         if(p)approach={x:p.x,z:p.z,yaw:heading()+Math.PI/2,vehicleId:ID,run:Math.hypot(s.x-approachPath.at(-1)!.x,s.z-approachPath.at(-1)!.z)>2.5,align:Math.hypot(s.x-approachPath.at(-1)!.x,s.z-approachPath.at(-1)!.z)<.08};
       }else if(driverId){
