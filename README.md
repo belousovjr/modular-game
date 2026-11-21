@@ -1,6 +1,6 @@
 # Modular Game
 
-Локальная основа игры без выбранного сеттинга: Babylon.js, TypeScript, Vite, React UI на Radix Themes с иконками Lucide. Без сервера и БД.
+Локальная основа игры без выбранного сеттинга: Babylon.js, TypeScript, Vite, React UI на Radix Themes с иконками Lucide. Игровая симуляция работает локально. Серверный маршрут проверяет подключение к Neon PostgreSQL.
 
 Направление развития, границы будущих модулей и этапы постоянного онлайн-мира на основе Чикаго — в [черновике плана](docs/PLAN.md).
 
@@ -21,6 +21,19 @@ npm test
 npm run build
 npm run preview
 ```
+
+## Neon PostgreSQL
+
+`neon deploy` применяет конфигурацию `neon.ts` к связанной ветке и подтягивает параметры подключения. Сервер читает pooled `DATABASE_URL` из `.env.local`, `.env` или окружения. Для Vercel задайте `DATABASE_URL` в окружении проекта.
+
+Проверка после запуска `npm run dev`:
+
+```sh
+curl --fail-with-body http://127.0.0.1:5175/api/db-health
+# {"ok":true,"database":"postgres"}
+```
+
+Маршрут выполняет `SELECT 1` и возвращает HTTP 503, если подключение отсутствует или недоступно. Игровые таблицы и сохранения будут добавлены вместе с первой схемой мира.
 
 ## Что уже есть
 

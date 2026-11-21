@@ -23,6 +23,9 @@
   },
   "include": [
     "src",
-    "tests"
+    "tests",
+    "api",
+    "neon.ts",
+    "vite.config.ts"
   ]
 }
