@@ -71,20 +71,22 @@ function splitSurface(source:Surface, bounds:readonly number[], slabStarts?:read
 }
 
 export function partitionInterior(interior: ReturnType<typeof buildInterior>) {
-  const {floorBounds,slabs,glazing,elevatorDoors}=interior;
+  const {floorBounds,slabs,glazing,mullions,elevatorDoors}=interior;
   const concrete=splitSurface(interior,floorBounds);
   const floors=splitSurface(slabs,floorBounds,slabs.floorStarts);
   const glass=splitSurface(glazing,floorBounds);
+  const frames=splitSurface(mullions,floorBounds);
   const doors=splitSurface(elevatorDoors,floorBounds);
   return concrete.map(({vertices: wallVertices,...walls},index)=>{
     const {vertices,...slab}=floors[index];
     const {vertices:glassVertices,...panes}=glass[index];
+    const {vertices:frameVertices,...windowFrames}=frames[index];
     const {vertices:doorVertices,...leaves}=doors[index];
     const stairRims=slabs.stairRims.flatMap(start=>{
       const local=vertices.get(start);
       return local===undefined ? [] : [local];
     });
-    return {minY:floorBounds[index],maxY:floorBounds[index+1],walls,slab,stairRims,glass:panes,doors:leaves};
+    return {minY:floorBounds[index],maxY:floorBounds[index+1],walls,slab,stairRims,glass:panes,windowFrames,doors:leaves};
   });
 }
 

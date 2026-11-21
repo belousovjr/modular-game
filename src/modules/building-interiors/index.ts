@@ -59,11 +59,13 @@ export const buildingInteriorsModule = defineModule({
     const doors = new Map(deps.world.collision.doors?.map(door=>[door.id,door]));
     const collision=createInteriorCollision(deps.world.getBuildingInteriorSources());
     const doorView=createEntranceMotion(deps.world.collision.doors??[]);
+    let trafficDoorPose: ((id: string) => number) | undefined;
     let presentedDoors:readonly DoorPose[]|undefined;
     let presentedById=new Map<string,DoorPose>();
     let doorway: BuildingDoor | undefined;
     let open = 0, opening = false;
     scope.onDispose(() => deps.materials.setDoorway(null));
+    scope.onDispose(() => deps.materials.setInteriorBuilding(0));
     scope.onDispose(() => deps.world.setInteriorView(false));
     function selectDoor(door: BuildingDoor | undefined) {
       if (door === doorway) return;
@@ -159,6 +161,8 @@ export const buildingInteriorsModule = defineModule({
           if(walls)yield walls;
           const rails=stairs && mesh('/rails','interior-door-frame',stairs.rails);
           if(rails)yield rails;
+          const frames=mesh('/window-frames','interior-door-frame',floor.windowFrames);
+          if(frames)yield frames;
           const slab=mesh('/slab','interior-concrete',floor.slab);
           if(slab){
             slab.visibility=opacity;
@@ -234,19 +238,21 @@ export const buildingInteriorsModule = defineModule({
       }, scope, deps.world.buildingDetailRange);
     }
     const observer = core.scene.onBeforeRenderObservable.add(() => {
-      if (!active.size) {selectDoor(undefined);deps.world.setInteriorView(false);return;}
+      if (!active.size) {selectDoor(undefined);deps.world.setInteriorView(false);deps.materials.setInteriorBuilding(0);return;}
       const camera = core.scene.activeCamera;
       camera?.getViewMatrix();
       const opacity = camera instanceof SceneCamera ? .8 : 1;
       const point=camera?.globalPosition;
       const actor=deps.rendering.getDistanceOrigin();
       let selected:BuildingDoor|undefined, distance=Infinity, insideSelected=false, interiorView=false;
+      let trafficSelected:BuildingDoor|undefined, trafficDistance=Infinity;
       for (const [id,{profile}] of active) {
         const inside=!!point&&nearInterior(profile,point,0);
         if (inside && presentedDoors && actor && nearInterior(profile,actor,0)) interiorView=true;
         const door=doors.get(id);
         if(!point||!door)continue;
         const d=Math.min(doorDistance(door,point),actor?doorDistance(door,actor):Infinity);
+        if (trafficDoorPose?.(id) && d<trafficDistance) { trafficSelected=door; trafficDistance=d; }
         if (!inside && (insideSelected || d>4.5)) continue;
         if (inside===insideSelected && d>=distance) continue;
         distance=d;
@@ -254,7 +260,7 @@ export const buildingInteriorsModule = defineModule({
         insideSelected=inside;
       }
       deps.world.setInteriorView(interiorView);
-      selectDoor(selected);
+      selectDoor(selected??trafficSelected);
       if (!presentedDoors && selected) {
         const actorDistance=actor?doorDistance(selected,actor):Infinity;
         opening=actorDistance<=(opening?3:2.5);
@@ -262,26 +268,34 @@ export const buildingInteriorsModule = defineModule({
         open=opening?Math.min(1,open+step):Math.max(0,open-step);
       }
       uploadAvailable=true;
+      let interiorBuilding=0;
       const maxSwing=ENTRANCE_SWING*Math.min(core.scene.getEngine().getDeltaTime(),50)/400;
       for (const [id,view] of active) {
         const selectedDoor=selected?.id===id?selected:undefined;
         const visualOpen=selectedDoor?open:0;
         const state=presentedById.get(id);
-        const left=presentedDoors?state?.left??0:visualOpen;
-        const right=presentedDoors?state?.right??0:visualOpen;
+        const traffic=trafficDoorPose?.(id)??0;
+        const left=Math.max(traffic,presentedDoors?state?.left??0:visualOpen);
+        const right=Math.max(traffic,presentedDoors?state?.right??0:visualOpen);
         const preparingEntrance=!!selectedDoor&&(left>0||right>0||!!actor&&doorDistance(selectedDoor,actor)<=3.5);
         const ready=view.update(point,opacity,actor,preparingEntrance);
-        view.doorReady=(left>0||right>0)&&(ready||view.doorReady);
+        if (ready && id===selected?.id && insideSelected) interiorBuilding=deps.world.getCoarseBuildingKey(id);
+        view.doorReady=(left>0||right>0)&&(ready||view.doorReady||traffic>0);
         for (const {mesh,direction} of view.leaves) {
           const angle=view.doorReady?direction*ENTRANCE_SWING*(direction>0?left:right):0;
           const change=angle-mesh.rotation.y;
           if(change)mesh.rotation.y+=Math.max(-maxSwing,Math.min(maxSwing,change));
         }
       }
+      deps.materials.setInteriorBuilding(interiorBuilding);
     });
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     return {
       collision,
+      registerTrafficDoors(sample: (id: string) => number, owner: Scope) {
+        trafficDoorPose=sample;
+        owner.onDispose(()=>{if(trafficDoorPose===sample)trafficDoorPose=undefined;});
+      },
       cameraObstacles(bounds:InteriorQueryBounds) {
         const result=collision.along(bounds);
         result.push(...doorView.viewAlong(bounds,presentedById));

@@ -11,7 +11,7 @@ import {retargetClips} from './retarget-character.mjs';
 const source=process.argv[2];
 const postureSource=process.argv[3];
 if(!source||!postureSource)throw new Error('Usage: node scripts/prepare-locomotion-animations.mjs <Quaternius UAL1_Standard.glb> <Quaternius UAL1.glb>');
-const file='public/models/human/character.glb';
+const file='scripts/character.glb';
 const io=new NodeIO().registerExtensions(ALL_EXTENSIONS);
 const [model,library,postureLibrary]=await Promise.all([io.read(file),io.read(source),io.read(postureSource)]);
 const root=model.getRoot(),buffer=root.listBuffers()[0],skin=root.listSkins()[0];

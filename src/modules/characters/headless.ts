@@ -130,6 +130,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   let vx=0,vy=0,vz=0;
   const entrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
   let vehicleFrame:VehicleCharacterFrame|null=null;
+  let traffic:readonly CollisionBox[]=[];
   let closed=false;
   function sample(px:number,pz:number,low:number,high:number) {
     return interiors.at(px,pz,low,high);
@@ -145,7 +146,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     return height;
   }
   const obstacles=(px:number,pz:number,py:number,inside:readonly CollisionBox[])=>[
-    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame ? [vehicleFrame.blocker] : []),
+    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame ? [vehicleFrame.blocker] : []),...traffic,
   ];
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
   function touches(b:CollisionBox,px:number,pz:number,radius=RADIUS) {
@@ -248,6 +249,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     resetPosition(){
       if(closed)throw new Error('Character authority disposed');
       const start=initialPosition;
+      traffic=[];
       if(blocked(start.x,start.z,start.y,false,HEIGHT.standing))throw new Error('Стартовая точка персонажа занята');
       x=start.x;y=start.y;z=start.z;yaw=0;
       dx=dz=0;run=false;facing=null;expiry=tick;stance='standing';stanceRequest=undefined;
@@ -255,6 +257,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       resetMotion();
       if(vehicleFrame)vehicleFrame={blocker:vehicleFrame.blocker,pose:null,release:null};
     },
+    setTrafficBlockers(blockers:readonly CollisionBox[]) {traffic=blockers;},
     setVehicleFrame(frame:VehicleCharacterFrame|null){
       if(frame){
         if(frame.approach&&(![frame.approach.x,frame.approach.z,frame.approach.yaw].every(Number.isFinite)||!frame.approach.vehicleId.trim()))throw new Error('Invalid vehicle approach');

@@ -70,3 +70,15 @@ Flight and swimming extension. After preparing the human and its vehicle animati
 Ground postures use Quaternius `Crouch_Fwd_Loop`, `Crouch_Idle_Loop`, `Crawl_Fwd_Loop` and `Crawl_Idle_Loop` from the in-place UAL1 Source GLB (CC0). The public source mirror and input checksum are recorded in the manifest. These four pose loops are baked at 30 samples per second and interpolated by Babylon. The normal atlas uses lossless WebP with a pixel-equality check to keep the GLB under its existing budget. The existing Mixamo clip is used for the overturned-car exit.
 
 The retained neck edge is closed with a 28-edge under-collar extension attached to the upper spine. It uses the existing skin atlas, a single skinned primitive and the current animation rig.
+
+
+## Modular runtime characters
+
+The game loads male.glb and female.glb from the free Universal Base Characters Standard archive (itch.io upload 15861669, CC0). The catalogue records the supported attachments as exported by the author. Male parts are Buzzed, SimpleParted and Beard. Female parts are BuzzedFemale, Buns and Long. Both bodies include the author's eyebrows, eyes and underwear. The body atlas is normalized for palette tint while retaining the neutral garments. Albedo and normal maps are resized to at most 512 pixels. Meshopt simplifies the geometry offline without introducing a browser decoder.
+
+Both models retain a compatible 65-joint Humanoid rig and all 20 gameplay clips. The clips are retargeted from scripts/character.glb, the previous game asset kept as a build input. The animation licences described above still apply to the resulting game assets.
+
+~~~sh
+python3 scripts/extract-character-sources.py --modular base.zip /tmp/modular-character-source
+node scripts/prepare-modular-characters.mjs /tmp/modular-character-source
+~~~

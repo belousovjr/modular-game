@@ -28,7 +28,11 @@ export const vehiclesModule=defineModule({
     const view=createCarView(core.scene,deps.geometry,scope);
     const keys=new Set<string>();let sequence=0,lastTick=-1,lastInput='';
     let pendingAction:{action:'enter'|'exit'|'door';side:'left'|'right'}|null=null;
-    deps.characters.registerVehicleAuthority(connection.step,scope,()=>{
+    deps.characters.registerVehicleAuthority((tick,hero)=>{
+      const result=connection.step(tick,hero,deps.characters.vehicleTraffic(authority.trafficOrigin()));
+      deps.characters.vehicleTrafficContacts(authority.trafficContacts());
+      return result;
+    },scope,()=>{
       keys.clear();pendingAction=null;connection.resetOccupancy();
     });
     const canvas=core.scene.getEngine().getRenderingCanvas();
@@ -63,3 +67,5 @@ export const vehiclesModule=defineModule({
     return {snapshot:connection.snapshot};
   },
 });
+
+export {createTrafficCarAssets} from './view.ts';

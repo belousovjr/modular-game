@@ -1,3 +1,4 @@
+import type {TrafficSample, TrafficContact, TrafficPoint} from '../../simulation/traffic.ts';
 import {World,Body,Box,ConvexPolyhedron,Material,ContactMaterial,Vec3,Heightfield,RaycastVehicle,SAPBroadphase} from 'cannon-es';
 import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
 import pathfinding from 'javascript-astar';
@@ -90,6 +91,61 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   const car=new RaycastVehicle({chassisBody:body,indexRightAxis:0,indexUpAxis:1,indexForwardAxis:2});
   for(const z of [1.34,-1.351])for(const x of [-.928,.928])car.addWheel({radius:.43,directionLocal:new Vec3(0,-1,0),axleLocal:new Vec3(-1,0,0),chassisConnectionPointLocal:new Vec3(x,.12,z),suspensionRestLength:.4,suspensionStiffness:18,dampingRelaxation:2.8,dampingCompression:3.2,frictionSlip:2.8,rollInfluence:.12,maxSuspensionForce:18000,maxSuspensionTravel:.28,isFrontWheel:z>0});
   car.addToWorld(physics);for(let i=0;i<4;i++)car.updateWheelTransform(i);
+  const proxies=new Map<string,{body:Body;car:boolean;quiet:number}>();
+  const pedestrianHits=new Set<string>();
+  let trafficContacts:TrafficContact[]=[];
+  function syncTraffic(samples:readonly TrafficSample[]) {
+    const wanted=new Set(samples.map(sample=>sample.id));
+    for(const [id,proxy] of proxies) if(!wanted.has(id)&&proxy.body.type!==Body.DYNAMIC){
+      physics.removeBody(proxy.body);proxies.delete(id);
+    }
+    for(const sample of samples) {
+      let proxy=proxies.get(sample.id);
+      if(!proxy){
+        const car=sample.car;
+        const obstacle=new Body({mass:0,type:Body.KINEMATIC,linearDamping:.28,angularDamping:.63,
+          shape:new Box(car?new Vec3(1,.65,2.12):new Vec3(.3,.83,.3))});
+        proxy={body:obstacle,car,quiet:0};
+        obstacle.addEventListener('collide',(event:{body:Body})=>{
+          if(event.body!==body)return;
+          if(!car){pedestrianHits.add(sample.id);return;}
+          if(obstacle.type===Body.DYNAMIC)return;
+          obstacle.type=Body.DYNAMIC;obstacle.mass=1100;obstacle.updateMassProperties();obstacle.wakeUp();
+        });
+        physics.addBody(obstacle);proxies.set(sample.id,proxy);
+      }
+      const other=proxy.body;
+      if(other.type!==Body.KINEMATIC)continue;
+      const [x,y,z]=sample.point;
+      if(sample.rotation)other.quaternion.set(...sample.rotation);
+      else other.quaternion.setFromEuler(sample.pitch,sample.yaw,0,'YXZ');
+      const offset=other.quaternion.vmult(new Vec3(0,sample.car?.65:.83,0));
+      other.position.set(x+offset.x,y+offset.y,z+offset.z);
+      other.velocity.set(...sample.velocity);other.aabbNeedsUpdate=true;
+    }
+  }
+  function collectTraffic() {
+    trafficContacts=[];
+    for(const equation of physics.contacts){
+      const other=equation.bi===body?equation.bj:equation.bj===body?equation.bi:undefined;
+      if(!other)continue;
+      for(const [id,proxy] of proxies) if(!proxy.car&&proxy.body===other)pedestrianHits.add(id);
+    }
+    for(const [id,proxy] of proxies){
+      const other=proxy.body;
+      if(other.type===Body.DYNAMIC){
+        const offset=other.quaternion.vmult(new Vec3(0,.65,0));
+        const point:TrafficPoint=[other.position.x-offset.x,other.position.y-offset.y,other.position.z-offset.z];
+        proxy.quiet=other.velocity.lengthSquared()<.09 && other.angularVelocity.lengthSquared()<.09?proxy.quiet+1:0;
+        const settled=proxy.quiet>=36 || other.sleepState===Body.SLEEPING;
+        trafficContacts.push({id,point,rotation:[other.quaternion.x,other.quaternion.y,other.quaternion.z,other.quaternion.w],settled});
+        if(settled){physics.removeBody(other);proxies.delete(id);}
+      }else if(pedestrianHits.has(id)){
+        trafficContacts.push({id,point:[other.position.x,other.position.y-.83,other.position.z],rotation:[0,0,0,1],settled:false});
+      }
+    }
+    pedestrianHits.clear();
+  }
   const bounds=collision.bounds;
   const barriers=[
     {id:'vehicle-boundary/west',minX:bounds.minX-2,maxX:bounds.minX,minZ:bounds.minZ-2,maxZ:bounds.maxZ+2,minY:-100,maxY:1000},
@@ -186,7 +242,9 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       }
       sequence=input.sequence;acceptedTick=tick;message='';return {accepted:true,reason:'accepted'};
     },
-    step(nextTick:number,s:CharacterSnapshot):VehicleCharacterFrame{
+    trafficContacts:()=>trafficContacts,
+    trafficOrigin:():TrafficPoint=>[body.position.x,body.position.y,body.position.z],
+    step(nextTick:number,s:CharacterSnapshot,traffic:readonly TrafficSample[]=[]):VehicleCharacterFrame{
       if(nextTick!==tick+1)throw new Error('Vehicle ticks must be consecutive');tick=nextTick;character=s;release=null;syncTerrain();
       if(tick>expires){throttle=steering=0;brake=true;}
       if((phase==='approaching'||phase==='entering')&&overturned()){
@@ -214,7 +272,9 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       const targetSteering=-steering*.55/(1+(Math.abs(velocity)/11)**3);
       steeringAngle+=Math.max(-2.4/60,Math.min(2.4/60,targetSteering-steeringAngle));
       for(let i=0;i<4;i++){car.setSteeringValue(i<2?steeringAngle:0,i);car.setBrake(braking?80:0,i);car.applyEngineForce(!braking&&(throttle>=0?velocity<40:velocity>-9)?-throttle*1900:0,i);}
-      if(body.sleepState!==Body.SLEEPING||phase==='driving')physics.step(1/60);
+      syncTraffic(traffic);
+      if(body.sleepState!==Body.SLEEPING||phase==='driving'||proxies.size){physics.step(1/60);collectTraffic();}
+      else trafficContacts=[];
       if(phase!=='driving'&&tick-startTick>120&&speed()<.18&&car.wheelInfos.filter(w=>w.isInContact).length>=3)body.sleep();
       if(phase==='exiting'){
         const target=safeExit(exitCrawling);
@@ -243,7 +303,7 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
       }
       return {blocker,pose,release,...(approach?{approach}:{})};
     },snapshot,
-    dispose(){car.removeFromWorld(physics);for(const b of [...terrain.values(),...obstacles.values()])physics.removeBody(b);terrain.clear();obstacles.clear();},
+    dispose(){car.removeFromWorld(physics);for(const proxy of proxies.values())physics.removeBody(proxy.body);proxies.clear();for(const b of [...terrain.values(),...obstacles.values()])physics.removeBody(b);terrain.clear();obstacles.clear();},
   };
 }
 
@@ -256,7 +316,7 @@ export function createVehicleConnection(authority:ReturnType<typeof createVehicl
     count++;if(drop&&count%drop===0)return Promise.resolve({accepted:false,reason:'dropped'});seed=(Math.imul(seed,1664525)+1013904223)>>>0;
     const due=authority.snapshot().tick+1+latency+Math.floor(seed/0x100000000*(jitter*2+1))-jitter;
     return new Promise(resolve=>queue.push({due,command:{...command},resolve}));
-  },step(tick:number,character:CharacterSnapshot){authority.observeCharacter(character);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character);},snapshot:authority.snapshot,resetOccupancy(){
+  },step(tick:number,character:CharacterSnapshot,traffic?:readonly TrafficSample[]){authority.observeCharacter(character);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character,traffic);},snapshot:authority.snapshot,resetOccupancy(){
     authority.resetOccupancy();
     for(const packet of queue.splice(0))packet.resolve({accepted:false,reason:'reset'});
   },close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};

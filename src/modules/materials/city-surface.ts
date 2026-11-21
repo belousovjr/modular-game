@@ -25,16 +25,21 @@ const doorColor = Color3.FromHexString(surfaces['interior-door'].color).asArray(
 const frameColor = Color3.FromHexString(surfaces['interior-door-frame'].color).asArray().join(',');
 
 export class CityFacade extends MaterialPluginBase {
-  constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false,RADIAL_FACADE_UV:false,CITY_DOOR_WINDOWS:false},true,true);this.doNotSerialize=true;}
+  constructor(material:Material){super(material,'CityFacade',220,{FITTED_SURFACE_UV:false,RADIAL_FACADE_UV:false,CITY_DOOR_WINDOWS:false,CITY_COARSE_BUILDING:false},true,true);this.doNotSerialize=true;}
   night=0;
+  interiorBuilding=0;
   getClassName(){return 'CityFacade';}
-  getUniforms(){return {ubo:[{name:'cityNight',size:1,type:'float'}]};}
-  bindForSubMesh(buffer:UniformBuffer){buffer.updateFloat('cityNight',this.night);}
-  getAttributes(attributes:string[],_scene:Scene,mesh:AbstractMesh){if(mesh.isVerticesDataPresent('cityDoorWindows'))attributes.push('cityDoorWindows');for(const name of ['uv','normal'])if(!attributes.includes(name))attributes.push(name);}
-  prepareDefinesBeforeAttributes(defines:MaterialDefines,_scene:Scene,mesh:AbstractMesh){defines.CITY_DOOR_WINDOWS=mesh.isVerticesDataPresent('cityDoorWindows');defines.FITTED_SURFACE_UV=mesh.metadata?.fittedUV===true;defines.RADIAL_FACADE_UV=mesh.metadata?.radialFacade===true;}
+  getUniforms(){return {ubo:[{name:'cityNight',size:1,type:'float'},{name:'cityInteriorBuilding',size:1,type:'float'}],
+    vertex:'#ifndef UNIFORMBUFFERS\nuniform float cityInteriorBuilding;\n#endif'};}
+  bindForSubMesh(buffer:UniformBuffer){buffer.updateFloat('cityNight',this.night);buffer.updateFloat('cityInteriorBuilding',this.interiorBuilding);}
+  getAttributes(attributes:string[],_scene:Scene,mesh:AbstractMesh){if(mesh.isVerticesDataPresent('cityDoorWindows'))attributes.push('cityDoorWindows');if(mesh.isVerticesDataPresent('cityBuilding'))attributes.push('cityBuilding');for(const name of ['uv','normal'])if(!attributes.includes(name))attributes.push(name);}
+  prepareDefinesBeforeAttributes(defines:MaterialDefines,_scene:Scene,mesh:AbstractMesh){defines.CITY_COARSE_BUILDING=mesh.isVerticesDataPresent('cityBuilding');defines.CITY_DOOR_WINDOWS=mesh.isVerticesDataPresent('cityDoorWindows');defines.FITTED_SURFACE_UV=mesh.metadata?.fittedUV===true;defines.RADIAL_FACADE_UV=mesh.metadata?.radialFacade===true;}
   getCustomCode(type:string):Record<string,string>|null{
     if(type==='vertex')return {
       CUSTOM_VERTEX_DEFINITIONS:`
+        #ifdef CITY_COARSE_BUILDING
+        attribute float cityBuilding;
+        #endif
         #ifndef UV1
         attribute vec2 uv;
         #endif
@@ -49,6 +54,9 @@ export class CityFacade extends MaterialPluginBase {
         #endif
       `,
       CUSTOM_VERTEX_MAIN_END:`
+        #ifdef CITY_COARSE_BUILDING
+        if(cityInteriorBuilding>0. && cityBuilding==cityInteriorBuilding)gl_Position=vec4(2.,2.,2.,1.);
+        #endif
         #ifdef CITY_DOOR_WINDOWS
         vCityDoorWindows=cityDoorWindows;
         #endif

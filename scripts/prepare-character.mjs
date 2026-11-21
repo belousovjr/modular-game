@@ -143,12 +143,13 @@ await model.transform(prune(),dedup(),weld(),unpartition());
 closeCharacterNeck(model,materials.indexOf(faceMaterial));
 const triangles=root.listMeshes().reduce((n,m)=>n+m.listPrimitives().reduce((n,p)=>n+p.getIndices().getCount()/3,0),0);
 const output=resolve('public/models/human');await mkdir(output,{recursive:true});
-await io.write(resolve(output,'character.glb'),model);
+const rigFile=resolve('scripts/character.glb');
+await io.write(rigFile,model);
 const manifest={source:'Quaternius: Modular Character Outfits – Fantasy + Universal Base Characters',license:'CC0-1.0',
   triangles,primitives:root.listMeshes().reduce((n,m)=>n+m.listPrimitives().length,0),joints:skin.listJoints().length,
   textures:root.listTextures().map(t=>({name:t.getName(),mime:t.getMimeType(),size:t.getSize()})),runtimeClips:clips,
   animationLibraries:[{name:'Universal Animation Library',url:'https://quaternius.com/packs/universalanimationlibrary.html',advertisedFullClips:'120+',verifiedFreeClips:library1.getRoot().listAnimations().map(a=>a.getName())},
    {name:'Universal Animation Library 2',url:'https://quaternius.com/packs/universalanimationlibrary2.html',advertisedFullClips:'130+',verifiedFreeClips:library2.getRoot().listAnimations().map(a=>a.getName())}],
-  sha256:createHash('sha256').update(await readFile(resolve(output,'character.glb'))).digest('hex')};
+  sha256:createHash('sha256').update(await readFile(rigFile)).digest('hex')};
 await writeFile(resolve(output,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
-console.log(JSON.stringify({triangles,primitives:manifest.primitives,joints:manifest.joints,textures:manifest.textures,clips,bytes:(await readFile(resolve(output,'character.glb'))).length}));
+console.log(JSON.stringify({triangles,primitives:manifest.primitives,joints:manifest.joints,textures:manifest.textures,clips,bytes:(await readFile(rigFile)).length}));

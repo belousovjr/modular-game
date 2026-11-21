@@ -1,7 +1,11 @@
+import type {TrafficContact, TrafficPoint, TrafficSample} from '../../simulation/traffic.ts';
+import type {CollisionBox} from '../world/index.ts';
 import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
 import { createAvatar, createCharacterAssets } from './assets.ts';
 import { CharacterPanel } from './panel.tsx';
+import {readAppearance,saveAppearance,type Appearance} from './appearance.ts';
+export {npcAppearance} from './appearance.ts';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
@@ -37,14 +41,27 @@ export const charactersModule = defineModule({
     });
     let resetVehicleOccupancy:(()=>void)|undefined;
     let vehicleStep:((tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame)|null=null;
-    deps.simulation.registerSystem(tick=>{if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,authority.snapshot()));connection.step(tick);}, scope);
+    let traffic:{step:(tick:number,hero:CharacterSnapshot)=>readonly CollisionBox[];
+      around:(point:TrafficPoint)=>readonly TrafficSample[]; contacts:(hits:readonly TrafficContact[])=>void}|undefined;
+    deps.simulation.registerSystem(tick=>{
+      const hero=authority.snapshot();
+      authority.setTrafficBlockers(traffic?.step(tick,hero)??[]);
+      if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,hero));
+      connection.step(tick);
+    }, scope);
     const assets=createCharacterAssets(core.scene,scope);
-    scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
-    const createView=(owner: Scope)=>{
+    const createView=(owner:Scope,appearance?:Appearance)=>{
       if(stopped)throw new Error('Персонаж остановлен');
-      return createAvatar(core.scene,deps.geometry,assets,owner);
+      return createAvatar(core.scene,deps.geometry,assets,owner,appearance);
     };
-    const render = createView(scope);
+    const appearance=readAppearance();
+    const render=createView(scope,appearance);
+    scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{
+      assets,initial:appearance,onChange(next){
+        render.setAppearance(next);
+        saveAppearance(next);
+      },
+    })));
     const sampleHeight=createDisplayHeight();
     let displayY=sampleHeight(connection.snapshot(),0);
     deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
@@ -72,6 +89,13 @@ export const charactersModule = defineModule({
     scope.onDispose(() => core.scene.onBeforeRenderObservable.remove(observer));
     scope.onDispose(()=>{stopped=true;});
     return {
+      registerTrafficAuthority(provider:NonNullable<typeof traffic>,owner:Scope){
+        if(stopped||traffic)throw new Error('Traffic authority already connected or stopped');
+        traffic=provider;
+        owner.onDispose(()=>{traffic=undefined;authority.setTrafficBlockers([]);});
+      },
+      vehicleTraffic(point:TrafficPoint){return traffic?.around(point)??[];},
+      vehicleTrafficContacts(hits:readonly TrafficContact[]){traffic?.contacts(hits);},
       registerVehicleAuthority(step:(tick:number,character:CharacterSnapshot)=>VehicleCharacterFrame,owner:Scope,resetOccupancy:()=>void){
         if(stopped)throw new Error('Персонаж остановлен');
         if(vehicleStep)throw new Error('Vehicle authority already connected');

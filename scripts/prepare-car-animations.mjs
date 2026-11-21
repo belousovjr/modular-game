@@ -7,7 +7,7 @@ import {readFile,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 const source=process.argv[2];if(!source)throw Error('Usage: node scripts/prepare-car-animations.mjs <directory containing Entering_Car.fbx, Exiting_Car.fbx and Crawling.fbx>');
-const converter=await assimp(),io=new NodeIO().registerExtensions(ALL_EXTENSIONS),file='public/models/human/character.glb',model=await io.read(file),r=model.getRoot(),skin=r.listSkins()[0],buffer=r.listBuffers()[0];
+const converter=await assimp(),io=new NodeIO().registerExtensions(ALL_EXTENSIONS),file='scripts/character.glb',model=await io.read(file),r=model.getRoot(),skin=r.listSkins()[0],buffer=r.listBuffers()[0];
 const joints=skin.listJoints(),target=new Map(joints.map(n=>[n.getName(),n])),bind=new Map();
 // Preserve the outfit's actual bind pose.
 for(const [i,n] of joints.entries()){

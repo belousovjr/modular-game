@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 
 // Inspect exported glTF metadata without instantiating a Babylon scene or dumping its graph.
 test('human asset stays within the render budget with one shared rig and baked locomotion clips', () => {
-  const bytes=readFileSync(new URL('../public/models/human/character.glb',import.meta.url));
+  const bytes=readFileSync(new URL('../scripts/character.glb',import.meta.url));
   assert.equal(bytes.readUInt32LE(0),0x46546c67);assert.equal(bytes.readUInt32LE(4),2);
   const gltf=JSON.parse(bytes.subarray(20,20+bytes.readUInt32LE(12)).toString());
   const manifest=JSON.parse(readFileSync(new URL('../public/models/human/manifest.json',import.meta.url),'utf8'));
@@ -37,7 +37,7 @@ test('human asset stays within the render budget with one shared rig and baked l
 test('skin geometry is closed under the shirt collar', async () => {
   const { NodeIO } = await import('@gltf-transform/core');
   const { ALL_EXTENSIONS } = await import('@gltf-transform/extensions');
-  const bytes = readFileSync(new URL('../public/models/human/character.glb', import.meta.url));
+  const bytes = readFileSync(new URL('../scripts/character.glb', import.meta.url));
   const model = await new NodeIO().registerExtensions(ALL_EXTENSIONS).readBinary(bytes);
   const primitive = model.getRoot().listMeshes()[0].listPrimitives()[0];
   const position = primitive.getAttribute('POSITION');
@@ -118,7 +118,7 @@ test('car-specific Mixamo clips keep feet below the head and meet the driving se
   const {NodeIO}=await import('@gltf-transform/core');
   const {ALL_EXTENSIONS}=await import('@gltf-transform/extensions');
   const {Quaternion}=await import('@babylonjs/core/Maths/math.vector.js');
-  const d=await new NodeIO().registerExtensions(ALL_EXTENSIONS).read(new URL('../public/models/human/character.glb',import.meta.url).pathname),root=d.getRoot();
+  const d=await new NodeIO().registerExtensions(ALL_EXTENSIONS).read(new URL('../scripts/character.glb',import.meta.url).pathname),root=d.getRoot();
   const nodes=root.listNodes(),saved=nodes.map(n=>({n,t:n.getTranslation(),q:n.getRotation()}));
   const node=(name:string)=>{const n=nodes.find(n=>n.getName()===name);assert.ok(n);return n;};
   const pose=(name:string,fraction:number)=>{
@@ -256,4 +256,91 @@ test('walking off successive ledges never selects the rising jump pose',async()=
   assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:81,tick:80,x:1,z:0,run:false,jump:true},'local').accepted);
   actor.step(81);
   assert.equal(selectAnimation(actor.snapshot()),'Jump_Start');
+});
+
+test('modular avatar swaps compatible parts and one rig while sharing geometry and palette materials',async t=>{
+  const {NodeIO}=await import('@gltf-transform/core');
+  const {ALL_EXTENSIONS}=await import('@gltf-transform/extensions');
+  const {NullEngine}=await import('@babylonjs/core/Engines/nullEngine.js');
+  const {Scene}=await import('@babylonjs/core/scene.js');
+  const {PBRMaterial}=await import('@babylonjs/core/Materials/PBR/pbrMaterial.js');
+  const {Texture}=await import('@babylonjs/core/Materials/Textures/texture.js');
+  const {Observable}=await import('@babylonjs/core/Misc/observable.js');
+  const {createScope}=await import('../src/core/scope.ts');
+  const {createPanels}=await import('../src/core/panels.ts');
+  const {defineModule}=await import('../src/core/context.ts');
+  const {startModules}=await import('../src/core/modules.ts');
+  const {geometryModule}=await import('../src/modules/geometry/index.ts');
+  const {createAvatar,createCharacterAssets}=await import('../src/modules/characters/assets.ts');
+  const {bodies,changeAppearance,defaultAppearance,npcAppearance}=await import('../src/modules/characters/appearance.ts');
+  const io=new NodeIO().registerExtensions(ALL_EXTENSIONS);
+  const sources=new Map<string,Uint8Array<ArrayBuffer>>();
+  for(const body of ['male','female'] as const){
+    const doc=await io.read(new URL(`../public/models/human/${body}.glb`,import.meta.url).pathname);
+    const root=doc.getRoot();
+    assert.equal(root.listSkins().length,1);
+    assert.equal(root.listSkins()[0].listJoints().length,65);
+    assert.equal(root.listAnimations().length,20);
+    assert.ok(root.listAnimations().every(clip=>clip.listChannels().length<=80));
+    assert.ok(bodies[body].hair.every(id=>root.listNodes().some(node=>node.getName()===`part-${id}`)));
+    assert.ok(root.listTextures().some(texture=>texture.getName().endsWith('Normal')));
+    for(const texture of root.listTextures())texture.dispose();
+    sources.set(body,new Uint8Array(await io.writeBinary(doc)));
+  }
+  t.mock.method(globalThis,'fetch',async(url:string)=>{
+    const body=url.split('/').at(-1)?.replace('.glb','')??'';
+    return new Response(sources.get(body));
+  });
+  const engine=new NullEngine(),scene=new Scene(engine);
+  const owner=createScope(),first=createScope(),second=createScope();
+  let geometry:ReturnType<typeof geometryModule.setup>|undefined;
+  const consumer=defineModule({id:'avatar-test',title:'',category:'Тесты',requires:{geometry:geometryModule},setup({deps}){
+    geometry=deps.geometry;
+    return {};
+  }});
+  const session=startModules([geometryModule,consumer],[consumer.id],{scene,onFrame:new Observable<number>(),panels:createPanels()});
+  try{
+    assert.ok(geometry);
+    const assets=createCharacterAssets(scene,owner);
+    await assets.ready;
+    assert.deepEqual(assets.getStatus(),{state:'ready',error:null});
+    const a=createAvatar(scene,geometry,assets,first);
+    createAvatar(scene,geometry,assets,second);
+    const roots=scene.transformNodes.filter(node=>node.name==='character/local-player');
+    assert.equal(roots.length,2);
+    const mesh=(index:number,name:string)=>roots[index].getChildMeshes().find(mesh=>mesh.name===`human/${name}`)!;
+    assert.equal(mesh(0,'body').material,mesh(1,'body').material);
+    const original=assets.getContainer('female')!.materials.find(material=>material.name==='skin');
+    assert.ok(original instanceof PBRMaterial);
+    const texture=new Texture(null,scene);
+    owner.onDispose(()=>texture.dispose());
+    original.albedoTexture=texture;
+    const variant=assets.tinted(original,'#956044');
+    assert.equal(variant.albedoTexture,texture);
+    assert.equal(variant.transparencyMode,original.transparencyMode);
+    assert.equal(variant.sideOrientation,original.sideOrientation);
+    assert.equal(variant.backFaceCulling,original.backFaceCulling);
+    assert.equal(variant.fillMode,original.fillMode);
+    assert.equal(mesh(0,'body').geometry,mesh(1,'body').geometry);
+    assert.equal(mesh(0,'part-SimpleParted').isEnabled(),true);
+    assert.equal(mesh(0,'part-Beard').isEnabled(),false);
+    assert.equal(mesh(0,'body').skeleton,mesh(0,'part-SimpleParted').skeleton);
+    const previous=mesh(0,'body');
+    a.setAppearance(changeAppearance(defaultAppearance,{body:'female',hair:'Buns',skin:3}));
+    assert.ok(previous.isDisposed());
+    assert.equal(mesh(0,'body').material,variant);
+    assert.equal(roots[0].getChildMeshes().filter(mesh=>mesh.name==='human/body').length,1);
+    assert.equal(mesh(0,'part-Buns').isEnabled(),true);
+    assert.equal(mesh(0,'part-Long').isEnabled(),false);
+    assert.notEqual(mesh(0,'body').material,mesh(1,'body').material);
+    a.setFade(0);
+    assert.equal(mesh(0,'part-Buns').isEnabled(),false);
+    a.setFade(1);
+    assert.equal(mesh(0,'part-Buns').isEnabled(),true);
+    assert.equal(mesh(0,'part-Long').isEnabled(),false);
+    assert.deepEqual(npcAppearance('street/1/crowd/2'),npcAppearance('street/1/crowd/2'));
+    const variants=Array.from({length:80},(_,i)=>npcAppearance(`street/1/crowd/${i}`));
+    assert.equal(new Set(variants.map(appearance=>appearance.body)).size,2);
+    assert.ok(new Set(variants.map(appearance=>appearance.hair)).size>=5);
+  }finally{second.dispose();first.dispose();owner.dispose();session.dispose();scene.dispose();engine.dispose();}
 });

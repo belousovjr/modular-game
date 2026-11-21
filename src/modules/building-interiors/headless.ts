@@ -305,6 +305,14 @@ export type InteriorCollisionBox = CollisionBox & {slope?: {
   low0:number;low1:number;high0:number;high1:number;
 }};
 
+function stairDimensions(opening: Opening, front: number) {
+  const corners=openingCorners(opening),start=corners[front],end=corners[(front+1)%4];
+  const width=Math.hypot(end[0]-start[0],end[1]-start[1]);
+  const length=front%2===0?opening.maxZ-opening.minZ:opening.maxX-opening.minX;
+  const landing=Math.min(.9,Math.max(.62,length*.34));
+  return {start,width,length,landing,run:length-landing,tx:(end[0]-start[0])/width,tz:(end[1]-start[1])/width};
+}
+
 export function buildStairs(profile:BuildingProfile, openings:readonly Opening[], low:number, high:number, collision?:InteriorCollisionBox[]) {
   const steps={positions:[] as number[],indices:[] as number[]};
   const rails={positions:[] as number[],indices:[] as number[],uvs:[] as number[]};
@@ -313,10 +321,7 @@ export function buildStairs(profile:BuildingProfile, openings:readonly Opening[]
   for (const opening of openings) {
     const front=opening.stairFront;
     if (front===undefined || high<=low) continue;
-    const corners=openingCorners(opening), start=corners[front], end=corners[(front+1)%4];
-    const width=Math.hypot(end[0]-start[0],end[1]-start[1]);
-    const length=front%2===0 ? opening.maxZ-opening.minZ : opening.maxX-opening.minX;
-    const tx=(end[0]-start[0])/width, tz=(end[1]-start[1])/width;
+    const {start,width,length,run,tx,tz}=stairDimensions(opening,front);
     function face(target:typeof steps | typeof rails, points:readonly Vertex[]) {
       const first=target.positions.length/3;
       for (const [u,y,d] of points) {
@@ -354,7 +359,7 @@ export function buildStairs(profile:BuildingProfile, openings:readonly Opening[]
     }
     const middle=(low+high)/2, rise=(high-low)/2;
     const count=Math.ceil(rise/.20), stepHeight=rise/count;
-    const landing=Math.min(.9,Math.max(.62,length*.34)), run=length-landing, tread=run/count;
+    const tread=run/count;
     const wallDepth=.10;
     const gap=.06, left=width/2-gap/2, right=width/2+gap/2;
     prism(steps,0,wallDepth,0,length,low,high);
@@ -801,4 +806,21 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
     },
     snapshot:()=>snapshot,
   };
+}
+
+// Walk down the centres of the same two flights that buildStairs lays out.
+export function stairWalkPath(profile: BuildingProfile, opening: Opening, low: number, high: number) {
+  const front=opening.stairFront;
+  if (front===undefined) return [];
+  const {start,width,landing,run,tx,tz}=stairDimensions(opening,front);
+  const [ox,oy,oz]=profile.origin,cos=Math.cos(profile.yaw),sin=Math.sin(profile.yaw);
+  const middle=(low+high)/2;
+  const left=(width/2-.06/2+.10)/2,right=width-left;
+  const point=(u: number,y: number,d: number): readonly [number,number,number]=>{
+    const x=start[0]+tx*u-tz*d,z=start[1]+tz*u+tx*d;
+    return [ox+x*cos+z*sin,oy+y,oz-x*sin+z*cos];
+  };
+  return [point(left,low,-.35),point(left,low,0),point(left,middle,run),
+    point(left,middle,run+landing*.5),point(right,middle,run+landing*.5),
+    point(right,middle,run),point(right,high,0),point(right,high,-.35)];
 }

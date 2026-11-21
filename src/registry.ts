@@ -18,5 +18,6 @@ import { charactersModule } from './modules/characters/index.ts';
 import { playerControlModule } from './modules/player-control/index.ts';
 import { vehiclesModule } from './modules/vehicles/index.tsx';
 import { renderResolutionModule } from './modules/render-resolution/index.tsx';
-export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, buildingInteriorsModule, minimapModule, materialsModule, shadowsModule, charactersModule, playerControlModule, vehiclesModule, atmosphereModule, nightLightingModule, renderResolutionModule];
+import { npcsModule } from './modules/npcs/index.tsx';
+export const modules = [simulationModule, lightingModule, groundModule, beaconModule, geometryModule, objectTemplatesModule, objectRenderingModule, worldGenerationModule, worldStreamingModule, worldModule, buildingInteriorsModule, minimapModule, materialsModule, shadowsModule, charactersModule, playerControlModule, vehiclesModule, npcsModule, atmosphereModule, nightLightingModule, renderResolutionModule];
 export const defaultModules = ['simulation', 'lighting', 'ground', 'beacon'];

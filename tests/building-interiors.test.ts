@@ -44,12 +44,21 @@ test('interior has inward walls, a real window opening with sills, and a down-fa
   assert.ok(indices.slice(ceilingStart).every(v => normals[v*3+1]<-.99 && positions[v*3+1]===7.5));
 });
 
-test('each surviving window has one pane inside the reveal and door openings have none', () => {
-  const {glazing} = buildInterior(source);
+test('each surviving window has a pane and a centered mullion inside the reveal', () => {
+  const {glazing,mullions} = buildInterior(source);
+  assert.equal(mullions.indices.length,2*18);
   assert.equal(glazing.indices.length,2*6);
   for (let i=0;i<glazing.positions.length;i+=3) {
     assert.ok(glazing.positions[i]>0 && glazing.positions[i]<.25);
     assert.ok(glazing.positions[i+1]>4);
+  }
+  for (const [index,center] of [2.5,7.5].entries()) {
+    const paneDepth=glazing.positions[index*12];
+    for (let i=index*36;i<(index+1)*36;i+=3) {
+      assert.ok(mullions.positions[i]>=paneDepth-1e-9 && mullions.positions[i]<.25);
+      assert.ok(mullions.positions[i+1]>4);
+      assert.ok(Math.abs(Math.abs(mullions.positions[i+2]-center)-.06)<1e-9);
+    }
   }
 });
 
@@ -364,6 +373,7 @@ test('floor LOD partitions the walls, windows, landing doors and complete slabs 
     assert.equal(floor.doors.indices.length,12);
     assert.equal(floor.doors.uvs?.length,floor.doors.positions.length/3*2);
     assert.equal(floor.glass.indices.length,index===0?0:12);
+    assert.equal(floor.windowFrames.indices.length,index===0?0:36);
     assert.equal(floor.slab.indices.length,(interior.slabs.floorStarts[index+1]??interior.slabs.indices.length)-interior.slabs.floorStarts[index]);
   }
   assert.equal(floorInRange(floors[0],floors[0].maxY+7,3.5),true);
