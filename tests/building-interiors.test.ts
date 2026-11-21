@@ -6,7 +6,7 @@ import {createCameraObstacleSweep} from '../src/modules/player-control/camera-ob
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
 import {type DoorPose, doorFrameParts, doorLeafParts, ENTRANCE_FLOOR_OFFSET, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
-import {buildInterior, interiorViewHeight, nearInterior} from '../src/modules/building-interiors/shell.ts';
+import {buildInterior, entranceSwingForFrame, interiorViewHeight, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
 import {citySource} from '../src/modules/world/city.ts';
@@ -523,4 +523,11 @@ test('door snapshot interpolation handles opening and closing while rejecting ma
   ]);
   assert.equal(readDoorPoses([opening,opening]),undefined);
   assert.equal(readDoorPoses([{...opening,left:Infinity}]),undefined);
+});
+
+test('door leaves follow the authority pose directly and animate in preview', () => {
+  assert.equal(entranceSwingForFrame(0, 1.3, true, .1), 1.3);
+  assert.equal(entranceSwingForFrame(1.3, 0, true, .1), 0);
+  assert.equal(entranceSwingForFrame(0, 1.3, false, .1), .1);
+  assert.equal(entranceSwingForFrame(.1, 0, false, .1), 0);
 });

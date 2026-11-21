@@ -249,3 +249,9 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     floorBounds:[oy+Math.min(bottom,ground-SLAB_DEPTH),...upperFloors.map(({height})=>oy+height),oy+top],
   };
 }
+
+export function entranceSwingForFrame(current: number, angle: number, authoritative: boolean, maxSwing: number) {
+  if (authoritative) return angle;
+  const change = angle - current;
+  return current + Math.max(-maxSwing, Math.min(maxSwing, change));
+}
