@@ -1,3 +1,4 @@
+import { simulationModule } from '../simulation/index.tsx';
 import {useEffect,useState} from 'react';
 import {DataList,Text} from '@radix-ui/themes';
 import {KeyboardEventTypes} from '@babylonjs/core/Events/keyboardEvents.js';
@@ -21,10 +22,10 @@ function VehicleInfo({read,onFrame}:{read:()=>{snapshot:VehicleSnapshot;state:st
 }
 export const vehiclesModule=defineModule({
   id:'vehicles',title:'Автомобиль',category:'Игра',
-  requires:{characters:charactersModule,control:playerControlModule,world:worldModule,geometry:geometryModule},
+  requires:{simulation:simulationModule,characters:charactersModule,control:playerControlModule,world:worldModule,geometry:geometryModule},
   setup({core,deps,scope}){
     const authority=createVehicleAuthority(deps.world.collision,deps.characters.snapshot().tick);scope.onDispose(authority.dispose);
-    const connection=createVehicleConnection(authority);scope.onDispose(connection.close);
+    const connection=createVehicleConnection(authority, {}, deps.simulation.session);scope.onDispose(connection.close);
     const view=createCarView(core.scene,deps.geometry,scope);
     const keys=new Set<string>();let sequence=0,lastTick=-1,lastInput='';
     let pendingAction:{action:'enter'|'exit'|'door';side:'left'|'right'}|null=null;

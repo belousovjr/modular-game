@@ -1,0 +1,201 @@
+import { interpolateDoorPoses, readDoorPoses, type DoorPose } from '../building-interiors/index.ts';
+import { ONLINE_DAY_MS, onlineDayHour } from '../../simulation/daylight.ts';
+import type { PlaySession } from '../../core/context.ts';
+import type { CharacterSnapshot, MoveCommand, Receipt } from '../characters/index.ts';
+import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record } from '../../simulation/online-protocol.ts';
+
+const KEY = 'modular-game/online';
+const BUFFER_MS = 100;
+type Frame = { tick: number; doors: readonly DoorPose[]; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
+
+function readPlayer(value: unknown, tick: number): value is Omit<CharacterSnapshot, 'ownerId'> {
+  if (!record(value)) return false;
+  return typeof value.id === 'string' && value.tick === tick &&
+    ['x', 'y', 'z', 'yaw', 'verticalSpeed', 'airborneTicks', 'landedTick', 'lastSequence']
+      .every(key => typeof value[key] === 'number' && Number.isFinite(value[key])) &&
+    ['grounded', 'boosted', 'moving', 'running'].every(key => typeof value[key] === 'boolean') &&
+    (value.mode === 'walk' || value.mode === 'fly' || value.mode === 'swim') &&
+    (value.stance === 'standing' || value.stance === 'crouching' || value.stance === 'prone') &&
+    !('entranceDoors' in value || 'vehicleId' in value || 'vehicleRotation' in value || 'vehicleAnimation' in value);
+}
+
+export function createOnlineConnection(play?: PlaySession) {
+  const endpoint = import.meta.env.VITE_GAME_WS_URL ||
+    (import.meta.env.DEV ? 'ws://127.0.0.1:5177/room' : '');
+  let world = '';
+  let socket: WebSocket | undefined;
+  let desired = false;
+  let id = '';
+  let epoch = '';
+  let status = '';
+  function report(message: string) {
+    status = message;
+    play?.status(message, !!id);
+  }
+  let attempts = 0;
+  let sequence = 0;
+  let frames: Frame[] = [];
+  const receipts = new Map<number, (receipt: Receipt) => void>();
+  function clearReceipts() {
+    for (const resolve of receipts.values()) resolve({ accepted: false, reason: 'offline' });
+    receipts.clear();
+  }
+  let reconnect: ReturnType<typeof setTimeout> | undefined;
+  let handshake: ReturnType<typeof setTimeout> | undefined;
+  function stored(): { token?: string } {
+    try {
+      const value = parsePacket(sessionStorage.getItem(KEY + endpoint + '/' + play?.characterId) ?? '');
+      return record(value) ? { token: typeof value.token === 'string' ? value.token : undefined } : {};
+    } catch { return {}; }
+  }
+  function save(token: string | undefined) {
+    try { sessionStorage.setItem(KEY + endpoint + '/' + play?.characterId, JSON.stringify({ token })); } catch { /* Optional reload recovery. */ }
+  }
+  function connect() {
+    if (!desired || !play) return;
+    report(id ? 'Переподключение…' : 'Подключение…');
+    let current: WebSocket;
+    try { current = new WebSocket(endpoint); }
+    catch { desired = false; id = ''; frames = []; save(stored().token); report('Некорректный адрес игрового сервера.'); return; }
+    socket = current;
+    let welcomed = false;
+    handshake = setTimeout(() => current.close(), 5000);
+    current.onopen = async () => {
+      try {
+        const accessToken = await play.accessToken();
+        if (socket === current && current.readyState === WebSocket.OPEN) current.send(JSON.stringify({
+          type: 'join', protocol: PROTOCOL, world, token: stored().token, characterId: play.characterId, accessToken,
+        }));
+      } catch { if (socket === current) current.close(4003); }
+    };
+    current.onmessage = event => {
+      if (socket !== current || typeof event.data !== 'string') return;
+      const packet = parsePacket(event.data);
+      if (welcomed && record(packet) && packet.type === 'receipt' &&
+        typeof packet.sequence === 'number' && typeof packet.accepted === 'boolean' && typeof packet.reason === 'string') {
+        const resolve = receipts.get(packet.sequence);
+        receipts.delete(packet.sequence);
+        resolve?.({ accepted: packet.accepted, reason: packet.reason });
+        return;
+      }
+      if (!record(packet) || typeof packet.tick !== 'number' || !Number.isSafeInteger(packet.tick) || packet.tick < 0 ||
+        typeof packet.dayPhaseMs !== 'number' || !Number.isFinite(packet.dayPhaseMs) || packet.dayPhaseMs < 0 || packet.dayPhaseMs >= ONLINE_DAY_MS ||
+        !Array.isArray(packet.players) || packet.players.length > MAX_ROOM_PLAYERS) { current.close(4002); return; }
+      const tick = packet.tick;
+      const doors = readDoorPoses(packet.doors);
+      if (!doors) { current.close(4002); return; }
+      const players: CharacterSnapshot[] = [];
+      for (const value of packet.players) {
+        if (!readPlayer(value, tick)) { current.close(4002); return; }
+        players.push({ ...value, ownerId: value.id });
+      }
+      if (!welcomed) {
+        if (packet.type !== 'welcome' || packet.protocol !== PROTOCOL || packet.world !== world ||
+          typeof packet.epoch !== 'string' || typeof packet.id !== 'string' || typeof packet.token !== 'string') {
+          current.close(4002); return;
+        }
+        const self = players.find(player => player.id === packet.id);
+        if (!self) { current.close(4002); return; }
+        id = self.id;
+        epoch = packet.epoch;
+        sequence = self.lastSequence;
+        frames = [];
+        welcomed = true;
+        attempts = 0;
+        clearTimeout(handshake);
+        save(packet.token);
+        report('В сети');
+      } else if (packet.type !== 'frame' || tick <= (frames.at(-1)?.tick ?? -1)) return;
+      frames.push({ tick, players, doors, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
+      if (frames.length > 16) frames.shift();
+    };
+    current.onclose = event => {
+      if (socket !== current) return;
+      clearTimeout(handshake);
+      socket = undefined;
+      clearReceipts();
+      if (!id || event.code === 4001 || event.code === 4003 || event.code === 4004 || event.code === 1008 || event.code === 4002) {
+        desired = false;
+        id = '';
+        frames = [];
+        save(event.code === 4001 ? undefined : stored().token);
+        report(event.code === 4001 || event.code === 4004 ? 'Этот персонаж уже в игре.' :
+          event.code === 4003 ? 'Доступ к персонажу отклонён. Войдите снова.' : 'Не удалось подключиться к игровой комнате.');
+        return;
+      }
+      report('Соединение потеряно. Переподключение…');
+      reconnect = setTimeout(connect, Math.min(8000, 500 * 2 ** Math.min(attempts++, 4)) + Math.random() * 200);
+    };
+  }
+  function stop() {
+    desired = false;
+    id = '';
+    frames = [];
+    status = '';
+    clearReceipts();
+    clearTimeout(reconnect);
+    clearTimeout(handshake);
+    const current = socket;
+    socket = undefined;
+    current?.close();
+  }
+
+  function displayFrames() {
+    const newest = frames.at(-1);
+    if (!newest) return undefined;
+    const target = newest.tick + Math.min(BUFFER_MS, performance.now() - newest.arrival) * .06 - BUFFER_MS * .06;
+    const next = frames.find(frame => frame.tick >= target) ?? newest;
+    const previous = frames[frames.indexOf(next) - 1];
+    const alpha = previous ? Math.max(0, (target - previous.tick) / (next.tick - previous.tick)) : 1;
+    return { newest, next, previous, alpha };
+  }
+
+  return {
+    endpoint,
+    toggle(enabled: boolean, map: string) {
+      if (!enabled) stop();
+      else if (!desired && endpoint) { world = map; desired = true; attempts = 0; connect(); }
+      save(stored().token);
+    },
+    dayHour() {
+      const frame = frames.at(-1);
+      return frame && onlineDayHour(frame.dayPhaseMs + Math.min(250, performance.now() - frame.arrival));
+    },
+    doors: () => frames.at(-1)?.doors,
+    latest: () => frames.at(-1)?.players ?? [],
+    self: () => frames.at(-1)?.players.find(player => player.id === id),
+    displayDoors() {
+      const sample = displayFrames();
+      if (!sample) return undefined;
+      const { next, previous, alpha } = sample;
+      if (!previous || alpha === 1 || (!previous.doors.length && !next.doors.length)) return next.doors;
+      return interpolateDoorPoses(previous.doors, next.doors, alpha);
+    },
+    remote() {
+      const sample = displayFrames();
+      if (!sample) return [];
+      const { newest, next, previous, alpha } = sample;
+      return newest.players.filter(player => player.id !== id).map(player => {
+        const to = next.players.find(sample => sample.id === player.id) ?? player;
+        const from = previous?.players.find(sample => sample.id === player.id) ?? to;
+        const blend = (a: number, b: number) => a + (b - a) * alpha;
+        const turn = Math.atan2(Math.sin(to.yaw - from.yaw), Math.cos(to.yaw - from.yaw));
+        return { ...to, x: blend(from.x, to.x), y: blend(from.y, to.y), z: blend(from.z, to.z), yaw: from.yaw + turn * alpha };
+      });
+    },
+    identity: () => id && `${epoch}/${id}`,
+    send(command: MoveCommand): Promise<Receipt> {
+      const current = socket;
+      const latest = frames.at(-1);
+      if (status !== 'В сети' || !id || !latest || current?.readyState !== WebSocket.OPEN || current.bufferedAmount > 4096 || receipts.size >= 32) {
+        return Promise.resolve({ accepted: false, reason: 'offline' });
+      }
+      const sent = ++sequence;
+      return new Promise(resolve => {
+        receipts.set(sent, resolve);
+        current.send(JSON.stringify({ type: 'input', command: { ...command, characterId: id, sequence: sent, tick: latest.tick } }));
+      });
+    },
+    dispose: stop,
+  };
+}

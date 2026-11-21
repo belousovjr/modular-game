@@ -10,7 +10,7 @@ import { materialsModule } from '../materials/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
 import { worldModule, type BuildingDoor, type BuildingProfile } from '../world/index.ts';
 import { worldStreamingModule } from '../world-streaming/index.ts';
-import { ENTRANCE_FLOOR_OFFSET, interiorViewHeight, nearInterior } from './shell.ts';
+import { ENTRANCE_FLOOR_OFFSET, entranceSwingForFrame, interiorViewHeight, nearInterior } from './shell.ts';
 
 import type {LayoutRequest, LayoutResponse} from './interior-worker.ts';
 
@@ -27,8 +27,7 @@ export const buildingInteriorsModule = defineModule({
     const active = new Map<string,{
       profile:BuildingProfile;
       leaves:Leaf[];
-      doorReady:boolean;
-      update:(point:Point | undefined,opacity:number,actor:Point | null,preparingEntrance:boolean)=>boolean;
+      update:(point:Point | undefined,opacity:number,actor:Point | null,openEntrance:boolean)=>boolean;
     }>();
     let worker:Worker|undefined,uploadAvailable=false;
     scope.onDispose(()=>{worker?.terminate();worker=undefined;});
@@ -183,10 +182,11 @@ export const buildingInteriorsModule = defineModule({
         }
         let lastCameraY:number|undefined,lastActorY:number|undefined;
         const wanted:number[]=[];
-        const update = (point: Point | undefined, opacity: number, actor: Point | null, preparingEntrance:boolean) => {
-          const cameraY=interiorViewHeight(profile,point,preparingEntrance);
-          const actorY=interiorViewHeight(profile,actor,preparingEntrance);
-          if(cameraY===undefined&&actorY===undefined){
+        const update = (point: Point | undefined, opacity: number, actor: Point | null, openEntrance:boolean) => {
+          const cameraY=interiorViewHeight(profile,point,openEntrance);
+          const actorY=interiorViewHeight(profile,actor,openEntrance);
+          const entranceY=openEntrance&&cameraY===undefined&&actorY===undefined?door?.y:undefined;
+          if(cameraY===undefined&&actorY===undefined&&entranceY===undefined){
             cancelLayout?.();
             cancelLayout=undefined;
             releaseFloors();
@@ -201,16 +201,17 @@ export const buildingInteriorsModule = defineModule({
             });
             return false;
           }
-          if(cameraY!==lastCameraY||actorY!==lastActorY){
+          const floorY=actorY??entranceY;
+          if(cameraY!==lastCameraY||floorY!==lastActorY){
             wanted.length=0;
             for(const [level,floor] of layout.floors.entries()){
               const visible=(cameraY!==undefined&&floorInRange(floor,cameraY,profile.floorHeight))||
-                (actorY!==undefined&&floorInRange(floor,actorY,profile.floorHeight));
+                (floorY!==undefined&&floorInRange(floor,floorY,profile.floorHeight));
               if(visible)wanted.push(level);
               else if(rendered.has(level)){rendered.get(level)?.owner.dispose();rendered.delete(level);}
             }
             if(uploading&&!wanted.includes(uploading.level)){uploading.owner.dispose();uploading=undefined;}
-            lastCameraY=cameraY;lastActorY=actorY;
+            lastCameraY=cameraY;lastActorY=floorY;
           }
           const next=wanted.find(level=>!rendered.has(level));
           if(next!==undefined&&uploadAvailable){
@@ -233,7 +234,7 @@ export const buildingInteriorsModule = defineModule({
           for(const {slab} of rendered.values())if(slab&&slab.visibility!==opacity)slab.visibility=opacity;
           return wanted.length>0&&wanted.every(level=>rendered.has(level));
         };
-        active.set(id,{profile,leaves,doorReady:false,update});
+        active.set(id,{profile,leaves,update});
         owner.onDispose(() => { active.delete(id); cancelLayout?.(); releaseFloors(); });
       }, scope, deps.world.buildingDetailRange);
     }
@@ -246,12 +247,15 @@ export const buildingInteriorsModule = defineModule({
       const actor=deps.rendering.getDistanceOrigin();
       let selected:BuildingDoor|undefined, distance=Infinity, insideSelected=false, interiorView=false;
       let trafficSelected:BuildingDoor|undefined, trafficDistance=Infinity;
+      let openDoor:BuildingDoor|undefined, openDistance=Infinity;
       for (const [id,{profile}] of active) {
         const inside=!!point&&nearInterior(profile,point,0);
         if (inside && presentedDoors && actor && nearInterior(profile,actor,0)) interiorView=true;
         const door=doors.get(id);
         if(!point||!door)continue;
         const d=Math.min(doorDistance(door,point),actor?doorDistance(door,actor):Infinity);
+        const pose=presentedById.get(id);
+        if (pose && (pose.left>0||pose.right>0) && d<openDistance) { openDoor=door; openDistance=d; }
         if (trafficDoorPose?.(id) && d<trafficDistance) { trafficSelected=door; trafficDistance=d; }
         if (!inside && (insideSelected || d>4.5)) continue;
         if (inside===insideSelected && d>=distance) continue;
@@ -260,7 +264,7 @@ export const buildingInteriorsModule = defineModule({
         insideSelected=inside;
       }
       deps.world.setInteriorView(interiorView);
-      selectDoor(selected??trafficSelected);
+      selectDoor(insideSelected ? selected : openDoor??selected??trafficSelected);
       if (!presentedDoors && selected) {
         const actorDistance=actor?doorDistance(selected,actor):Infinity;
         opening=actorDistance<=(opening?3:2.5);
@@ -277,14 +281,11 @@ export const buildingInteriorsModule = defineModule({
         const traffic=trafficDoorPose?.(id)??0;
         const left=Math.max(traffic,presentedDoors?state?.left??0:visualOpen);
         const right=Math.max(traffic,presentedDoors?state?.right??0:visualOpen);
-        const preparingEntrance=!!selectedDoor&&(left>0||right>0||!!actor&&doorDistance(selectedDoor,actor)<=3.5);
-        const ready=view.update(point,opacity,actor,preparingEntrance);
+        const ready=view.update(point,opacity,actor,left>0||right>0);
         if (ready && id===selected?.id && insideSelected) interiorBuilding=deps.world.getCoarseBuildingKey(id);
-        view.doorReady=(left>0||right>0)&&(ready||view.doorReady||traffic>0);
         for (const {mesh,direction} of view.leaves) {
-          const angle=view.doorReady?direction*ENTRANCE_SWING*(direction>0?left:right):0;
-          const change=angle-mesh.rotation.y;
-          if(change)mesh.rotation.y+=Math.max(-maxSwing,Math.min(maxSwing,change));
+          const angle=direction*ENTRANCE_SWING*(direction>0?left:right);
+          mesh.rotation.y=entranceSwingForFrame(mesh.rotation.y,angle,!!presentedDoors,maxSwing);
         }
       }
       deps.materials.setInteriorBuilding(interiorBuilding);
@@ -309,3 +310,5 @@ export const buildingInteriorsModule = defineModule({
     };
   },
 });
+
+export { createEntranceMotion, interpolateDoorPoses, readDoorPoses } from './headless.ts';

@@ -344,3 +344,13 @@ test('modular avatar swaps compatible parts and one rig while sharing geometry a
     assert.ok(new Set(variants.map(appearance=>appearance.hair)).size>=5);
   }finally{second.dispose();first.dispose();owner.dispose();session.dispose();scene.dispose();engine.dispose();}
 });
+
+test('network gait measures interpolated movement between frames sharing a snapshot tick',async()=>{
+  const {avatarHorizontalSpeed}=await import('../src/modules/characters/assets.ts');
+  for(const metersPerSecond of [1.8,7]){
+    const from={x:0,z:0,tick:120};
+    const to={x:0,z:metersPerSecond/60,tick:120};
+    assert.ok(Math.abs(avatarHorizontalSpeed(to,from,0,1000/60)-metersPerSecond)<1e-9);
+    assert.equal(avatarHorizontalSpeed(to,from,metersPerSecond),metersPerSecond);
+  }
+});

@@ -1,3 +1,4 @@
+import { interpolateDoorPoses, readDoorPoses } from '../src/modules/building-interiors/headless.ts';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
@@ -5,7 +6,7 @@ import {createCameraObstacleSweep} from '../src/modules/player-control/camera-ob
 import {floorInRange, partitionInterior} from '../src/modules/building-interiors/floor-lod.ts';
 import {type DoorPose, doorFrameParts, doorLeafParts, ENTRANCE_FLOOR_OFFSET, floorOpenings, openingCorners, buildStairs, createEntranceMotion, createInteriorCollision, type Point} from '../src/modules/building-interiors/headless.ts';
 import {createCharacterAuthorityFactory} from '../src/modules/characters/headless.ts';
-import {buildInterior, interiorViewHeight, nearInterior} from '../src/modules/building-interiors/shell.ts';
+import {buildInterior, entranceSwingForFrame, interiorViewHeight, nearInterior} from '../src/modules/building-interiors/shell.ts';
 import {getBuildingInteriorSources, type BuildingInteriorSource} from '../src/modules/world/building-profiles.ts';
 import {facadeDoorWindows} from '../src/modules/world/facade-door-windows.ts';
 import {citySource} from '../src/modules/world/city.ts';
@@ -460,20 +461,32 @@ test('character authority enters through a real doorway and is stopped by the wa
   const interior=getBuildingInteriorSources(citySource).find(source=>source.id===door.id);
   assert.ok(interior);
   const factory=createCharacterAuthorityFactory(world,[interior]);
+  const {partitionTerrain}=await import('../server/terrain-tiles.ts');
+  const tiles=partitionTerrain(world,[interior]);
+  const shared=createEntranceMotion([door]);
+  const lean={...world,blockers:[],pedestrianWalls:undefined,pedestrianShells:undefined,
+    triangles:undefined,water:world.water && {...world.water,triangles:[]}};
+  const streamed=createCharacterAuthorityFactory(lean,[],undefined,shared,
+    (x,z)=>tiles.get(`${Math.floor(x/128)}_${Math.floor(z/128)}`) ?? {blockers:[],triangles:[],water:[]});
   const {x,y,z,tx,tz} = door;
   const nx=tz, nz=-tx;
-  function walk(offset: number) {
-    const actor = factory(0,{x:x-nx*1.5+tx*offset,z:z-nz*1.5+tz*offset});
+  function walk(offset: number, create = factory) {
+    if(create===streamed)shared.restore([]);
+    const actor = create(0,{x:x-nx*1.5+tx*offset,z:z-nz*1.5+tz*offset});
     for(let tick=1;tick<=120;tick++){
       if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:nx,z:nz,run:false,jump:false},'local').accepted);
+      create.stepSharedDoors([actor.snapshot()]);
       actor.step(tick);
     }
     const p=actor.snapshot();
     assert.ok(Math.abs(p.y-y)<.3);
     return (p.x-x)*nx+(p.z-z)*nz;
   }
-  assert.ok(walk(0)>1);
-  assert.ok(walk(2)<0);
+  const inside=walk(0), blocked=walk(2);
+  assert.ok(inside>1);
+  assert.ok(blocked<0);
+  assert.equal(walk(0,streamed),inside);
+  assert.equal(walk(2,streamed),blocked);
   assert.ok(world.blockers.some(b=>b.id===door.id));
 });
 
@@ -483,4 +496,38 @@ test('visual floors prepare for the selected entrance or a viewpoint inside the 
   assert.equal(interiorViewHeight(source.profile,outside,true),1);
   assert.equal(interiorViewHeight(source.profile,inside,false),1);
   assert.equal(interiorViewHeight(source.profile,{x:-4.1,y:1,z:5},true),undefined);
+});
+
+test('one door authority considers all nearby actors and resumes its saved leaf positions', () => {
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const actor={x:0,y:0,z:2,radius:.35,height:1.8};
+  const far={...actor,z:10};
+  const entrance=createEntranceMotion([door]);
+  for(let i=0;i<12;i++)entrance.stepActors([far,actor],()=>[]);
+  const saved=entrance.snapshot();
+  assert.equal(saved.length,1);
+  assert.ok(saved[0].left>.49 && saved[0].right>.49);
+  const restored=createEntranceMotion([door]);
+  restored.restore(saved);
+  assert.deepEqual(restored.snapshot(),saved);
+  assert.deepEqual(restored.at(0,0,0),entrance.at(0,0,0));
+  for(let i=0;i<25;i++)restored.stepActors([far],()=>[]);
+  assert.deepEqual(restored.snapshot(),[]);
+});
+
+test('door snapshot interpolation handles opening and closing while rejecting malformed poses', () => {
+  const opening={id:'opening',left:1,right:.5};
+  const closing={id:'closing',left:.5,right:1};
+  assert.deepEqual(interpolateDoorPoses([closing],[opening],.5),[
+    {id:'opening',left:.5,right:.25},{id:'closing',left:.25,right:.5},
+  ]);
+  assert.equal(readDoorPoses([opening,opening]),undefined);
+  assert.equal(readDoorPoses([{...opening,left:Infinity}]),undefined);
+});
+
+test('door leaves follow the authority pose directly and animate in preview', () => {
+  assert.equal(entranceSwingForFrame(0, 1.3, true, .1), 1.3);
+  assert.equal(entranceSwingForFrame(1.3, 0, true, .1), 0);
+  assert.equal(entranceSwingForFrame(0, 1.3, false, .1), .1);
+  assert.equal(entranceSwingForFrame(.1, 0, false, .1), 0);
 });

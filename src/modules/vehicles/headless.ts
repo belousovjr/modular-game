@@ -1,6 +1,7 @@
+import { createLocalSession, type DeliveryOptions, type Receipt } from '../../simulation/session.ts';
 import type {TrafficSample, TrafficContact, TrafficPoint} from '../../simulation/traffic.ts';
 import {World,Body,Box,ConvexPolyhedron,Material,ContactMaterial,Vec3,Heightfield,RaycastVehicle,SAPBroadphase} from 'cannon-es';
-import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame,type Receipt,type DeliveryOptions} from '../characters/headless.ts';
+import {createCharacterAuthorityFactory,type CharacterSnapshot,type VehicleCharacterFrame} from '../characters/headless.ts';
 import pathfinding from 'javascript-astar';
 import type {CollisionBox,CollisionWorld} from '../world/headless.ts';
 
@@ -307,19 +308,27 @@ export function createVehicleAuthority(collision:CollisionWorld,startTick=0){
   };
 }
 
-export function createVehicleConnection(authority:ReturnType<typeof createVehicleAuthority>,options:DeliveryOptions={}){
-  const latency=options.latencyTicks??0,jitter=options.jitterTicks??0,drop=options.dropEvery??0;let seed=options.seed??2026,count=0,closed=false;
-  if(![latency,jitter,drop,seed].every(Number.isSafeInteger)||latency<0||latency>120||jitter<0||jitter>120||drop<0||seed<0||seed>0xffffffff)throw new Error('Invalid vehicle delivery');
-  const queue:{due:number;command:VehicleCommand;resolve:(r:Receipt)=>void}[]=[];
-  return {send(command:VehicleCommand):Promise<Receipt>{
-    if(closed)return Promise.resolve({accepted:false,reason:'closed'});if(queue.length>=64)return Promise.resolve({accepted:false,reason:'queue'});
-    count++;if(drop&&count%drop===0)return Promise.resolve({accepted:false,reason:'dropped'});seed=(Math.imul(seed,1664525)+1013904223)>>>0;
-    const due=authority.snapshot().tick+1+latency+Math.floor(seed/0x100000000*(jitter*2+1))-jitter;
-    return new Promise(resolve=>queue.push({due,command:{...command},resolve}));
-  },step(tick:number,character:CharacterSnapshot,traffic?:readonly TrafficSample[]){authority.observeCharacter(character);queue.sort((a,b)=>a.due-b.due);while(queue.length&&queue[0].due<=tick){const packet=queue.shift();if(packet)packet.resolve(authority.receive(packet.command,'local'));}return authority.step(tick,character,traffic);},snapshot:authority.snapshot,resetOccupancy(){
-    authority.resetOccupancy();
-    for(const packet of queue.splice(0))packet.resolve({accepted:false,reason:'reset'});
-  },close(){closed=true;for(const p of queue.splice(0))p.resolve({accepted:false,reason:'closed'});}};
+export function createVehicleConnection(
+  authority: ReturnType<typeof createVehicleAuthority>, options: DeliveryOptions = {}, session = createLocalSession(),
+) {
+  const channel = session.connect<VehicleCommand, VehicleSnapshot>(
+    authority.snapshot().id, authority.snapshot, command => authority.receive(command, 'local'), options,
+  );
+  return {
+    send: channel.send, snapshot: channel.snapshot, close: channel.close,
+    step(tick: number, character: CharacterSnapshot, traffic?: readonly TrafficSample[]) {
+      authority.observeCharacter(character);
+      channel.deliver(tick);
+      const frame = authority.step(tick, character, traffic);
+      channel.publish();
+      return frame;
+    },
+    resetOccupancy() {
+      authority.resetOccupancy();
+      channel.clear('reset');
+      channel.publish();
+    },
+  };
 }
 
 function navigationBlocked(o:CollisionBox,x:number,z:number,radius:number){

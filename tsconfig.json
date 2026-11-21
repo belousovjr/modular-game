@@ -23,6 +23,11 @@
   },
   "include": [
     "src",
-    "tests"
+    "tests",
+    "api",
+    "neon.ts",
+    "vite.config.ts",
+    "server",
+    "scripts/prepare-room-map.ts"
   ]
 }

@@ -10,11 +10,11 @@ import { createTestRunner, type TestState } from './test-runner.ts';
 import type { RunnableTest } from './modules.ts';
 import type { Panels } from './panels.ts';
 import { startModules, type ModuleDefinition } from './modules.ts';
-import type { CoreContext } from './context.ts';
-export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: number) => void, panels: Panels, reportTest: (state: TestState) => void) {
+import type { CoreContext, PlaySession } from './context.ts';
+export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: number) => void, panels: Panels, reportTest: (state: TestState) => void, play?: PlaySession) {
   const engine = new Engine(canvas, true);
   let session: { scene: Scene; camera:SceneCamera; onResetView:Observable<void>; onFrame: Observable<number>; tests: readonly RunnableTest[]; dispose(): void } | undefined;
-  let cameraSettings = readCamera();
+  let cameraSettings = play ? null : readCamera();
   let savedCamera = JSON.stringify(cameraSettings);
   let lastCameraSave = 0;
   const runner = createTestRunner(reportTest, () => {
@@ -34,6 +34,7 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
     return () => { testCamera.dispose(); camera.getScene().activeCamera = camera; camera.attachControl(canvas, true); };
   });
   function saveCamera() {
+    if (play) return;
     const camera = session?.scene.activeCamera;
     if (!(camera instanceof SceneCamera) || runner.getState().running) return;
     cameraSettings = {
@@ -83,7 +84,7 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
       resetFlyCamera(session.camera);
       cameraSettings=DEFAULT_CAMERA_SETTINGS;
       savedCamera=JSON.stringify(cameraSettings);
-      writeCamera(cameraSettings);
+      if (!play) writeCamera(cameraSettings);
     },
     restart(registry: readonly ModuleDefinition<CoreContext>[], selected: readonly string[]) {
       if (runner.getState().running) throw new Error('Сначала остановите тест');
@@ -103,7 +104,7 @@ export function createViewport(canvas: HTMLCanvasElement, reportFps: (fps: numbe
         camera.attachControl(canvas, true);
         const onFrame = new Observable<number>();
         const onResetView = new Observable<void>();
-        const running = startModules(registry, selected, { scene, onFrame, onResetView, panels });
+        const running = startModules(registry, selected, { scene, onFrame, onResetView, panels, play });
         session = { scene, camera, onFrame, onResetView, tests: running.tests,
           dispose() { try { running.dispose(); } finally { onFrame.clear(); onResetView.clear(); scene.dispose(); } },
         };

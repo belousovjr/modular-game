@@ -1,3 +1,4 @@
+import { Play as PlayPage } from './play.tsx';
 import '@radix-ui/themes/styles.css';
 import './style.css';
 import { ChevronDown, ChevronRight, Info, Layers, MoreHorizontal, Play, RotateCcw } from 'lucide-react';
@@ -284,5 +285,5 @@ function App() {
 }
 
 const root = createRoot(document.querySelector('#app')!);
-root.render(<App />);
+root.render(/^\/play\/?$/.test(location.pathname) ? <PlayPage /> : <App />);
 import.meta.hot?.dispose(() => root.unmount());

@@ -1,3 +1,4 @@
+import { record } from '../../simulation/online-protocol.ts';
 import type { BuildingProfile, BuildingInteriorSource, CollisionBox, BuildingDoor } from '../world/headless.ts';
 export {DOOR_FRAME_TRIM} from '../world/headless.ts';
 
@@ -440,7 +441,7 @@ function candidatesIn<T>(cells:ReadonlyMap<string,T[]>,cell:number,bounds:Rectan
       for(const candidate of cells.get(`${x}/${z}`)??[])result.add(candidate);
   return result;
 }
-export type DoorPose = {readonly id:string;readonly left:number;readonly right:number};
+
 
 function rectangleBox(id:string,outline:number[][],minY:number,maxY:number):CollisionBox {
   return {id,outline,minY,maxY,minX:Math.min(...outline.map(p=>p[0])),maxX:Math.max(...outline.map(p=>p[0])),
@@ -726,6 +727,34 @@ function boxesOverlap(a:CollisionBox,b:CollisionBox) {
   return true;
 }
 
+export type DoorPose = { readonly id: string; readonly left: number; readonly right: number };
+
+export function readDoorPoses(value: unknown): readonly DoorPose[] | undefined {
+  if (!Array.isArray(value) || value.length > 10_000) return undefined;
+  const doors: DoorPose[] = [];
+  const ids = new Set<string>();
+  for (const pose of value) {
+    if (!record(pose) || typeof pose.id !== 'string' || !pose.id || ids.has(pose.id) ||
+        typeof pose.left !== 'number' || !Number.isFinite(pose.left) || pose.left < 0 || pose.left > 1 ||
+        typeof pose.right !== 'number' || !Number.isFinite(pose.right) || pose.right < 0 || pose.right > 1) return undefined;
+    ids.add(pose.id);
+    doors.push(Object.freeze({ id: pose.id, left: pose.left, right: pose.right }));
+  }
+  return Object.freeze(doors);
+}
+
+export function interpolateDoorPoses(before: readonly DoorPose[], after: readonly DoorPose[], alpha: number) {
+  const previous = new Map(before.map(pose => [pose.id, pose]));
+  const result = after.map(pose => {
+    const from = previous.get(pose.id);
+    previous.delete(pose.id);
+    const left = from?.left ?? 0, right = from?.right ?? 0;
+    return { id: pose.id, left: left + (pose.left - left) * alpha, right: right + (pose.right - right) * alpha };
+  });
+  for (const pose of previous.values()) result.push({ id: pose.id, left: pose.left * (1 - alpha), right: pose.right * (1 - alpha) });
+  return result;
+}
+
 export function createEntranceMotion(doors:readonly BuildingDoor[]) {
   const cells=new Map<string,BuildingDoor[]>();
   const cell=8;
@@ -750,15 +779,19 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
     return result;
   }
   let snapshot:readonly DoorPose[]=Object.freeze([]);
-  function step(actor:Position|null,radius:number,height:number,blockers:(door:BuildingDoor)=>readonly CollisionBox[]) {
+  function publish() {
+    snapshot=Object.freeze([...states].filter(([,state])=>state.left||state.right).map(([door,state])=>
+      Object.freeze({id:door.id,left:state.left,right:state.right})));
+  }
+  function stepActors(actors:readonly (Position & {radius:number;height:number})[], blockers:(door:BuildingDoor)=>readonly CollisionBox[]) {
     const candidates=new Set(states.keys());
-    const body=actor&&{id:'actor',minX:actor.x-radius,maxX:actor.x+radius,minZ:actor.z-radius,maxZ:actor.z+radius,
-      minY:actor.y,maxY:actor.y+height};
-    if(actor)for(const door of near(actor.x,actor.z))candidates.add(door);
+    const bodies=actors.map(actor=>({id:'actor',minX:actor.x-actor.radius,maxX:actor.x+actor.radius,
+      minZ:actor.z-actor.radius,maxZ:actor.z+actor.radius,minY:actor.y,maxY:actor.y+actor.height}));
+    for(const actor of actors)for(const door of near(actor.x,actor.z))candidates.add(door);
     let changed=false;
     for(const door of candidates){
       const state=states.get(door)??{left:0,right:0,opening:false,boxes:[]};
-      state.opening=actor!==null&&Math.hypot(actor.x-door.x,actor.z-door.z,Math.max(door.y-actor.y,0,actor.y-door.y-door.height))<=(state.opening?3:2.5);
+      state.opening=actors.some(actor=>Math.hypot(actor.x-door.x,actor.z-door.z,Math.max(door.y-actor.y,0,actor.y-door.y-door.height))<=(state.opening?3:2.5));
       if(!state.opening&&!state.left&&!state.right){states.delete(door);continue;}
       if(state.opening&&state.left===1&&state.right===1)continue;
       let adjusted=false;
@@ -767,7 +800,7 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
         const from=state[key],to=state.opening?Math.min(1,from+1/24):Math.max(0,from-1/24);
         if(to===from)continue;
         const blocked=[(from+to)/2,to].some(angle=>leafBoxes(door,sign,angle).some(leaf=>
-          (body!==null&&boxesOverlap(leaf,body))||staticBoxes.some(box=>boxesOverlap(leaf,box))));
+          bodies.some(body=>boxesOverlap(leaf,body))||staticBoxes.some(box=>boxesOverlap(leaf,box))));
         if(!blocked){state[key]=to;adjusted=true;}
       }
       changed ||= adjusted;
@@ -775,11 +808,24 @@ export function createEntranceMotion(doors:readonly BuildingDoor[]) {
       if(adjusted||!state.boxes.length)state.boxes=[...leafBoxes(door,-1,state.left),...leafBoxes(door,1,state.right)];
       states.set(door,state);
     }
-    if(changed)snapshot=Object.freeze([...states].filter(([,s])=>s.left||s.right).map(([door,s])=>
-      Object.freeze({id:door.id,left:s.left,right:s.right})));
+    if(changed)publish();
   }
   return {
-    step,
+    step(actor:Position|null,radius:number,height:number,blockers:(door:BuildingDoor)=>readonly CollisionBox[]) {
+      stepActors(actor?[{...actor,radius,height}]:[],blockers);
+    },
+    stepActors,
+    restore(poses:readonly DoorPose[]) {
+      states.clear();
+      const byId=new Map(poses.map(pose=>[pose.id,pose]));
+      for(const door of doors){
+        const pose=byId.get(door.id);
+        if(!pose||(!pose.left&&!pose.right))continue;
+        states.set(door,{left:pose.left,right:pose.right,opening:false,
+          boxes:[...leafBoxes(door,-1,pose.left),...leafBoxes(door,1,pose.right)]});
+      }
+      publish();
+    },
     viewAlong(bounds:InteriorQueryBounds,poses:ReadonlyMap<string,DoorPose>){
       const result:CollisionBox[]=[];
       for(const door of candidatesIn(cells,cell,bounds)){

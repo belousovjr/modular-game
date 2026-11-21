@@ -15,6 +15,7 @@ export const playerControlModule = defineModule({
   id: 'player-control', title: 'Управление персонажем', category: 'Игра',
   requires: { characters: charactersModule, interiors: buildingInteriorsModule, rendering: objectRenderingModule, world: worldModule },
   setup({ core, deps, scope }) {
+    deps.characters.enableOnline(scope);
     scope.onDispose(core.panels.register('player-control','Управление',createElement(ControlPanel)));
     const previous = core.scene.activeCamera;
     const canvas = core.scene.getEngine().getRenderingCanvas();
@@ -44,6 +45,7 @@ export const playerControlModule = defineModule({
     let desiredRadius = 6, appliedRadius = 6, cameraHeight = 1.2;
     const keys = new Set<string>();
     let jump = false, leftHeld = false, rightHeld = false, freeLookAlpha = camera.alpha;
+    let characterId = '';
     let sequence = 0, lastTick = -6, lastInput = '', wasActive = false;
     let flightIntent:boolean|null=null;
     let stanceIntent:CharacterStance|undefined;
@@ -118,6 +120,11 @@ export const playerControlModule = defineModule({
     }, scope);
     const update = () => {
       const s = deps.characters.snapshot();
+      if (s.id !== characterId || s.tick < lastTick) {
+        characterId = s.id;
+        lastTick = s.tick - 6;
+        lastInput = '';
+      }
       const active = core.scene.activeCamera === camera && !document.hidden && document.activeElement === canvas;
       if (!active) clear();
       if(s.vehicleId){jump=false;flightIntent=null;stanceIntent=undefined;}
@@ -152,7 +159,8 @@ export const playerControlModule = defineModule({
       const targetHeight=s.mode==='swim'?.95:s.stance==='prone'?.48:s.stance==='crouching'?.86:1.2;
       const deltaMs=core.scene.getEngine().getDeltaTime();
       cameraHeight+=(targetHeight-cameraHeight)*(1-Math.exp(-deltaMs/60));
-      const target=new Vector3(s.x,deps.characters.displayHeight()+cameraHeight,s.z);
+      const {x:displayX,z:displayZ}=deps.characters.displayPosition();
+      const target=new Vector3(displayX,deps.characters.displayHeight()+cameraHeight,displayZ);
       camera.setTarget(target,false,false,true);
       const horizontal=desiredRadius*Math.sin(camera.beta);
       arm.set(horizontal*Math.cos(camera.alpha),desiredRadius*Math.cos(camera.beta),horizontal*Math.sin(camera.alpha));
