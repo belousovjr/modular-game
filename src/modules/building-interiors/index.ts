@@ -160,6 +160,8 @@ export const buildingInteriorsModule = defineModule({
           if(walls)yield walls;
           const rails=stairs && mesh('/rails','interior-door-frame',stairs.rails);
           if(rails)yield rails;
+          const frames=mesh('/window-frames','interior-door-frame',floor.windowFrames);
+          if(frames)yield frames;
           const slab=mesh('/slab','interior-concrete',floor.slab);
           if(slab){
             slab.visibility=opacity;

@@ -3,6 +3,7 @@ import type { BuildingProfile, BuildingInteriorSource } from '../world/index.ts'
 import { DOOR_FRAME_TRIM, cutFloor, interiorLayout, SLAB_DEPTH, SHAFT_WALL_DEPTH, openingCorners, type Point } from './headless.ts';
 export { ENTRANCE_FLOOR_OFFSET } from './headless.ts';
 const WALL_DEPTH = .25;
+const MULLION_HALF_WIDTH = .012; // Fraction of the exterior facade cell.
 
 function mix(a: readonly number[], b: readonly number[], t: number): Point {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -36,7 +37,9 @@ export function interiorViewHeight(profile: BuildingProfile, point: {x:number; y
 
 export function buildInterior({profile, facade}: BuildingInteriorSource) {
   const positions: number[] = [], indices: number[] = [];
+  const walls = {positions,indices};
   const glazing = {positions:[] as number[],indices:[] as number[]};
+  const mullions = {positions:[] as number[],indices:[] as number[]};
   const [ox, oy, oz] = profile.origin;
   const cos = Math.cos(profile.yaw), sin = Math.sin(profile.yaw);
   const bottom = Math.min(0, profile.entrance.base), top = profile.height - .5;
@@ -66,10 +69,11 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
     target.push(ox + point[0]*cos + point[1]*sin, oy + y, oz - point[0]*sin + point[1]*cos);
   }
   function quad(a: readonly number[], ay: number, b: readonly number[], by: number,
-    c: readonly number[], cy: number, d: readonly number[], dy: number) {
-    const first = positions.length / 3;
-    vertex(a, ay); vertex(b, by); vertex(c, cy); vertex(d, dy);
-    indices.push(first, first+1, first+2, first, first+2, first+3);
+    c: readonly number[], cy: number, d: readonly number[], dy: number, target = walls) {
+    const first = target.positions.length / 3;
+    vertex(a, ay, target.positions); vertex(b, by, target.positions);
+    vertex(c, cy, target.positions); vertex(d, dy, target.positions);
+    target.indices.push(first, first+1, first+2, first, first+2, first+3);
   }
 
   for (const [wall, normal] of wallNormal) {
@@ -125,6 +129,17 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
         quad(il, high, ol, high, or, high, ir, high);
         quad(il, low, ol, low, ol, high, il, high);
         quad(ir, low, ir, high, or, high, or, low);
+        const center=(column+.5)/wall.windowColumns;
+        const barLeft=Math.max(outerLeft,center-MULLION_HALF_WIDTH/wall.windowColumns);
+        const barRight=Math.min(outerRight,center+MULLION_HALF_WIDTH/wall.windowColumns);
+        if (barRight>barLeft) {
+          const across=(t:number,depth:number)=>mix(mix(il,ir,t),mix(ol,or,t),depth);
+          const a=(barLeft-outerLeft)/(outerRight-outerLeft), b=(barRight-outerLeft)/(outerRight-outerLeft);
+          const fl=across(a,.40), fr=across(b,.40), bl=across(a,.55), br=across(b,.55);
+          quad(fl,low,fr,low,fr,high,fl,high,mullions);
+          quad(fl,low,fl,high,bl,high,bl,low,mullions);
+          quad(fr,low,br,low,br,high,fr,high,mullions);
+        }
         const first=glazing.positions.length/3;
         const gl=mix(il,ol,.55), gr=mix(ir,or,.55);
         vertex(gl,low,glazing.positions); vertex(gr,low,glazing.positions);
@@ -230,7 +245,7 @@ export function buildInterior({profile, facade}: BuildingInteriorSource) {
 
   const ceilingStart = indices.length;
   cap({positions,indices}, top, false);
-  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors, glazing,
+  return {positions, indices, ceilingStart, slabs, openings, elevatorDoors, glazing, mullions,
     floorBounds:[oy+Math.min(bottom,ground-SLAB_DEPTH),...upperFloors.map(({height})=>oy+height),oy+top],
   };
 }
