@@ -47,7 +47,7 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
   return {
     read: snapshot,
     api: {
-      snapshot: authority.snapshot, session,
+      snapshot: authority.snapshot, session, onlineDayHour: online.dayHour,
       worldSnapshot: () => ({ clock: snapshot(), entities: online.self()
         ? Object.fromEntries(online.latest().map(actor => [actor.id, actor]))
         : session.snapshot() }),

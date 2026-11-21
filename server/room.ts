@@ -1,3 +1,4 @@
+import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -14,6 +15,8 @@ export function startRoom(
   const makeActor = createCharacterAuthorityFactory(collision);
   const clock = createLocalAuthority();
   const epoch = randomUUID();
+  const dayStart = onlineDayPhase(Date.now());
+  const startedAt = performance.now();
   type Player = { id: string; token: string; actor: ReturnType<typeof makeActor>; socket?: WebSocket; expires: number };
   const players = new Map<string, Player>();
   const connections = new Map<WebSocket, { alive: boolean }>();
@@ -32,7 +35,7 @@ export function startRoom(
   }
 
   function frame() {
-    return { tick: clock.snapshot().tick, players: [...players.values()].map(player => {
+    return { tick: clock.snapshot().tick, dayPhaseMs: onlineDayPhase(dayStart + performance.now() - startedAt), players: [...players.values()].map(player => {
       const { ownerId: _owner, ...state } = player.actor.snapshot();
       return state;
     }) };

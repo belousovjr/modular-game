@@ -5,11 +5,12 @@ import { WebSocket } from 'ws';
 import { citySource } from '../src/modules/world/city.ts';
 import { cityCollision } from '../src/modules/world/headless.ts';
 import { generateCity } from '../src/modules/world-generation/headless.ts';
+import { ONLINE_DAY_MS, onlineDayHour, onlineDayPhase } from '../src/simulation/daylight.ts';
 import { PROTOCOL } from '../src/simulation/online-protocol.ts';
 import { startRoom } from './room.ts';
 
 type Actor = { id: string; x: number; lastSequence: number; moving: boolean };
-type Packet = { type: string; id: string; token: string; epoch: string; tick: number; sequence: number;
+type Packet = { type: string; id: string; token: string; epoch: string; tick: number; dayPhaseMs: number; sequence: number;
   accepted: boolean; reason: string; players: Actor[] };
 
 test('two WebSockets share the city, reject invalid input and resume a player', { timeout: 15_000 }, async () => {
@@ -56,6 +57,10 @@ test('two WebSockets share the city, reject invalid input and resume a player', 
     await rejected('one', 'test-one', 4004);
     assert.notEqual(a.welcome.id, b.welcome.id);
     assert.equal(a.welcome.epoch, b.welcome.epoch);
+    assert.ok(onlineDayPhase(b.welcome.dayPhaseMs - a.welcome.dayPhaseMs + ONLINE_DAY_MS) < 3000);
+    const shared = await a.next(packet => packet.type === 'frame' && packet.players.length === 2);
+    const sameTick = await b.next(packet => packet.type === 'frame' && packet.tick === shared.tick);
+    assert.equal(sameTick.dayPhaseMs, shared.dayPhaseMs);
     const start = b.welcome.players.find(actor => actor.id === a.welcome.id)!;
     const before = await a.next(packet => packet.type === 'frame' && packet.players.length === 2 && packet.tick >= 31);
     const command = { type: 'move', characterId: a.welcome.id, sequence: 1, tick: before.tick, x: 1, z: 0, run: false, jump: false };
@@ -92,4 +97,11 @@ test('two WebSockets share the city, reject invalid input and resume a player', 
     assert.equal(resumed.welcome.epoch, a.welcome.epoch);
     assert.equal(resumed.welcome.players.find(actor => actor.id === start.id)?.lastSequence, 5);
   } finally { await room.close(); }
+});
+
+
+test('online daylight advances one game hour every five minutes and wraps at midnight', () => {
+  assert.equal(onlineDayHour(5 * 60 * 1000), 1);
+  assert.equal(onlineDayHour(60 * 60 * 1000), 12);
+  assert.equal(onlineDayHour(ONLINE_DAY_MS + 5 * 60 * 1000), 1);
 });

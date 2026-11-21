@@ -1,5 +1,5 @@
 // shortcut: bump the protocol when the collision data or movement contract changes, automate the fingerprint before mixed-version deployment.
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 export const SNAPSHOT_TICKS = 3;
 export const MAX_ROOM_PLAYERS = 16;
 

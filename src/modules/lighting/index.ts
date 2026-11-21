@@ -5,12 +5,26 @@ import type { Scope } from '../../core/modules.ts';
 import { readLocalCycle, saveLocalCycle } from './local-cycle.ts';
 import { createLighting } from './light.ts';
 import { LightingPanel } from './panel.tsx';
+import { simulationModule } from '../simulation/index.tsx';
 
 export type { LightingSettings } from './light.ts';
 export const lightingModule = defineModule({
-  id: 'lighting', category: 'Окружение', title: 'Базовое освещение', requires: {},
-  setup({ core, scope }) {
-    const api = createLighting(core.scene, scope, core.onFrame);
+  id: 'lighting', category: 'Окружение', title: 'Базовое освещение', requires: { simulation: simulationModule },
+  setup({ core, deps, scope }) {
+    const api = createLighting(core.scene, scope, core.play ? undefined : core.onFrame);
+    if (core.play) {
+      let elapsed = 250;
+      const clock = core.onFrame.add(delta => {
+        elapsed += delta;
+        if (elapsed < 250) return;
+        const hour = deps.simulation.onlineDayHour();
+        if (hour === undefined || hour === api.getSettings().hour) return;
+        elapsed = 0;
+        api.setSettings({ hour });
+      });
+      scope.onDispose(() => core.onFrame.remove(clock));
+      return { ...api, startDefaultCycle() {}, previewCycle(_owner: Scope) {} };
+    }
     const restored=readLocalCycle();
     if (restored) {
       api.setSettings(restored);

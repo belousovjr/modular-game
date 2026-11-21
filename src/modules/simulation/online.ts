@@ -1,10 +1,11 @@
+import { ONLINE_DAY_MS, onlineDayHour } from '../../simulation/daylight.ts';
 import type { PlaySession } from '../../core/context.ts';
 import type { CharacterSnapshot, MoveCommand, Receipt } from '../characters/index.ts';
 import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record } from '../../simulation/online-protocol.ts';
 
 const KEY = 'modular-game/online';
 const BUFFER_MS = 100;
-type Frame = { tick: number; players: CharacterSnapshot[]; arrival: number };
+type Frame = { tick: number; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
 
 function readPlayer(value: unknown, tick: number): value is Omit<CharacterSnapshot, 'ownerId'> {
   if (!record(value)) return false;
@@ -77,6 +78,7 @@ export function createOnlineConnection(play?: PlaySession) {
         return;
       }
       if (!record(packet) || typeof packet.tick !== 'number' || !Number.isSafeInteger(packet.tick) || packet.tick < 0 ||
+        typeof packet.dayPhaseMs !== 'number' || !Number.isFinite(packet.dayPhaseMs) || packet.dayPhaseMs < 0 || packet.dayPhaseMs >= ONLINE_DAY_MS ||
         !Array.isArray(packet.players) || packet.players.length > MAX_ROOM_PLAYERS) { current.close(4002); return; }
       const tick = packet.tick;
       const players: CharacterSnapshot[] = [];
@@ -101,7 +103,7 @@ export function createOnlineConnection(play?: PlaySession) {
         save(packet.token);
         report('В сети');
       } else if (packet.type !== 'frame' || tick <= (frames.at(-1)?.tick ?? -1)) return;
-      frames.push({ tick, players, arrival: performance.now() });
+      frames.push({ tick, players, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
       if (frames.length > 16) frames.shift();
     };
     current.onclose = event => {
@@ -141,6 +143,10 @@ export function createOnlineConnection(play?: PlaySession) {
       if (!enabled) stop();
       else if (!desired && endpoint) { world = map; desired = true; attempts = 0; connect(); }
       save(stored().token);
+    },
+    dayHour() {
+      const frame = frames.at(-1);
+      return frame && onlineDayHour(frame.dayPhaseMs + Math.min(250, performance.now() - frame.arrival));
     },
     latest: () => frames.at(-1)?.players ?? [],
     self: () => frames.at(-1)?.players.find(player => player.id === id),
