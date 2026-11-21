@@ -1,0 +1,23 @@
+{
+  "bodies": {
+    "male": {
+      "minY": -0.009509669616818428,
+      "maxY": 1.8100767135620117,
+      "hair": [
+        "Buzzed",
+        "SimpleParted"
+      ],
+      "beard": true
+    },
+    "female": {
+      "minY": -0.008407175540924072,
+      "maxY": 1.7666438817977905,
+      "hair": [
+        "BuzzedFemale",
+        "Buns",
+        "Long"
+      ],
+      "beard": false
+    }
+  }
+}

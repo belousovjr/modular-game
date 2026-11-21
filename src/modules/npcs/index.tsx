@@ -6,7 +6,7 @@ import { defineModule, type CoreContext } from '../../core/context.ts';
 import { createScope } from '../../core/scope.ts';
 import { SceneCamera } from '../../core/fly-camera.ts';
 import { geometryModule } from '../geometry/index.ts';
-import { charactersModule } from '../characters/index.ts';
+import { charactersModule, npcAppearance } from '../characters/index.ts';
 import { worldModule } from '../world/index.ts';
 import { objectRenderingModule } from '../object-rendering/index.ts';
 import { simulationModule } from '../simulation/index.tsx';
@@ -21,7 +21,7 @@ import { npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
 type Pose = NonNullable<ReturnType<ReturnType<typeof createTrafficActors>['pose']>>;
 type Actor = TrafficActor;
 type Candidate = Actor & {d:number;car:boolean;cell:string;existing:boolean;onScreen:boolean};
-type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number;
+type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number; body?:ReturnType<typeof npcAppearance>['body'];
   draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
 
 type Diagnostics = { population: number; subscribed: number; people: number; cars: number; ready: boolean; error: string };
@@ -161,7 +161,9 @@ export const npcsModule=defineModule({
         const car=pose.mode==='drive';
         const needsView=!view;
         if (!view && (car?activeCars<CAR_LIMIT:people<PEOPLE_LIMIT)) {
-          view=car?undefined:reusable.pop();
+          const appearance=car?undefined:npcAppearance(id);
+          const match=appearance?reusable.findIndex(previous=>previous.body===appearance.body):-1;
+          if(match>=0)view=reusable.splice(match,1)[0];
           if (!view && created<2) {
             const owner=createScope();
             try {
@@ -169,9 +171,14 @@ export const npcsModule=defineModule({
                 cars.load();
                 const assets=cars.create(owner,id);
                 if (assets) view={owner,actor,car,progress:0,draw:assets.draw,fade:assets.setFade};
-              } else {
-                const draw=deps.characters.createView(owner);
-                view={owner,actor,car,progress:0,fade:draw.setFade,draw(p,tick,id) {
+              } else if(appearance) {
+                const draw=deps.characters.createView(owner,appearance);
+                let appearanceId=id;
+                view={owner,actor,car,body:appearance.body,progress:0,fade:draw.setFade,draw(p,tick,id) {
+                  if(id!==appearanceId){
+                    appearanceId=id;
+                    draw.setAppearance(npcAppearance(id));
+                  }
                   draw({tick,id,ownerId:'authority',x:p.point[0],y:p.point[1],z:p.point[2],yaw:p.yaw,
                     grounded:true,verticalSpeed:0,airborneTicks:0,landedTick:0,mode:'walk',stance:'standing',
                     boosted:false,moving:p.mode!=='idle',running:p.mode==='run',lastSequence:0},p.point[1]);

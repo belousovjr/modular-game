@@ -4,6 +4,8 @@ import type { Scope } from '../../core/modules.ts';
 import { createElement } from 'react';
 import { createAvatar, createCharacterAssets } from './assets.ts';
 import { CharacterPanel } from './panel.tsx';
+import {readAppearance,saveAppearance,type Appearance} from './appearance.ts';
+export {npcAppearance} from './appearance.ts';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
@@ -48,12 +50,18 @@ export const charactersModule = defineModule({
       connection.step(tick);
     }, scope);
     const assets=createCharacterAssets(core.scene,scope);
-    scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{assets})));
-    const createView=(owner: Scope)=>{
+    const createView=(owner:Scope,appearance?:Appearance)=>{
       if(stopped)throw new Error('Персонаж остановлен');
-      return createAvatar(core.scene,deps.geometry,assets,owner);
+      return createAvatar(core.scene,deps.geometry,assets,owner,appearance);
     };
-    const render = createView(scope);
+    const appearance=readAppearance();
+    const render=createView(scope,appearance);
+    scope.onDispose(core.panels.register('characters','Персонаж',createElement(CharacterPanel,{
+      assets,initial:appearance,onChange(next){
+        render.setAppearance(next);
+        saveAppearance(next);
+      },
+    })));
     const sampleHeight=createDisplayHeight();
     let displayY=sampleHeight(connection.snapshot(),0);
     deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);

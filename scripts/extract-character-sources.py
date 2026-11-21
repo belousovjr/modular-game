@@ -1,10 +1,34 @@
 """Prepare only required CC0 source files from four fresh official Standard ZIP downloads.
 Usage: python3 scripts/extract-character-sources.py base.zip outfits.zip ual1.zip ual2.zip output_dir
+       python3 scripts/extract-character-sources.py --modular base.zip output_dir
 """
 import json
 from pathlib import Path
 import sys
 from zipfile import ZipFile
+
+if len(sys.argv) == 4 and sys.argv[1] == '--modular':
+    output = Path(sys.argv[3])
+    folders = {
+        '/Base Characters/Godot - UE/': 'bodies',
+        '/Hairstyles/Rigged to Head Bone/glTF (Godot -Unreal)/': 'hair',
+    }
+    with ZipFile(sys.argv[2]) as source:
+        for item in source.infolist():
+            for prefix, folder in folders.items():
+                if item.is_dir() or prefix not in item.filename:
+                    continue
+                if item.file_size > 32 * 1024 * 1024:
+                    raise ValueError('Source file exceeds preparation budget')
+                target = output / folder / Path(item.filename).name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read(item))
+    for model in output.glob('*/*.gltf'):
+        for image in json.loads(model.read_text()).get('images', []):
+            target = model.parent / Path(image['uri']).name
+            if not target.exists():
+                target.write_bytes(target.with_name(target.name.replace('_png.png', '.png')).read_bytes())
+    raise SystemExit
 
 if len(sys.argv) != 6:
     raise SystemExit(__doc__)
