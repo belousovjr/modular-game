@@ -1,3 +1,4 @@
+import { cityDetailAssets } from './scripts/city-detail-assets.ts';
 import { defineConfig, loadEnv } from 'vite';
 import { createCharactersHandler } from './api/characters.ts';
 import { createDbHealth } from './api/db-health.ts';
@@ -8,7 +9,7 @@ export default defineConfig(({ mode }) => {
   const characters = createCharactersHandler(env);
   return {
     define: { 'import.meta.env.VITE_NEON_AUTH_URL': JSON.stringify(env.VITE_NEON_AUTH_URL || env.NEON_AUTH_BASE_URL || '') },
-    plugins: [{
+    plugins: [cityDetailAssets(), {
       name: 'db-health',
       configureServer(server) {
         server.middlewares.use((request, response, next) => {

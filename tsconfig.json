@@ -27,6 +27,7 @@
     "api",
     "neon.ts",
     "vite.config.ts",
-    "server"
+    "server",
+    "scripts/prepare-room-map.ts"
   ]
 }

@@ -13,7 +13,12 @@
     "preview": "vite preview --host 127.0.0.1",
     "dev:game": "node server/index.ts",
     "test:online": "node --test --test-isolation=none server/room.test.ts",
-    "db:migrate": "node scripts/db-migrate.mjs"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "bench:room": "node scripts/benchmark-room.mjs",
+    "prepare:room": "node scripts/prepare-room-map.ts",
+    "predev": "npm run prepare:room",
+    "predev:game": "npm run prepare:room",
+    "prebench:room": "npm run prepare:room"
   },
   "dependencies": {
     "@babylonjs/core": "^9.35.0",

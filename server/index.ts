@@ -1,25 +1,32 @@
+import { readFileSync } from 'node:fs';
+import { openRoomMap } from './terrain-tiles.ts';
 import { createDoorStore } from './world-doors.ts';
-import { getBuildingInteriorSources } from '../src/modules/world/building-profiles.ts';
 import { existsSync } from 'node:fs';
 import { createAccounts } from './account.ts';
-import { citySource } from '../src/modules/world/city.ts';
-import { cityCollision } from '../src/modules/world/headless.ts';
-import { generateCity } from '../src/modules/world-generation/headless.ts';
 import { startRoom } from './room.ts';
 
 for (const file of ['.env.local', '.env']) if (existsSync(file)) process.loadEnvFile(file);
 const accounts = createAccounts(process.env);
-const city = generateCity(citySource);
+const maps = new URL('../artifacts/room-map/', import.meta.url);
+const map = openRoomMap(new URL(readFileSync(new URL('current',maps),'utf8'),maps));
 const port = Number(process.env.GAME_PORT ?? 5177);
 const host = process.env.GAME_HOST ?? '127.0.0.1';
 const origin = process.env.GAME_ORIGIN ??
   (host === '127.0.0.1' ? ['http://127.0.0.1:5175', 'http://localhost:5175'] : []);
-const world = `${city.id}/${city.version}`;
+const { world } = map;
 const roomId = process.env.GAME_ROOM_ID ?? 'local';
 const store = process.env.DATABASE_URL && createDoorStore(process.env.DATABASE_URL, `${roomId}/${world}`);
 const restored = store ? await store.load() : [];
-const room = startRoom(cityCollision(city), world, port, origin,
-  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, getBuildingInteriorSources(city), restored);
+const room = startRoom(map.collision, world, port, origin,
+  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch);
+const metricsTimer = setInterval(() => {
+  const metrics = room.takeMetrics();
+  if (metrics.players || metrics.outboundSnapshotBytes) {
+    const { rss, heapUsed } = process.memoryUsage();
+    console.info('Game room metrics', JSON.stringify({ windowSeconds: 30, rss, heapUsed, collisionTiles: map.loadedTerrainTiles(), ...metrics }));
+  }
+}, 30_000);
+metricsTimer.unref();
 let saved = room.doorSnapshot();
 let writing: Promise<void> | undefined;
 function checkpoint() {
@@ -39,6 +46,7 @@ function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(checkpointTimer);
+  clearInterval(metricsTimer);
   void (async () => {
     await room.close();
     try {

@@ -1,3 +1,8 @@
+import { createScope } from '../../core/scope.ts';
+import type { StreetAsset } from './street-assets.ts';
+import { createCityAssetLoader, createDetailLoader } from './detail-loading.ts';
+import type { CitySource } from '../world-generation/index.ts';
+import type { Scope } from '../../core/modules.ts';
 import {facadeDoorWindows} from './facade-door-windows.ts';
 export {DOOR_FRAME_TRIM} from './facade-door-windows.ts';
 import type {Mesh} from '@babylonjs/core/Meshes/mesh.js';
@@ -42,7 +47,8 @@ export const worldModule = defineModule({
       const id=`${city.id}/${Math.floor(x/district.tileSize)}/${Math.floor(z/district.tileSize)}`;
       placementCounts.set(id,(placementCounts.get(id)??0)+1);
     }
-    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0)+(placementCounts.get(c.id)??0)}));
+    const streetCounts=new Map(city.streetAssets?.map(tile=>[tile.id,tile.meshCount+tile.signalCount]));
+    const generated=city.chunks.map(c=>({schemeId:c.id,bounds:c.bounds,objectCount:c.meshes.length+(c.details??[]).reduce((n,d)=>n+(d.meshCount??d.meshes.length),0)+(placementCounts.get(c.id)??0)+(streetCounts.get(c.id)??0)}));
     for(const template of cityTemplates)deps.templates.register(toCityGrid(template),scope);
     for (const template of worldTemplates) deps.templates.register(template.id==='world/lamp'?toCityGrid(template):template, scope);
     const aviationLights=aviationLightPositions(city,p=>deps.templates.resolve(p.templateId,p.parameters).levels[0].parts);
@@ -52,7 +58,8 @@ export const worldModule = defineModule({
     const placements = city.placements.filter(p=>p.templateId!=='city/stone'&&p.templateId!=='city/glass'&&p.templateId!=='city/tree');
     const buildingCount=city.colliders.length;
     const coarseBuildingKeys=new Map(city.colliders.map(({id},index)=>[id,index+1]));
-    const lampCount = placements.filter(p => p.templateId === 'city/signal' || p.templateId === 'world/lamp').length;
+    const lampCount = placements.filter(p => p.templateId === 'city/signal' || p.templateId === 'world/lamp').length +
+      (city.signalPoles?.length ?? 0);
     const sections = new Map<string, { bounds: SectionBounds; placements: typeof placements }>();
     for (const placement of placements) {
       const [x, , z] = placement.position;
@@ -69,18 +76,37 @@ export const worldModule = defineModule({
         section.placements.push(placement);
       } else sections.set(key, { bounds, placements: [placement] });
     }
+    function showPlacement(placement: CitySource['placements'][number], owner: Scope) {
+      const surface = placement.templateId.slice('world/'.length);
+      const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
+      const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial,batchMaterial?0:180);
+      object.root.position.copyFromFloats(...placement.position);
+      object.root.rotation.copyFromFloats(...placement.rotation);
+      const list = placement.templateId === 'city/signal' || placement.templateId === 'world/lamp' ? lamps : placement.key.startsWith('authored/daley/') ? undefined : buildings;
+      if (list) { list.add(object); owner.onDispose(() => list.delete(object)); }
+    }
     for (const [key, section] of sections) {
       deps.streaming.registerSection(`${city.id}/objects/${key}`, section.bounds, owner => {
-        for (const placement of section.placements) {
-          const surface = placement.templateId.slice('world/'.length);
-          const batchMaterial = ['road', 'sidewalk', 'curb'].includes(surface) ? surface : undefined;
-          const object = deps.rendering.createObject(placement.templateId, placement.key, placement.parameters, owner, 'static', batchMaterial,batchMaterial?0:180);
-          object.root.position.copyFromFloats(...placement.position);
-          object.root.rotation.copyFromFloats(...placement.rotation);
-          const list = placement.templateId === 'city/signal' || placement.templateId === 'world/lamp' ? lamps : placement.key.startsWith('authored/daley/') ? undefined : buildings;
-          if (list) { list.add(object); owner.onDispose(() => list.delete(object)); }
-        }
+        for (const placement of section.placements) showPlacement(placement,owner);
       }, scope,section.placements.some(p=>p.templateId!=='city/signal'&&p.templateId!=='world/lamp'&&!p.key.startsWith('authored/daley/'))?{load:1200,unload:1400,unloadDelayMs:250}:{load:192,unload:256,unloadDelayMs:250});
+    }
+    for (const { path, bounds } of city.streetAssets ?? []) {
+      const load = createCityAssetLoader<StreetAsset>(path, response => response.json());
+      deps.streaming.registerSection(path,bounds,owner=>load(owner,asset=>{
+        const lifetime=createScope();
+        owner.onDispose(lifetime.dispose);
+        try {
+          for (const signal of asset.signals) showPlacement(signal,lifetime);
+          for (const [index, surface] of asset.meshes.entries()) {
+            const mesh=deps.geometry.createSurfaceMesh(`${path}/${index}`,surface.surface,surface.positions,surface.indices,lifetime,surface.uvs);
+            mesh.metadata={...mesh.metadata,citySurface:surface.surface,shadowCaster:false};
+            mesh.freezeWorldMatrix();
+          }
+        } catch (error) {
+          lifetime.dispose();
+          throw error;
+        }
+      }),scope,{load:192,unload:256,unloadDelayMs:250});
     }
     type Visibility=ReturnType<typeof deps.rendering.createVisibility>;
     const surfaceViews=new Set<{bounds:SectionBounds;load:number;unload:number;visibility:Visibility}>();
@@ -196,25 +222,35 @@ export const worldModule = defineModule({
     if(collision.water)createUnderwaterView(core.scene,collision.water,scope);
     const doorwayIds = new Set(collision.doors?.map(door => door.id));
     const detailViews=new Set<{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}>();
-    for(const chunk of city.chunks)for(const detail of chunk.details??[]) {
-      deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
-        const meshes:Mesh[]=[];
-        const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
-        detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
-        const id=detail.id.split('/detail/')[1];
-        const doorPanel = detail.meshes.find(mesh=>mesh.surface==='facade')?.positions;
-        for(const surface of detail.meshes){
-          const material=surface.surface.replace(/-detail$/,'');
-          if (doorwayIds.has(id) && (material==='facade' || material==='metal')) continue;
-          const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
-          const rectangles = doorPanel && facadeDoorWindows(surface,[doorPanel]);
-          if (rectangles) mesh.setVerticesData('cityDoorWindows',rectangles,false,4);
-          mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};
-          mesh.freezeWorldMatrix();
-          view.meshes.push(mesh);
-          for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
-        }
-        view.visibility=deps.rendering.createVisibility(meshes,owner);
+    function showDetail(detail: NonNullable<CitySource['chunks'][number]['details']>[number], owner: Scope) {
+      const meshes:Mesh[]=[];
+      const view:{meshes:Mesh[];bounds:SectionBounds;minY:number;maxY:number;visibility?:Visibility}={meshes,bounds:detail.bounds,minY:Infinity,maxY:-Infinity};
+      detailViews.add(view);owner.onDispose(()=>detailViews.delete(view));
+      const id=detail.id.split('/detail/')[1];
+      const doorPanel = detail.meshes.find(mesh=>mesh.surface==='facade')?.positions;
+      for(const surface of detail.meshes){
+        const material=surface.surface.replace(/-detail$/,'');
+        if (doorwayIds.has(id) && (material==='facade' || material==='metal')) continue;
+        const mesh=deps.geometry.createSurfaceMesh(`${detail.id}/${material}`,material,surface.positions,surface.indices,owner,surface.uvs);
+        const rectangles = doorPanel && facadeDoorWindows(surface,[doorPanel]);
+        if (rectangles) mesh.setVerticesData('cityDoorWindows',rectangles,false,4);
+        mesh.metadata={...mesh.metadata,citySurface:material,buildingDetail:true,shadowNearOnly:true,shadowCaster:true};
+        mesh.freezeWorldMatrix();
+        view.meshes.push(mesh);
+        for(let i=1;i<surface.positions.length;i+=3){view.minY=Math.min(view.minY,surface.positions[i]);view.maxY=Math.max(view.maxY,surface.positions[i]);}
+      }
+      view.visibility=deps.rendering.createVisibility(meshes,owner);
+    }
+    for(const chunk of city.chunks) {
+      const load = chunk.detailAsset && createDetailLoader(chunk.detailAsset);
+      for(const detail of chunk.details??[]) deps.streaming.registerSection(detail.id,detail.bounds,owner=>{
+        if (load) load(detail.id,owner,loaded=>{
+          const lifetime=createScope();
+          owner.onDispose(lifetime.dispose);
+          try { showDetail(loaded,lifetime); }
+          catch (error) { lifetime.dispose(); throw error; }
+        });
+        else showDetail(detail,owner);
       },scope,detailRange);
     }
     const detailObserver=core.scene.onBeforeRenderObservable.add(()=>{
@@ -246,7 +282,8 @@ export const worldModule = defineModule({
     scope.onDispose(()=>core.scene.onBeforeRenderObservable.remove(detailObserver));
     const streetNames=new Map(city.roads.map(r=>[r.id,r.name||r.id]));
     const streetLights=Object.freeze(city.placements.filter(p=>p.templateId==='world/lamp').map(p=>Object.freeze({id:p.key,street:streetNames.get(p.key.split('/').slice(2,-2).join('/'))??p.key,x:p.position[0]+1.5*Math.cos(p.rotation[1]),y:p.position[1]+4.125,z:p.position[2]-1.5*Math.sin(p.rotation[1])})));
-    return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
+    return { bounds: city.bounds, objectCount: city.placements.length+
+      (city.streetAssets?.reduce((sum,tile)=>sum+tile.signalCount+tile.meshCount,0)??0)+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+(d.meshCount??d.meshes.length),0),0),
       collision,streetLights,
       getMap: () => getWorldMap(city),
       getNavigationSource: () => city,

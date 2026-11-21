@@ -42,8 +42,15 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
   return createCharacterAuthorityFactory(world)(startTick);
 }
 
+export interface CharacterTerrainTile {
+  readonly triangles: readonly (readonly number[])[];
+  readonly water: readonly (readonly number[])[];
+  readonly blockers: readonly CollisionBox[];
+  readonly interiors?: readonly BuildingInteriorSource[];
+}
+
 export function createCharacterAuthorityFactory(world: CollisionWorld, interiorSources:readonly BuildingInteriorSource[] = [],
-  interiors=createInteriorCollision(interiorSources), sharedDoors?: ReturnType<typeof createEntranceMotion>) {
+  interiors=createInteriorCollision(interiorSources), sharedDoors?: ReturnType<typeof createEntranceMotion>, readTerrain?: (x:number,z:number)=>CharacterTerrainTile) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
@@ -60,11 +67,14 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     }
   }
   if ((world.pedestrianWalls?.length??0) > 100000) throw new Error('Too many pedestrian walls');
-  for (const b of pedestrianBlockers(world)) {
-    if (![b.minY,b.maxY].every(Number.isFinite) || b.maxY <= b.minY) throw new Error('Invalid collision height');
-    if(b.outline && (b.outline.length<3||b.outline.length>256||b.outline.some(p=>p.length!==2||!p.every(Number.isFinite))))throw new Error('Invalid collision outline');
-    index(cells, Object.freeze({ ...b,outline:b.outline?.map(p=>Object.freeze([...p])) }));
+  function indexBlockers(map:Map<string,CollisionBox[]>, blockers:readonly CollisionBox[]) {
+    for (const b of blockers) {
+      if (![b.minY,b.maxY].every(Number.isFinite) || b.maxY <= b.minY) throw new Error('Invalid collision height');
+      if(b.outline && (b.outline.length<3||b.outline.length>256||b.outline.some(p=>p.length!==2||!p.every(Number.isFinite))))throw new Error('Invalid collision outline');
+      index(map, Object.freeze({ ...b,outline:b.outline?.map(p=>Object.freeze([...p])) }));
+    }
   }
+  indexBlockers(cells,pedestrianBlockers(world));
   for (const f of world.floors) {
     if (!Number.isFinite(f.elevation) || f.elevation < 0 || f.elevation > 10) throw new Error('Invalid floor');
     index(floors, Object.freeze({ ...f }));
@@ -100,6 +110,26 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const waterTriangles=indexTriangles(world.water?.triangles);
   const bounds = { ...world.bounds }, baseHeight = world.baseHeight, slopeX = world.slopeX;
   const query = <T>(map: Map<string, T[]>, x: number, z: number) => map.get(`${Math.floor(x / CELL)}/${Math.floor(z / CELL)}`) ?? [];
+  const streamed = new WeakMap<CharacterTerrainTile, {
+    ground:Map<string,Triangle[]>; water:Map<string,Triangle[]>; blockers:Map<string,CollisionBox[]>; interiors:ReturnType<typeof createInteriorCollision>;
+  }>();
+  function tileAt(x:number,z:number) {
+    const tile=readTerrain?.(x,z);
+    if(!tile)return;
+    let value=streamed.get(tile);
+    if(!value) {
+      const before=entries;
+      const blockers=new Map<string,CollisionBox[]>();
+      try {
+        indexBlockers(blockers,tile.blockers);
+        value={ground:indexTriangles(tile.triangles),water:indexTriangles(tile.water),blockers,interiors:createInteriorCollision(tile.interiors??[])};
+        streamed.set(tile,value);
+      } finally { entries=before; }
+    }
+    return value;
+  }
+  const blockersAt=(x:number,z:number)=>query(tileAt(x,z)?.blockers??cells,x,z);
+  const interiorsAt=(x:number,z:number)=>tileAt(x,z)?.interiors??interiors;
   function triangleHeight({vertices:p,denominator}:Triangle,x:number,z:number){
     const a=((p[5]-p[8])*(x-p[6])+(p[6]-p[3])*(z-p[8]))/denominator;
     const b=((p[8]-p[2])*(x-p[6])+(p[0]-p[6])*(z-p[8]))/denominator;
@@ -110,21 +140,21 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     for (const f of query(floors,x,z)) if (x >= f.minX && x <= f.maxX && z >= f.minZ && z <= f.maxZ) elevation = Math.max(elevation, f.elevation);
     let height=baseHeight+slopeX*x+elevation;
     if(height>ceiling)height=-Infinity;
-    for(const triangle of query(triangles,x,z)){
+    for(const triangle of query(tileAt(x,z)?.ground??triangles,x,z)){
       const sample=triangleHeight(triangle,x,z);
       if(sample<=ceiling)height=Math.max(height,sample);
     }
     return height;
   }
-  const overWater=(x:number,z:number)=>query(waterTriangles,x,z).some(t=>triangleHeight(t,x,z)>-Infinity);
+  const overWater=(x:number,z:number)=>query(tileAt(x,z)?.water??waterTriangles,x,z).some(t=>triangleHeight(t,x,z)>-Infinity);
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
   function stepDoors(motion: ReturnType<typeof createEntranceMotion>,
     actors: readonly Pick<CharacterSnapshot,'x'|'y'|'z'|'stance'>[], extra: readonly CollisionBox[] = []) {
     motion.stepActors(actors.map(actor=>({...actor,radius:RADIUS,height:HEIGHT[actor.stance]})),door=>[
-      ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
-      ...interiors.at(door.x,door.z,door.y,door.y+door.height).boxes,
+      ...blockersAt(door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
+      ...interiorsAt(door.x,door.z).at(door.x,door.z,door.y,door.y+door.height).boxes,
       ...extra,
     ]);
   }
@@ -142,7 +172,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   let traffic:readonly CollisionBox[]=[];
   let closed=false;
   function sample(px:number,pz:number,low:number,high:number) {
-    return interiors.at(px,pz,low,high);
+    return interiorsAt(px,pz).at(px,pz,low,high);
   }
   function support(px: number,pz: number) {
     let height=ground(px,pz);
@@ -155,7 +185,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
     return height;
   }
   const obstacles=(px:number,pz:number,py:number,inside:readonly CollisionBox[])=>[
-    ...query(cells,px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame ? [vehicleFrame.blocker] : []),...traffic,
+    ...blockersAt(px,pz),...inside,...(entrances?.at(px,pz,py)??[]),...(vehicleFrame ? [vehicleFrame.blocker] : []),...traffic,
   ];
   let moving = false, grounded = true, verticalSpeed = 0, airborneTicks = 0, landedTick = -100, jump = false;
   function touches(b:CollisionBox,px:number,pz:number,radius=RADIUS) {
@@ -233,7 +263,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       if(top>=y-.3&&top<=y+.3){y=top;grounded=true;}
     }
   }
-  if (interiorSources.length) {
+  if (interiorSources.length || readTerrain) {
     for(const slab of sample(x,z,y-.03,y+.3).slabs) {
       if(slab.maxY>=y && slab.maxY<=y+.03)y=slab.maxY;
     }

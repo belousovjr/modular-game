@@ -3,7 +3,7 @@ import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
-import { CharacterSpawnBlockedError, createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
+import { CharacterSpawnBlockedError, createCharacterAuthorityFactory, type CharacterTerrainTile } from '../src/modules/characters/headless.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record, SNAPSHOT_TICKS } from '../src/simulation/online-protocol.ts';
 import type { BuildingInteriorSource, CollisionWorld } from '../src/modules/world/headless.ts';
@@ -12,11 +12,16 @@ export function startRoom(
   collision: CollisionWorld, world: string, port: number, origin: string | readonly string[],
   owns: (accessToken: string, characterId: string) => Promise<boolean>, host = '127.0.0.1',
   interiorSources: readonly BuildingInteriorSource[] = [], restoredDoors: readonly DoorPose[] = [],
+  spawnAt: () => CollisionWorld['spawn'] = () => collision.spawn,
+  terrain?: (x:number,z:number)=>CharacterTerrainTile,
+  prefetchTerrain?: (x:number,z:number)=>void,
 ) {
+  let ticks = 0, tickMs = 0, maxTickMs = 0, slowTicks = 0, maxPendingTicks = 0;
+  let snapshots = 0, snapshotBytes = 0, outboundSnapshotBytes = 0, serializationMs = 0;
   const origins = new Set(typeof origin === 'string' ? [origin] : origin);
   const doors = createEntranceMotion(collision.doors ?? []);
   doors.restore(restoredDoors);
-  const makeActor = createCharacterAuthorityFactory(collision, interiorSources, undefined, doors);
+  const makeActor = createCharacterAuthorityFactory(collision, interiorSources, undefined, doors, terrain);
   const clock = createLocalAuthority();
   const epoch = randomUUID();
   const dayStart = onlineDayPhase(Date.now());
@@ -30,12 +35,13 @@ export function startRoom(
   });
 
   function send(socket: WebSocket, data: string) {
-    if (socket.readyState !== WebSocket.OPEN) return;
+    if (socket.readyState !== WebSocket.OPEN) return false;
     if (socket.bufferedAmount > 64 * 1024) {
       socket.terminate();
-      return;
+      return false;
     }
     socket.send(data);
+    return true;
   }
 
   function frame() {
@@ -46,11 +52,12 @@ export function startRoom(
   }
 
   function spawnPlayer(id: string) {
+    const spawn = spawnAt();
     const occupied = [...players.values()].map(player => player.actor.snapshot());
     for (let ring = 0; ring < 5; ring++) {
       for (let slot = 0; slot < (ring ? 8 : 1); slot++) {
-        const x = collision.spawn.x + Math.cos(slot * Math.PI / 4) * ring * 1.5;
-        const z = collision.spawn.z + Math.sin(slot * Math.PI / 4) * ring * 1.5;
+        const x = spawn.x + Math.cos(slot * Math.PI / 4) * ring * 1.5;
+        const z = spawn.z + Math.sin(slot * Math.PI / 4) * ring * 1.5;
         if (occupied.some(actor => Math.hypot(actor.x - x, actor.z - z) < 1)) continue;
         try { return makeActor(clock.snapshot().tick, { x, z }, undefined, { id, ownerId: id }); }
         catch (error) { if (!(error instanceof CharacterSpawnBlockedError)) throw error; }
@@ -129,8 +136,14 @@ export function startRoom(
   });
 
   clock.addSystem(tick => {
+    const start = performance.now();
     makeActor.stepSharedDoors([...players.values()].filter(player => player.socket).map(player => player.actor.snapshot()));
     for (const player of players.values()) player.actor.step(tick);
+    const duration = performance.now() - start;
+    ticks++;
+    tickMs += duration;
+    if (duration > STEP_MS) slowTicks++;
+    maxTickMs = Math.max(maxTickMs, duration);
   });
 
   let publishedTick = 0;
@@ -144,11 +157,21 @@ export function startRoom(
     }
     clock.advance(now - previous);
     previous = now;
-    const tick = clock.snapshot().tick;
+    const { tick, pendingTicks } = clock.snapshot();
+    maxPendingTicks = Math.max(maxPendingTicks, pendingTicks);
     if (!players.size || tick - publishedTick < SNAPSHOT_TICKS) return;
+    if (prefetchTerrain) for (const player of players.values()) if (player.socket) {
+      const { x, z } = player.actor.snapshot();
+      prefetchTerrain(x,z);
+    }
     publishedTick = tick;
+    const start = performance.now();
     const data = JSON.stringify({ type: 'frame', ...frame() });
-    for (const player of players.values()) if (player.socket) send(player.socket, data);
+    serializationMs += performance.now() - start;
+    const bytes = Buffer.byteLength(data);
+    snapshots++;
+    snapshotBytes += bytes;
+    for (const player of players.values()) if (player.socket && send(player.socket, data)) outboundSnapshotBytes += bytes;
   }, STEP_MS);
   const heartbeat = setInterval(() => {
     for (const [socket, connection] of connections) {
@@ -166,6 +189,16 @@ export function startRoom(
   return {
     server,
     doorSnapshot: doors.snapshot,
+    takeMetrics() {
+      const sample = {
+        tick: clock.snapshot().tick, players: players.size, ticks,
+        avgTickMs: ticks ? tickMs / ticks : 0, maxTickMs, slowTicks, maxPendingTicks,
+        snapshots, avgSnapshotBytes: snapshots ? snapshotBytes / snapshots : 0,
+        outboundSnapshotBytes, serializationMs,
+      };
+      ticks = tickMs = maxTickMs = slowTicks = maxPendingTicks = snapshots = snapshotBytes = outboundSnapshotBytes = serializationMs = 0;
+      return sample;
+    },
     close() {
       for (const socket of connections.keys()) socket.terminate();
       return new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

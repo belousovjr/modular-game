@@ -220,8 +220,10 @@ export interface CityMesh { readonly surface: string; readonly positions: readon
 export interface CitySource {
   readonly version: number; readonly id: string; readonly bounds: Rectangle;
   readonly spawn: {readonly x:number;readonly z:number}; readonly waterLevel:number;
-  readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[];readonly details?:readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[]}[]}[];
+  readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[];readonly detailAsset?: string;readonly details?:readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly meshCount?: number}[]}[];
   readonly placements: readonly WorldPlacement[];
+  readonly signalPoles?: readonly Pick<WorldPlacement, 'key' | 'position'>[];
+  readonly streetAssets?: readonly { readonly id: string; readonly path: string; readonly bounds: Rectangle; readonly signalCount: number; readonly meshCount: number }[];
   readonly colliders: readonly (Rectangle & {readonly id:string;readonly minY:number;readonly maxY:number;readonly outline:readonly (readonly number[])[];readonly parts?:readonly (readonly (readonly number[])[])[]})[];
   readonly trafficLayout?: {readonly crosswalks: readonly {readonly center:readonly number[];readonly direction:readonly number[];readonly outline:readonly (readonly number[])[]}[]};
   readonly roads: readonly {readonly id:string;readonly name:string;readonly points:readonly (readonly number[])[];readonly width:number;readonly oneway:string;readonly bridge:boolean;readonly layer:number}[];

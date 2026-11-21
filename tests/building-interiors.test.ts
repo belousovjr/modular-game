@@ -461,20 +461,32 @@ test('character authority enters through a real doorway and is stopped by the wa
   const interior=getBuildingInteriorSources(citySource).find(source=>source.id===door.id);
   assert.ok(interior);
   const factory=createCharacterAuthorityFactory(world,[interior]);
+  const {partitionTerrain}=await import('../server/terrain-tiles.ts');
+  const tiles=partitionTerrain(world,[interior]);
+  const shared=createEntranceMotion([door]);
+  const lean={...world,blockers:[],pedestrianWalls:undefined,pedestrianShells:undefined,
+    triangles:undefined,water:world.water && {...world.water,triangles:[]}};
+  const streamed=createCharacterAuthorityFactory(lean,[],undefined,shared,
+    (x,z)=>tiles.get(`${Math.floor(x/128)}_${Math.floor(z/128)}`) ?? {blockers:[],triangles:[],water:[]});
   const {x,y,z,tx,tz} = door;
   const nx=tz, nz=-tx;
-  function walk(offset: number) {
-    const actor = factory(0,{x:x-nx*1.5+tx*offset,z:z-nz*1.5+tz*offset});
+  function walk(offset: number, create = factory) {
+    if(create===streamed)shared.restore([]);
+    const actor = create(0,{x:x-nx*1.5+tx*offset,z:z-nz*1.5+tz*offset});
     for(let tick=1;tick<=120;tick++){
       if(tick%6===1)assert.ok(actor.receive({type:'move',characterId:'local-player',sequence:tick,tick:tick-1,x:nx,z:nz,run:false,jump:false},'local').accepted);
+      create.stepSharedDoors([actor.snapshot()]);
       actor.step(tick);
     }
     const p=actor.snapshot();
     assert.ok(Math.abs(p.y-y)<.3);
     return (p.x-x)*nx+(p.z-z)*nz;
   }
-  assert.ok(walk(0)>1);
-  assert.ok(walk(2)<0);
+  const inside=walk(0), blocked=walk(2);
+  assert.ok(inside>1);
+  assert.ok(blocked<0);
+  assert.equal(walk(0,streamed),inside);
+  assert.equal(walk(2,streamed),blocked);
   assert.ok(world.blockers.some(b=>b.id===door.id));
 });
 

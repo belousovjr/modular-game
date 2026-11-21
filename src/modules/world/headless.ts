@@ -257,10 +257,13 @@ export function cityCollision(city:CitySource):CollisionWorld {
       minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),
     }));
   });
+  const signalPoles=(city.signalPoles??[]).map(({key,position:[x,y,z]})=>({
+    id:key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+6.75,
+  }));
   const blockers=[...buildingBlockers,...rooftopBlockers,...furniture,...trees,...city.placements.filter(p=>p.templateId==='world/lamp'||p.templateId==='city/signal').flatMap(p=>{
     const [x,y,z]=p.position;
     const pole={id:p.key,minX:x-.125,maxX:x+.125,minZ:z-.125,maxZ:z+.125,minY:y-.125,maxY:y+(p.templateId==='city/signal'?6.75:4.375)};
     return p.templateId==='world/lamp'?[pole,{id:`${p.key}/base`,minX:x-.25,maxX:x+.25,minZ:z-.25,maxZ:z+.25,minY:y-.125,maxY:y+.375}]:[pole];
-  })];
+  }),...signalPoles];
   return Object.freeze({bounds:Object.freeze({...city.bounds}),baseHeight:-40,slopeX:0,spawn:Object.freeze({...city.spawn}),blockers,...pedestrianShells(city,buildingBlockers),floors:[],triangles:Object.freeze(triangles),water:{level:city.waterLevel,triangles:Object.freeze(water)}});
 }
