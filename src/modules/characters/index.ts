@@ -16,7 +16,7 @@ import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
 import { geometryModule } from '../geometry/index.ts';
-import { buildingInteriorsModule } from '../building-interiors/index.ts';
+import { buildingInteriorsModule, createEntranceMotion } from '../building-interiors/index.ts';
 import type { VehicleCharacterFrame,CharacterSnapshot } from './headless.ts';
 import { createCharacterAuthorityFactory, createLocalConnection } from './headless.ts';
 export { clearLocalPosition } from './local-position.ts';
@@ -27,7 +27,9 @@ export const charactersModule = defineModule({
   requires: { simulation: simulationModule, world: worldModule, geometry: geometryModule, interiors: buildingInteriorsModule },
   setup({ core, deps, scope }) {
     let stopped=false;
-    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision);
+    const doors = createEntranceMotion(deps.world.collision.doors ?? []);
+    deps.simulation.registerDoors(doors.snapshot,scope);
+    const createAuthority = createCharacterAuthorityFactory(deps.world.collision,deps.world.getBuildingInteriorSources(),deps.interiors.collision,doors);
     const start = deps.simulation.snapshot().tick;
     const position = core.play ? undefined : readLocalPosition();
     const authority = createAuthority(start, undefined, position);
@@ -50,7 +52,9 @@ export const charactersModule = defineModule({
     deps.simulation.registerSystem(tick=>{
       const hero=authority.snapshot();
       authority.setTrafficBlockers(traffic?.step(tick,hero)??[]);
-      if(vehicleStep)authority.setVehicleFrame(vehicleStep(tick,hero));
+      const vehicle=vehicleStep?.(tick,hero);
+      if(vehicle)authority.setVehicleFrame(vehicle);
+      createAuthority.stepSharedDoors(vehicle?.pose ? [] : [hero],vehicle?[vehicle.blocker]:[]);
       connection.step(tick);
     }, scope);
     const assets=createCharacterAssets(core.scene,scope);
@@ -72,7 +76,7 @@ export const charactersModule = defineModule({
     let displayedIdentity='';
     const remoteViews=new Map<string, { owner: ReturnType<typeof createScope>; render: ReturnType<typeof createView> }>();
     scope.onDispose(() => { for (const view of remoteViews.values()) view.owner.dispose(); });
-    deps.interiors.presentDoorSnapshot(connection.snapshot().entranceDoors);
+    deps.interiors.presentDoorSnapshot(doors.snapshot());
     const reset=core.onResetView?.add(()=>{
       if (core.play) return;
       connection.resetPosition();
@@ -91,7 +95,7 @@ export const charactersModule = defineModule({
       displayX+=(state.x-displayX)*blend;
       displayZ+=(state.z-displayZ)*blend;
       displayY=sampleHeight(state,delta,reset);
-      deps.interiors.presentDoorSnapshot(state.entranceDoors);
+      deps.interiors.presentDoorSnapshot(core.play ? online.doors() : doors.snapshot());
     });
     scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {

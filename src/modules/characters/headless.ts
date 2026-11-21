@@ -43,7 +43,7 @@ export function createCharacterAuthority(world: CollisionWorld, startTick = 0) {
 }
 
 export function createCharacterAuthorityFactory(world: CollisionWorld, interiorSources:readonly BuildingInteriorSource[] = [],
-  interiors=createInteriorCollision(interiorSources)) {
+  interiors=createInteriorCollision(interiorSources), sharedDoors?: ReturnType<typeof createEntranceMotion>) {
   if (![world.baseHeight, world.slopeX, world.spawn.x, world.spawn.z, world.baseHeight+world.slopeX*world.bounds.minX, world.baseHeight+world.slopeX*world.bounds.maxX, ...Object.values(world.bounds)].every(Number.isFinite) || Math.abs(world.slopeX) > 0.1 || world.bounds.minX >= world.bounds.maxX || world.bounds.minZ >= world.bounds.maxZ || world.blockers.length > 16000 || world.floors.length > 10000) throw new Error('Invalid character world');
   const cells = new Map<string, CollisionBox[]>();
   const floors = new Map<string, (CollisionWorld['floors'][number])[]>();
@@ -120,7 +120,15 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   const swimY=waterLevel-1.08;
   const deepWater=(x:number,z:number)=>overWater(x,z)&&ground(x,z,waterLevel)<swimY-.2;
   const defaultSpawn={...world.spawn};
-  return (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number}, identity=LOCAL_PLAYER)=>{
+  function stepDoors(motion: ReturnType<typeof createEntranceMotion>,
+    actors: readonly Pick<CharacterSnapshot,'x'|'y'|'z'|'stance'>[], extra: readonly CollisionBox[] = []) {
+    motion.stepActors(actors.map(actor=>({...actor,radius:RADIUS,height:HEIGHT[actor.stance]})),door=>[
+      ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
+      ...interiors.at(door.x,door.z,door.y,door.y+door.height).boxes,
+      ...extra,
+    ]);
+  }
+  const createActor = (startTick=0,spawn=defaultSpawn,resume?:{x:number;y:number;z:number}, identity=LOCAL_PLAYER)=>{
   const {id,ownerId:owner}=identity;
   if(![spawn.x,spawn.z].every(Number.isFinite))throw new Error('Invalid character spawn');
   if(!Number.isSafeInteger(startTick)||startTick<0)throw new Error('Invalid character tick');
@@ -129,7 +137,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
   let mode:LocomotionMode='walk',boost=false,lift=0,flightRequest:boolean|null=null;
   let stance:CharacterStance='standing',stanceRequest:CharacterStance|undefined;
   let vx=0,vy=0,vz=0;
-  const entrances=interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined;
+  const entrances=sharedDoors ?? (interiorSources.length ? createEntranceMotion(world.doors??[]) : undefined);
   let vehicleFrame:VehicleCharacterFrame|null=null;
   let traffic:readonly CollisionBox[]=[];
   let closed=false;
@@ -304,14 +312,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       if (nextTick !== tick + 1) throw new Error('Character ticks must be consecutive');
       tick = nextTick;
       moving = false;
-      if(entrances){
-        const blockers=(door:NonNullable<CollisionWorld['doors']>[number])=>[
-          ...query(cells,door.x,door.z).filter(box=>!box.id.startsWith(`${door.id}/wall/`)),
-          ...sample(door.x,door.z,door.y,door.y+door.height).boxes,
-          ...(vehicleFrame ? [vehicleFrame.blocker] : []),
-        ];
-        entrances.step(vehicleFrame?.pose ? null : {x,y,z},RADIUS,HEIGHT[stance],blockers);
-      }
+      if(entrances&&!sharedDoors)stepDoors(entrances,vehicleFrame?.pose?[]:[{x,y,z,stance}],vehicleFrame?[vehicleFrame.blocker]:[]);
       if(vehicleFrame?.pose)return;
       if(vehicleFrame?.approach){resetMotion();stanceRequest='standing';const a=vehicleFrame.approach,tx=a.x-x,tz=a.z-z,length=Math.hypot(tx,tz);const scale=Math.min(1,length*60/(a.run?7:1.8));dx=length>.01?tx/length*scale:0;dz=length>.01?tz/length*scale:0;run=a.run;facing=a.align?a.yaw:null;jump=false;expiry=tick+1;}
       if(stanceRequest&&stanceRequest!==stance&&grounded&&mode==='walk'&&!blocked(x,z,y,false,HEIGHT[stanceRequest]))stance=stanceRequest;
@@ -371,9 +372,14 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
         y=nextY;
       }
     },
-    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances?{entranceDoors:entrances.snapshot()}:{}), id, ownerId:owner, x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:Object.freeze([...vehicleFrame.pose.rotation])}:{})}:{}) }); },
+    snapshot(): CharacterSnapshot { return Object.freeze({ tick, ...(entrances&&!sharedDoors?{entranceDoors:entrances.snapshot()}:{}), id, ownerId:owner, x,y,z,yaw,grounded,verticalSpeed,airborneTicks,landedTick,mode,stance,boosted:moving&&stance==='standing'&&boost&&tick<=expiry,moving,running: moving&&stance==='standing'&&(run||boost),lastSequence,...(vehicleFrame?.approach?{vehicleId:vehicleFrame.approach.vehicleId,vehicleAnimation:'approaching' as const}:{}),...(vehicleFrame?.pose?{vehicleId:vehicleFrame.pose.vehicleId,vehicleAnimation:vehicleFrame.pose.animation,...(vehicleFrame.pose.rotation?{vehicleRotation:Object.freeze([...vehicleFrame.pose.rotation])}:{})}:{}) }); },
   };
   };
+  return Object.assign(createActor, {
+    stepSharedDoors(actors: readonly Pick<CharacterSnapshot,'x'|'y'|'z'|'stance'>[], extra?: readonly CollisionBox[]) {
+      if (sharedDoors) stepDoors(sharedDoors,actors,extra);
+    },
+  });
 }
 
 export function createLocalConnection(

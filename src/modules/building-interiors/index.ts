@@ -309,3 +309,5 @@ export const buildingInteriorsModule = defineModule({
     };
   },
 });
+
+export { createEntranceMotion, interpolateDoorPoses, readDoorPoses } from './headless.ts';

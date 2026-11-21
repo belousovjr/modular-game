@@ -1,3 +1,4 @@
+import type { DoorPose } from '../building-interiors/index.ts';
 import { Badge, DataList } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import { defineModule, type CoreContext, type PlaySession } from '../../core/context.ts';
@@ -27,6 +28,7 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
   const session = createLocalSession();
   const online = createOnlineConnection(play);
   scope.onDispose(online.dispose);
+  let localDoors: (() => readonly DoorPose[]) | undefined;
   let map = '';
   let blockers = 0;
   let pending = !!play;
@@ -48,13 +50,14 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
     read: snapshot,
     api: {
       snapshot: authority.snapshot, session, onlineDayHour: online.dayHour,
-      worldSnapshot: () => ({ clock: snapshot(), entities: online.self()
+      worldSnapshot: () => ({ clock: snapshot(), doors: online.doors() ?? localDoors?.() ?? [], entities: online.self()
         ? Object.fromEntries(online.latest().map(actor => [actor.id, actor]))
         : session.snapshot() }),
+      registerDoors(read: () => readonly DoorPose[], owner: Scope) { localDoors = read; owner.onDispose(() => { localDoors = undefined; }); },
       registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
       enableOnline(world: string, owner: Scope) { map = world; owner.onDispose(() => { map = ''; online.dispose(); }); },
       blockOnline(owner: Scope) { blockers++; online.dispose(); owner.onDispose(() => { blockers--; }); },
-      online: { self: online.self, remote: online.remote, send: online.send, identity: online.identity },
+      online: { doors: online.displayDoors, self: online.self, remote: online.remote, send: online.send, identity: online.identity },
     },
   };
 }

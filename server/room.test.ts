@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
 import { WebSocket } from 'ws';
+import { getBuildingInteriorSources } from '../src/modules/world/building-profiles.ts';
 import { citySource } from '../src/modules/world/city.ts';
 import { cityCollision } from '../src/modules/world/headless.ts';
 import { generateCity } from '../src/modules/world-generation/headless.ts';
@@ -17,7 +18,7 @@ test('two WebSockets share the city, reject invalid input and resume a player', 
   const origin = 'http://127.0.0.1:5175';
   const city = generateCity(citySource);
   const world = `${city.id}/${city.version}`;
-  const room = startRoom(cityCollision(city), world, 0, origin, async (token, id) => token === 'test-'+id);
+  const room = startRoom(cityCollision(city), world, 0, origin, async (token, id) => token === 'test-'+id, undefined, getBuildingInteriorSources(city));
   try {
     await once(room.server, 'listening');
     const address = room.server.address();
@@ -104,4 +105,42 @@ test('online daylight advances one game hour every five minutes and wraps at mid
   assert.equal(onlineDayHour(5 * 60 * 1000), 1);
   assert.equal(onlineDayHour(60 * 60 * 1000), 12);
   assert.equal(onlineDayHour(ONLINE_DAY_MS + 5 * 60 * 1000), 1);
+});
+
+test('two clients receive the same room-level entrance state', { timeout: 8000 }, async () => {
+  const origin='http://localhost:5175';
+  const collision={
+    spawn:{x:0,z:2},baseHeight:0,slopeX:0,bounds:{minX:-20,maxX:20,minZ:-20,maxZ:20},
+    floors:[],blockers:[],doors:[{id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75}],
+  };
+  const room=startRoom(collision,'door-test',0,origin,async()=>true,undefined,[],[{id:'door',left:.25,right:.25}]);
+  try {
+    assert.deepEqual(room.doorSnapshot(),[{id:'door',left:.25,right:.25}]);
+    await once(room.server,'listening');
+    const address=room.server.address();
+    assert.ok(address && typeof address!=='string');
+    const url=`ws://127.0.0.1:${address.port}/room`;
+    async function connect(characterId:string) {
+      const socket=new WebSocket(url,{origin});
+      await once(socket,'open');
+      const frames=new Map<number,unknown>();
+      socket.on('message',bytes=>{
+        const packet=JSON.parse(bytes.toString());
+        if(packet.type==='frame')frames.set(packet.tick,packet.doors);
+      });
+      socket.send(JSON.stringify({type:'join',protocol:PROTOCOL,world:'door-test',characterId,accessToken:'test'}));
+      return frames;
+    }
+    const first=await connect('one'),second=await connect('two');
+    for(let attempt=0;attempt<40;attempt++){
+      const common=[...second].find(([tick,doors])=>first.has(tick)&&JSON.stringify(doors).includes('"left":1'));
+      if(common){
+        assert.deepEqual(common[1],first.get(common[0]));
+        assert.deepEqual(common[1],[{id:'door',left:1,right:1}]);
+        return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    assert.fail('Shared entrance did not fully open');
+  } finally { await room.close(); }
 });

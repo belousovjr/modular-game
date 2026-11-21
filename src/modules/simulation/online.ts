@@ -1,3 +1,4 @@
+import { interpolateDoorPoses, readDoorPoses, type DoorPose } from '../building-interiors/index.ts';
 import { ONLINE_DAY_MS, onlineDayHour } from '../../simulation/daylight.ts';
 import type { PlaySession } from '../../core/context.ts';
 import type { CharacterSnapshot, MoveCommand, Receipt } from '../characters/index.ts';
@@ -5,7 +6,7 @@ import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record } from '../../simulatio
 
 const KEY = 'modular-game/online';
 const BUFFER_MS = 100;
-type Frame = { tick: number; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
+type Frame = { tick: number; doors: readonly DoorPose[]; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
 
 function readPlayer(value: unknown, tick: number): value is Omit<CharacterSnapshot, 'ownerId'> {
   if (!record(value)) return false;
@@ -81,6 +82,8 @@ export function createOnlineConnection(play?: PlaySession) {
         typeof packet.dayPhaseMs !== 'number' || !Number.isFinite(packet.dayPhaseMs) || packet.dayPhaseMs < 0 || packet.dayPhaseMs >= ONLINE_DAY_MS ||
         !Array.isArray(packet.players) || packet.players.length > MAX_ROOM_PLAYERS) { current.close(4002); return; }
       const tick = packet.tick;
+      const doors = readDoorPoses(packet.doors);
+      if (!doors) { current.close(4002); return; }
       const players: CharacterSnapshot[] = [];
       for (const value of packet.players) {
         if (!readPlayer(value, tick)) { current.close(4002); return; }
@@ -103,7 +106,7 @@ export function createOnlineConnection(play?: PlaySession) {
         save(packet.token);
         report('В сети');
       } else if (packet.type !== 'frame' || tick <= (frames.at(-1)?.tick ?? -1)) return;
-      frames.push({ tick, players, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
+      frames.push({ tick, players, doors, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
       if (frames.length > 16) frames.shift();
     };
     current.onclose = event => {
@@ -137,6 +140,16 @@ export function createOnlineConnection(play?: PlaySession) {
     current?.close();
   }
 
+  function displayFrames() {
+    const newest = frames.at(-1);
+    if (!newest) return undefined;
+    const target = newest.tick + Math.min(BUFFER_MS, performance.now() - newest.arrival) * .06 - BUFFER_MS * .06;
+    const next = frames.find(frame => frame.tick >= target) ?? newest;
+    const previous = frames[frames.indexOf(next) - 1];
+    const alpha = previous ? Math.max(0, (target - previous.tick) / (next.tick - previous.tick)) : 1;
+    return { newest, next, previous, alpha };
+  }
+
   return {
     endpoint,
     toggle(enabled: boolean, map: string) {
@@ -148,15 +161,20 @@ export function createOnlineConnection(play?: PlaySession) {
       const frame = frames.at(-1);
       return frame && onlineDayHour(frame.dayPhaseMs + Math.min(250, performance.now() - frame.arrival));
     },
+    doors: () => frames.at(-1)?.doors,
     latest: () => frames.at(-1)?.players ?? [],
     self: () => frames.at(-1)?.players.find(player => player.id === id),
+    displayDoors() {
+      const sample = displayFrames();
+      if (!sample) return undefined;
+      const { next, previous, alpha } = sample;
+      if (!previous || alpha === 1 || (!previous.doors.length && !next.doors.length)) return next.doors;
+      return interpolateDoorPoses(previous.doors, next.doors, alpha);
+    },
     remote() {
-      const newest = frames.at(-1);
-      if (!newest) return [];
-      const target = newest.tick + Math.min(BUFFER_MS, performance.now() - newest.arrival) * .06 - BUFFER_MS * .06;
-      const next = frames.find(frame => frame.tick >= target) ?? newest;
-      const previous = frames[frames.indexOf(next) - 1];
-      const alpha = previous ? Math.max(0, (target - previous.tick) / (next.tick - previous.tick)) : 1;
+      const sample = displayFrames();
+      if (!sample) return [];
+      const { newest, next, previous, alpha } = sample;
       return newest.players.filter(player => player.id !== id).map(player => {
         const to = next.players.find(sample => sample.id === player.id) ?? player;
         const from = previous?.players.find(sample => sample.id === player.id) ?? to;

@@ -1,3 +1,4 @@
+import { interpolateDoorPoses, readDoorPoses } from '../src/modules/building-interiors/headless.ts';
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {VertexData} from '@babylonjs/core/Meshes/mesh.vertexData.js';
@@ -483,4 +484,31 @@ test('visual floors prepare for the selected entrance or a viewpoint inside the 
   assert.equal(interiorViewHeight(source.profile,outside,true),1);
   assert.equal(interiorViewHeight(source.profile,inside,false),1);
   assert.equal(interiorViewHeight(source.profile,{x:-4.1,y:1,z:5},true),undefined);
+});
+
+test('one door authority considers all nearby actors and resumes its saved leaf positions', () => {
+  const door={id:'door',x:0,y:0,z:0,tx:1,tz:0,width:2.5,height:2.75};
+  const actor={x:0,y:0,z:2,radius:.35,height:1.8};
+  const far={...actor,z:10};
+  const entrance=createEntranceMotion([door]);
+  for(let i=0;i<12;i++)entrance.stepActors([far,actor],()=>[]);
+  const saved=entrance.snapshot();
+  assert.equal(saved.length,1);
+  assert.ok(saved[0].left>.49 && saved[0].right>.49);
+  const restored=createEntranceMotion([door]);
+  restored.restore(saved);
+  assert.deepEqual(restored.snapshot(),saved);
+  assert.deepEqual(restored.at(0,0,0),entrance.at(0,0,0));
+  for(let i=0;i<25;i++)restored.stepActors([far],()=>[]);
+  assert.deepEqual(restored.snapshot(),[]);
+});
+
+test('door snapshot interpolation handles opening and closing while rejecting malformed poses', () => {
+  const opening={id:'opening',left:1,right:.5};
+  const closing={id:'closing',left:.5,right:1};
+  assert.deepEqual(interpolateDoorPoses([closing],[opening],.5),[
+    {id:'opening',left:.5,right:.25},{id:'closing',left:.25,right:.5},
+  ]);
+  assert.equal(readDoorPoses([opening,opening]),undefined);
+  assert.equal(readDoorPoses([{...opening,left:Infinity}]),undefined);
 });

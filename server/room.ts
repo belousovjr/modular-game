@@ -1,3 +1,4 @@
+import { createEntranceMotion, type DoorPose } from '../src/modules/building-interiors/headless.ts';
 import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -5,14 +6,17 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { CharacterSpawnBlockedError, createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record, SNAPSHOT_TICKS } from '../src/simulation/online-protocol.ts';
-import type { CollisionWorld } from '../src/modules/world/headless.ts';
+import type { BuildingInteriorSource, CollisionWorld } from '../src/modules/world/headless.ts';
 
 export function startRoom(
   collision: CollisionWorld, world: string, port: number, origin: string | readonly string[],
   owns: (accessToken: string, characterId: string) => Promise<boolean>, host = '127.0.0.1',
+  interiorSources: readonly BuildingInteriorSource[] = [], restoredDoors: readonly DoorPose[] = [],
 ) {
   const origins = new Set(typeof origin === 'string' ? [origin] : origin);
-  const makeActor = createCharacterAuthorityFactory(collision);
+  const doors = createEntranceMotion(collision.doors ?? []);
+  doors.restore(restoredDoors);
+  const makeActor = createCharacterAuthorityFactory(collision, interiorSources, undefined, doors);
   const clock = createLocalAuthority();
   const epoch = randomUUID();
   const dayStart = onlineDayPhase(Date.now());
@@ -35,7 +39,7 @@ export function startRoom(
   }
 
   function frame() {
-    return { tick: clock.snapshot().tick, dayPhaseMs: onlineDayPhase(dayStart + performance.now() - startedAt), players: [...players.values()].map(player => {
+    return { tick: clock.snapshot().tick, doors: doors.snapshot(), dayPhaseMs: onlineDayPhase(dayStart + performance.now() - startedAt), players: [...players.values()].map(player => {
       const { ownerId: _owner, ...state } = player.actor.snapshot();
       return state;
     }) };
@@ -125,6 +129,7 @@ export function startRoom(
   });
 
   clock.addSystem(tick => {
+    makeActor.stepSharedDoors([...players.values()].filter(player => player.socket).map(player => player.actor.snapshot()));
     for (const player of players.values()) player.actor.step(tick);
   });
 
@@ -160,6 +165,7 @@ export function startRoom(
   });
   return {
     server,
+    doorSnapshot: doors.snapshot,
     close() {
       for (const socket of connections.keys()) socket.terminate();
       return new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
