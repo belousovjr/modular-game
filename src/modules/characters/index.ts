@@ -96,7 +96,8 @@ export const charactersModule = defineModule({
     scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {
       const state=snapshot();
-      render(online.self() ? { ...state, x: displayX, z: displayZ } : state,displayY);
+      const interpolated=!!online.self();
+      render(interpolated ? { ...state, x: displayX, z: displayZ } : state,displayY,interpolated);
       const remote=online.remote();
       for (const [id, view] of remoteViews) if (!remote.some(actor => actor.id===id)) {
         view.owner.dispose();
@@ -110,7 +111,7 @@ export const charactersModule = defineModule({
           catch (error) { owner.dispose(); throw error; }
           remoteViews.set(actor.id,view);
         }
-        view.render(actor);
+        view.render(actor,undefined,true);
       }
     };
     scope.onDispose(()=>deps.interiors.presentDoorSnapshot(undefined));

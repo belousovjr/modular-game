@@ -194,7 +194,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
     root.metadata.animationCulled=true;
   }
-  const draw=(s: CharacterSnapshot, displayY?:number) => {
+  const draw=(s: CharacterSnapshot, displayY?:number, interpolated=false) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
     const before=previous?.id===s.id?previous:null,deltaMs=scene.getEngine().getDeltaTime();
@@ -202,12 +202,11 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     const x=s.x,z=s.z;
     const dx=x-root.position.x,dy=targetHeight-root.position.y,dz=z-root.position.z;
     const gap=Math.hypot(dx,dy,dz);
-    if(displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
+    if(!interpolated&&displayY===undefined&&before&&isGroundMotion(s)&&gap>.001&&gap<.35){
       const blend=1-Math.exp(-deltaMs/45);
       root.position.set(root.position.x+dx*blend,root.position.y+dy*blend,root.position.z+dz*blend);
     }else root.position.set(x,targetHeight,z);
-    if (!before) speed=0;
-    else if (s.tick>before.tick) speed=Math.hypot(s.x-before.x,s.z-before.z)*60/(s.tick-before.tick);
+    speed=avatarHorizontalSpeed(s,before,speed,interpolated?deltaMs:undefined);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
     const onGround=isGroundMotion(s);
@@ -264,6 +263,19 @@ export function startAvatarClip(group:AnimationGroup,weight:number) {
   group.weight=weight;
   // Only the first clip applies its pose immediately. Transitions use weighted playback.
   if(weight===1)group.goToFrame(group.from);
+}
+
+export function avatarHorizontalSpeed(
+  pose: Pick<CharacterSnapshot,'x'|'z'|'tick'>,
+  previous: Pick<CharacterSnapshot,'x'|'z'|'tick'> | null,
+  speed: number,
+  presentationDeltaMs?: number,
+) {
+  if (!previous) return 0;
+  const distance=Math.hypot(pose.x-previous.x,pose.z-previous.z);
+  if (presentationDeltaMs!==undefined) return presentationDeltaMs>0 && distance<=3 ? distance*1000/presentationDeltaMs : 0;
+  const ticks=pose.tick-previous.tick;
+  return ticks>0 ? distance*60/ticks : speed;
 }
 
 type GroundGait=Pick<CharacterSnapshot,'moving'|'running'|'boosted'>;
