@@ -247,6 +247,7 @@ export const worldModule = defineModule({
     return { bounds: city.bounds, objectCount: city.placements.length+city.chunks.reduce((n,c)=>n+c.meshes.length+(c.details??[]).reduce((n,d)=>n+d.meshes.length,0),0),
       collision,streetLights,
       getMap: () => getWorldMap(city),
+      getNavigationSource: () => city,
       getBuildingProfile,
       getBuildingInteriorSources: () => getBuildingInteriorSources(city),
       setInteriorView(inside: boolean) { interiorView = inside; },

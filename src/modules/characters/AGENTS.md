@@ -45,7 +45,7 @@ tests/character-shadow.test.ts проверяет 17 клонов, общие р
 
 Округлые shadow proxy отмечены metadata.shadowFeather=.87 для мягкого контура и metadata.shadowNearOnly=true: shadows сохраняет их в первых двух каскадах и fallback, исключает из третьего дальнего каскада. Это визуальное ограничение, не состояние authority.
 
-Renderer именует root `character/<snapshot.id>` (основной остаётся character/local-player); это отладочное отражение ID authority, не источник истины. ID не влияет на проигрывание клипов.
+Renderer именует root `character/<snapshot.id>` (основной остаётся character/local-player); это отладочное отражение ID authority, не источник истины. При смене ID renderer сбрасывает историю позиции и изначальный yaw для переиспользования скелета другой моделью того же типа. Выбор клипа определяется позой нового снимка. Функция createView возвращает метод setFade(coverage) для процедурного населения. Он использует общий opaque dither на видимых мешах и учитывается при замене временного меша на GLB.
 
 ## Транспорт и локальная сборка authority
 

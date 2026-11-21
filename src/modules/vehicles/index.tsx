@@ -63,3 +63,5 @@ export const vehiclesModule=defineModule({
     return {snapshot:connection.snapshot};
   },
 });
+
+export {createTrafficCarAssets} from './view.ts';

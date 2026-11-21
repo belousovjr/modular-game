@@ -223,6 +223,7 @@ export interface CitySource {
   readonly chunks: readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[];readonly buildingIds:readonly string[];readonly details?:readonly {readonly id:string;readonly bounds:Rectangle;readonly meshes:readonly CityMesh[]}[]}[];
   readonly placements: readonly WorldPlacement[];
   readonly colliders: readonly (Rectangle & {readonly id:string;readonly minY:number;readonly maxY:number;readonly outline:readonly (readonly number[])[];readonly parts?:readonly (readonly (readonly number[])[])[]})[];
+  readonly trafficLayout?: {readonly crosswalks: readonly {readonly center:readonly number[];readonly direction:readonly number[];readonly outline:readonly (readonly number[])[]}[]};
   readonly roads: readonly {readonly id:string;readonly name:string;readonly points:readonly (readonly number[])[];readonly width:number;readonly oneway:string;readonly bridge:boolean;readonly layer:number}[];
 }
 
@@ -246,6 +247,12 @@ export function generateCity(source: CitySource): CitySource {
     if(ids.has(p.key)||!p.key.trim()||(!p.templateId.startsWith('city/')&&p.templateId!=='world/lamp')||p.position.length!==3||p.rotation.length!==3||![...p.position,...p.rotation,...Object.values(p.parameters)].every(Number.isFinite))throw new Error('Invalid city placement');ids.add(p.key);
   }
   const validRing=(ring:readonly (readonly number[])[])=>ring.length>=3&&ring.length<=256&&ring.every(p=>p.length===2&&p.every(Number.isFinite));
+  const crosswalks=source.trafficLayout?.crosswalks;
+  if (source.trafficLayout && (!Array.isArray(crosswalks) || crosswalks.length>20000 ||
+      crosswalks.some(crossing=>!Array.isArray(crossing.center)||crossing.center.length!==2||
+        !crossing.center.every(Number.isFinite)||!Array.isArray(crossing.direction)||crossing.direction.length!==2||
+        !crossing.direction.every(Number.isFinite)||Math.abs(Math.hypot(...crossing.direction)-1)>.01||
+        !Array.isArray(crossing.outline)||!validRing(crossing.outline)))) throw new Error('Invalid city crosswalks');
   let courtyardParts=0;
   for(const c of source.colliders){
     if(!validRectangle(c)||![c.minY,c.maxY].every(Number.isFinite)||c.maxY<=c.minY||!validRing(c.outline))throw new Error('Invalid city collider');

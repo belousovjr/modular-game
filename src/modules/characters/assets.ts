@@ -65,6 +65,17 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
   const root = new TransformNode('character/local-player',scene);root.rotationQuaternion=Quaternion.Identity();
   const vehicleTurnOffset=Quaternion.Identity(),identity=Quaternion.Identity();
   const clips=new Map<string,AnimationGroup>(),playing=new Set<AnimationGroup>();
+  let fade=1;
+  const visualMeshes:Mesh[]=[];
+  function setFade(coverage: number) {
+    if (fade===coverage || disposed) return;
+    fade=coverage;
+    for (const mesh of visualMeshes) if (!mesh.isDisposed()) {
+      mesh.setEnabled(fade>0);
+      geometry.setMeshFade(mesh,0,fade||1);
+    }
+    shadow.setEnabled(fade>.5);
+  }
   root.metadata = { assetStatus:'loading' };
   scope.onDispose(() => { disposed=true; entries?.dispose(); entries=null;clips.clear();playing.clear();root.dispose(); });
   const shadow=assets.createShadowProxy(root,scope);
@@ -75,6 +86,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     loading.onDispose(()=>capsule.dispose());capsule.metadata={shadowCaster:false};capsule.parent=root;capsule.position.y=.9;
     const material=new StandardMaterial('character-loading',scene);loading.onDispose(()=>material.dispose());material.diffuseColor=Color3.FromHexString('#7e929f');capsule.material=material;
     geometry.registerMeshes([capsule],loading);
+    visualMeshes.push(capsule);
   }
   const load=(container:AssetContainer | null) => {
     if (disposed || entries) return;
@@ -96,7 +108,13 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       }
       const idle=entries.animationGroups.find(group=>group.name.endsWith('/Idle_Loop'));
       if(idle&&root.isEnabled()) { idle.enableBlending=false;startAvatarClip(idle,1);active=idle;playing.add(idle); }
-      loading.dispose();root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
+      loading.dispose();
+      visualMeshes.splice(0,visualMeshes.length,...meshes);
+      for (const mesh of visualMeshes) {
+        mesh.setEnabled(fade>0);
+        geometry.setMeshFade(mesh,0,fade||1);
+      }
+      root.metadata={assetStatus:'ready',triangles:manifest.triangles,drawCalls:manifest.primitives,joints:manifest.joints};
     } catch(error) {
       entries?.dispose();entries=null;assets.reportError(error);root.metadata={assetStatus:'error',error:error instanceof Error?error.message:String(error)};
     }
@@ -110,10 +128,10 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     for(const group of playing)if(group.isPlaying){group.pause();paused.push(group);}
     root.metadata.animationCulled=true;
   }
-  return (s: CharacterSnapshot, displayY?:number) => {
+  const draw=(s: CharacterSnapshot, displayY?:number) => {
     if (disposed) return;
     root.name=`character/${s.id}`;
-    const before=previous,deltaMs=scene.getEngine().getDeltaTime();
+    const before=previous?.id===s.id?previous:null,deltaMs=scene.getEngine().getDeltaTime();
     const targetHeight=displayY??sampleHeight(s,deltaMs,!before);
     const x=s.x,z=s.z;
     const dx=x-root.position.x,dy=targetHeight-root.position.y,dz=z-root.position.z;
@@ -122,7 +140,8 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       const blend=1-Math.exp(-deltaMs/45);
       root.position.set(root.position.x+dx*blend,root.position.y+dy*blend,root.position.z+dz*blend);
     }else root.position.set(x,targetHeight,z);
-    if (previous && s.tick>previous.tick) speed=Math.hypot(s.x-previous.x,s.z-previous.z)*60/(s.tick-previous.tick);
+    if (!before) speed=0;
+    else if (s.tick>before.tick) speed=Math.hypot(s.x-before.x,s.z-before.z)*60/(s.tick-before.tick);
     previous=s;
     if (!entries){root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(0,s.yaw,0));return;}
     const onGround=isGroundMotion(s);
@@ -130,7 +149,11 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
     const gait=sampleGroundMotion(s,speed,deltaMs,!onGround||!wasOnGround);
     if(!assets.shouldAnimate(s.x,s.y,s.z)){
       pauseAnimations();
-      if(root.rotationQuaternion)smoothCharacterRotation(root.rotationQuaternion,s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0),deltaMs,root.rotationQuaternion);
+      if (root.rotationQuaternion) {
+        const target=s.vehicleRotation?Quaternion.FromArray(s.vehicleRotation):Quaternion.FromEulerAngles(0,s.yaw,0);
+        if (before) smoothCharacterRotation(root.rotationQuaternion,target,deltaMs,root.rotationQuaternion);
+        else root.rotationQuaternion.copyFrom(target);
+      }
       return;
     }
     for(const group of paused)group.restart();paused.length=0;root.metadata.animationCulled=false;
@@ -167,6 +190,7 @@ export function createAvatar(scene: Scene, geometry: ReturnType<typeof geometryM
       name==='Walk_Loop'?Math.max(.65,Math.min(1.2,gait.speed/1.6)):
       name==='Swim_Fwd_Loop'&&s.boosted?1.35:1;
   };
+  return Object.assign(draw,{setFade});
 }
 
 export function startAvatarClip(group:AnimationGroup,weight:number) {

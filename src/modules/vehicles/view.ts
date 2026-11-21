@@ -11,6 +11,27 @@ import type {Scope} from '../../core/modules.ts';
 import type {geometryModule} from '../geometry/index.ts';
 import type {VehicleSnapshot} from './headless.ts';
 
+async function loadCar(scene: Scene, scope: Scope, signal: AbortSignal) {
+  const response=await fetch(`${import.meta.env.BASE_URL}models/car/car.glb`,{signal});
+  if (!response.ok) throw new Error(`Car HTTP ${response.status}`);
+  const bytes=new Uint8Array(await response.arrayBuffer());
+  if (signal.aborted) return;
+  const container=await LoadAssetContainerAsync(bytes,scene,{pluginExtension:'.glb'});
+  if (signal.aborted) { container.dispose(); return; }
+  scope.onDispose(()=>container.dispose());
+  const detail=new Texture(`${import.meta.env.BASE_URL}models/car/detail.png`,scene,false,false);
+  scope.onDispose(()=>detail.dispose());
+  detail.coordinatesIndex=1;
+  for (const material of container.materials) if (material instanceof PBRMaterial && material.name==='car/textured') {
+    material.detailMap.texture=detail;
+    material.detailMap.isEnabled=true;
+    material.detailMap.diffuseBlendLevel=.24;
+    material.detailMap.bumpLevel=0;
+    material.detailMap.roughnessBlendLevel=.15;
+  }
+  return container;
+}
+
 function sameComponents(a:readonly number[],b:readonly number[]){
   return a.every((value,index)=>value===b[index]);
 }
@@ -23,12 +44,8 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
   const wheels:{node:TransformNode;rotation:Quaternion}[]=[];
   let previous:VehicleSnapshot|undefined;
   const ready=(async()=>{
-    const response=await fetch(`${import.meta.env.BASE_URL}models/car/car.glb`,{signal:controller.signal});if(!response.ok)throw new Error(`Car HTTP ${response.status}`);
-    const bytes=new Uint8Array(await response.arrayBuffer());if(stopped)return;
-    const container=await LoadAssetContainerAsync(bytes,scene,{pluginExtension:'.glb'});if(stopped){container.dispose();return;}
-    scope.onDispose(()=>container.dispose());container.addAllToScene();
-    const detail=new Texture(`${import.meta.env.BASE_URL}models/car/detail.png`,scene,false,false);scope.onDispose(()=>detail.dispose());detail.coordinatesIndex=1;
-    for(const material of container.materials)if(material instanceof PBRMaterial&&material.name==='car/textured'){material.detailMap.texture=detail;material.detailMap.isEnabled=true;material.detailMap.diffuseBlendLevel=.24;material.detailMap.bumpLevel=0;material.detailMap.roughnessBlendLevel=.15;}
+    const container=await loadCar(scene,scope,controller.signal);if(!container||stopped)return;
+    container.addAllToScene();
     for(const node of container.rootNodes)node.parent=root;
     const nodes=root.getDescendants().filter((n):n is TransformNode=>n instanceof TransformNode);
     left=nodes.find(n=>n.name==='door/left');right=nodes.find(n=>n.name==='door/right');steering=nodes.find(n=>n.name==='steering');
@@ -62,4 +79,46 @@ export function createCarView(scene:Scene,geometry:ReturnType<typeof geometryMod
     }
     previous=s;
   }};
+}
+
+export function createTrafficCarAssets(scene: Scene,scope: Scope) {
+  const controller=new AbortController();
+  scope.onDispose(()=>controller.abort());
+  let container: Awaited<ReturnType<typeof loadCar>>;
+  let pending: Promise<void>|undefined;
+  let error='';
+  return {
+    load() {
+      pending??=loadCar(scene,scope,controller.signal).then(value=>{container=value;})
+        .catch((cause: unknown)=>{if(!controller.signal.aborted)error=cause instanceof Error?cause.message:String(cause);});
+    },
+    status:()=>error,
+    create(owner: Scope,id: string) {
+      if (!container || controller.signal.aborted || error) return;
+      const root=new TransformNode(id,scene);
+      root.rotationQuaternion=Quaternion.Identity();
+      owner.onDispose(()=>root.dispose());
+      const entries=container.instantiateModelsToScene(name=>name,false,{doNotInstantiate:true});
+      owner.onDispose(()=>entries.dispose());
+      for(const node of entries.rootNodes)node.parent=root;
+      const wheels=root.getDescendants().flatMap(node=>{
+        if (!(node instanceof TransformNode)||!node.name.startsWith('wheel/')) return [];
+        return [{node,front:node.name.startsWith('wheel/front/'),
+          rotation:node.rotationQuaternion?.clone()??Quaternion.FromEulerVector(node.rotation)}];
+      });
+      if (wheels.length!==4) { error='GLB: не найдены четыре колеса фоновой машины'; return; }
+      for (const mesh of root.getChildMeshes()) {
+        mesh.isPickable=false;
+        mesh.metadata={...mesh.metadata,shadowCaster:false};
+      }
+      return (pose: { point: readonly [number,number,number]; yaw: number; steering: number; wheelDistance: number; pitch: number })=>{
+        root.position.set(pose.point[0],pose.point[1],pose.point[2]);
+        root.rotationQuaternion?.copyFrom(Quaternion.FromEulerAngles(pose.pitch,pose.yaw,0));
+        const spin=Quaternion.RotationAxis(Vector3.Right(),pose.wheelDistance/.43);
+        const steer=Quaternion.RotationAxis(Vector3.Up(),-pose.steering);
+        for (const {node,front,rotation} of wheels)
+          node.rotationQuaternion=(front?steer.multiply(spin):spin).multiply(rotation);
+      };
+    },
+  };
 }
