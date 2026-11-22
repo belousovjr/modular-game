@@ -6,6 +6,7 @@ import {createEntranceMotion,createInteriorCollision,type DoorPose} from '../bui
 export type LocomotionMode = 'walk' | 'fly' | 'swim';
 export type CharacterStance = 'standing' | 'crouching' | 'prone';
 interface LocomotionInput {readonly boost:boolean;readonly lift:number;readonly flight:boolean|null}
+export const FALL_ACCELERATION = 16;
 export const LOCOMOTION_SPEEDS = Object.freeze({walk:1.8,crouch:1.05,crawl:.65,run:7,sprint:22,fly:25,fastFly:70,swim:3.1,fastSwim:5.2});
 export interface MoveCommand { readonly type: 'move'; readonly characterId: string; readonly sequence: number; readonly tick: number; readonly x: number; readonly z: number; readonly run: boolean; readonly jump: boolean; readonly facing?: number | null; readonly locomotion?:LocomotionInput; readonly stance?:CharacterStance }
 export interface VehicleCharacterFrame {
@@ -386,7 +387,7 @@ export function createCharacterAuthorityFactory(world: CollisionWorld, interiorS
       }
       if (!grounded) {
         airborneTicks++;
-        verticalSpeed -= 16 / 60;
+        verticalSpeed -= FALL_ACCELERATION / 60;
         let nextY = y + verticalSpeed / 60;
         let support=ground(x,z,overWater(x,z)?y+.3:Infinity);
         const height=HEIGHT[stance];
