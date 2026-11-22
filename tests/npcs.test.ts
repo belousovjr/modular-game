@@ -365,3 +365,21 @@ test('a settled wreck needs a continuous hidden interval before it is retired',(
   assert.deepEqual(retired,[seed.id]);
   assert.deepEqual(traffic.settledWrecks(),[]);
 });
+
+test('packed navigation cells retain layered surfaces, negative boundaries and shared triangle order',()=>{
+  const bounds={minX:-24,maxX:24,minZ:-24,maxZ:24},spawn={x:-8,z:0};
+  const surface=(height:number,kind:string)=>({surface:kind,
+    positions:[-24,height,-24,24,height,-24,24,height,24,-24,height,24],indices:[0,1,2,0,2,3]});
+  const chunks=function*(){
+    yield {meshes:[surface(0,'sidewalk')]};
+    yield {meshes:[surface(2,'road')]};
+    yield {meshes:[surface(2,'sidewalk')]};
+  };
+  const nav=createNpcNavigation({id:'packed',version:1,bounds,roads:[],chunks:chunks()},{spawn,blockers:[]},[]);
+  for(const x of [-16,-8,0,8,16])for(const z of [-16,-8,0,8,16]) {
+    assert.deepEqual(nav.roadPoint(x,z),[x,2,z]);
+    const foot=nav.findFoot(x,z);
+    assert.ok(foot);assert.equal(foot.point[1],2);assert.equal(foot.cost,1,'equal-height pavement wins over road');
+  }
+  assert.equal(nav.roadPoint(100,100),undefined);
+});

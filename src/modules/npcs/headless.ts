@@ -150,7 +150,7 @@ export type NavigationSource = Pick<CitySource,'id'|'version'|'bounds'|'roads'|'
 export function createNpcNavigation(city: NavigationSource, world: Pick<CollisionWorld,'spawn'|'blockers'|'doors'>, interiors: readonly BuildingInteriorSource[]) {
   const {bounds}=city;
   const within=(x: number,z: number) => x>=bounds.minX&&x<=bounds.maxX&&z>=bounds.minZ&&z<=bounds.maxZ;
-  const triangles=new Map<string,number[]>(), boxes=new Map<string,CollisionBox[]>();
+  const triangles=new Map<string,{offset:number;count:number}>(), boxes=new Map<string,CollisionBox[]>();
   const triangleBlocks: Float64Array[]=[];
   let triangleCount=0;
   const walkSites=new Map<string,{key:string;x:number;z:number;area:number;points:Point[]}>();
@@ -190,9 +190,26 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
           }
         }
         cells(Math.min(a[0],b[0],c[0]),Math.max(a[0],b[0],c[0]),Math.min(a[2],b[2],c[2]),Math.max(a[2],b[2],c[2]),
-          key=>add(triangles,key,triangle),TERRAIN_CELL);
+          key=>{
+            const cell=triangles.get(key);
+            if (cell) cell.count++;
+            else triangles.set(key,{offset:0,count:1});
+          },TERRAIN_CELL);
       }
     }
+  }
+  // Pack cell references once: boxed JS arrays otherwise dominate startup heap.
+  let referenceCount=0;
+  for (const cell of triangles.values()) { cell.offset=referenceCount; referenceCount+=cell.count; cell.count=0; }
+  const references=new Uint32Array(referenceCount);
+  for (let triangle=0;triangle<triangleCount;triangle++) {
+    const block=triangleBlocks[Math.floor(triangle/TRIANGLES_PER_BLOCK)];
+    const offset=(triangle%TRIANGLES_PER_BLOCK)*TRIANGLE_STRIDE;
+    cells(Math.min(block[offset],block[offset+3],block[offset+6]),Math.max(block[offset],block[offset+3],block[offset+6]),
+      Math.min(block[offset+2],block[offset+5],block[offset+8]),Math.max(block[offset+2],block[offset+5],block[offset+8]),key=>{
+        const cell=triangles.get(key)!;
+        references[cell.offset+cell.count++]=triangle;
+      },TERRAIN_CELL);
   }
   for (const box of [...world.blockers].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)) {
     revision=hash(geometryJSON([box.id,box.minX,box.maxX,box.minY,box.maxY,box.minZ,box.maxZ,box.outline]),revision);
@@ -202,7 +219,9 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   const a: [number,number,number]=[0,0,0], b: [number,number,number]=[0,0,0], c: [number,number,number]=[0,0,0];
   function ground(x: number,z: number,road=false) {
     let best: { point: Point; cost: number } | undefined;
-    for (const triangle of triangles.get(tile(x,z))??[]) {
+    const cell=triangles.get(tile(x,z));
+    for (let i=cell?.offset??0,end=i+(cell?.count??0);i<end;i++) {
+      const triangle=references[i];
       const block=triangleBlocks[Math.floor(triangle/TRIANGLES_PER_BLOCK)];
       const offset=(triangle%TRIANGLES_PER_BLOCK)*TRIANGLE_STRIDE;
       const cost=block[offset+9];
