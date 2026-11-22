@@ -1,16 +1,13 @@
+import { roomHttpUrl } from './room-endpoint.ts';
 import { AlertDialog, Button, Callout, Card, DataList, Flex, Heading, Link, Text, Theme } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import { accessToken } from './auth.ts';
 import type { RoomAdminStatus } from './room-admin-status.ts';
 
 async function request<T>(path:string,method:'GET'|'POST',signal:AbortSignal) {
-  const endpoint=import.meta.env.VITE_GAME_WS_URL || (import.meta.env.DEV?'ws://127.0.0.1:5177/room':'');
-  if(!endpoint)throw new Error('Адрес игровой комнаты не настроен.');
   const token=await accessToken();
-  const room=new URL(endpoint);
-  room.protocol=room.protocol==='wss:'?'https:':'http:';
   const start=performance.now();
-  const response=await fetch(new URL(path,room),{method,signal,headers:{Authorization:`Bearer ${token}`}});
+  const response=await fetch(roomHttpUrl(path),{method,signal,headers:{Authorization:`Bearer ${token}`}});
   if(!response.ok){
     const data=await response.json().catch(()=>null);
     throw new Error(data?.error??'Комната недоступна.');

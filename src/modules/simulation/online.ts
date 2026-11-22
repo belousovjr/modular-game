@@ -1,3 +1,4 @@
+import { roomSocketUrl as endpoint } from '../../room-endpoint.ts';
 import { createNpcClock } from './npc-clock.ts';
 import { interpolateDoorPoses, readDoorPoses, type DoorPose } from '../building-interiors/index.ts';
 import { ONLINE_DAY_MS, onlineDayHour } from '../../simulation/daylight.ts';
@@ -28,8 +29,6 @@ function readPlayer(value: unknown, tick: number): value is Omit<CharacterSnapsh
 }
 
 export function createOnlineConnection(play?: PlaySession) {
-  const endpoint = import.meta.env.VITE_GAME_WS_URL ||
-    (import.meta.env.DEV ? 'ws://127.0.0.1:5177/room' : '');
   let world = '';
   let socket: WebSocket | undefined;
   let desired = false;

@@ -1,10 +1,9 @@
-import { attachDatabasePool } from '@vercel/functions';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Pool } from 'pg';
 
 export function createDbHealth(connectionString: string | undefined) {
   let pool: Pool | undefined;
-  return async (request: IncomingMessage, response: ServerResponse) => {
+  async function handle(request: IncomingMessage, response: ServerResponse) {
     response.setHeader('Content-Type', 'application/json');
     response.setHeader('Cache-Control', 'no-store');
     if (request.method !== 'GET') {
@@ -20,7 +19,6 @@ export function createDbHealth(connectionString: string | undefined) {
       if (!pool) {
         pool = new Pool({ connectionString, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
         pool.on('error', () => console.error('PostgreSQL idle connection failed'));
-        if (process.env.VERCEL === '1') attachDatabasePool(pool);
       }
       const result = await pool.query<{ ready: number }>('SELECT 1 AS ready');
       if (result.rows[0]?.ready !== 1) throw new Error('Unexpected health query result');
@@ -28,7 +26,6 @@ export function createDbHealth(connectionString: string | undefined) {
     } catch {
       response.writeHead(503).end(JSON.stringify({ ok: false, database: 'unavailable' }));
     }
-  };
+  }
+  return {handle,close:()=>pool?.end()};
 }
-
-export default createDbHealth(process.env.DATABASE_URL);

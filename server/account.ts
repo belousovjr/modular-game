@@ -1,4 +1,3 @@
-import { attachDatabasePool } from '@vercel/functions';
 import { createRemoteJWKSet, errors, jwtVerify } from 'jose';
 import { Pool } from 'pg';
 
@@ -13,7 +12,6 @@ export function createAccounts(env: AccountConfig) {
   const keys = createRemoteJWKSet(new URL(NEON_AUTH_JWKS_URL));
   const pool = new Pool({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
   pool.on('error', () => console.error('PostgreSQL idle connection failed'));
-  if (process.env.VERCEL === '1') attachDatabasePool(pool);
 
   async function user(token: string) {
     try {

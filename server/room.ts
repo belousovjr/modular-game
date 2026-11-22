@@ -3,7 +3,7 @@ import { createVehicleAuthority } from '../src/modules/vehicles/headless.ts';
 import { createEntranceMotion, type DoorPose } from '../src/modules/building-interiors/headless.ts';
 import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { CharacterSpawnBlockedError, characterBody, createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
@@ -23,6 +23,7 @@ export function startRoom(
   prefetchTerrain?: (x:number,z:number)=>void,
   npcs?: RoomNpcs,
   authorizeAdmin?: (accessToken:string)=>Promise<unknown>,
+  api?: ReadonlyMap<string,(request:IncomingMessage,response:ServerResponse)=>Promise<void>>,
 ) {
   let ticks = 0, tickMs = 0, maxTickMs = 0, slowTicks = 0, maxPendingTicks = 0;
   let snapshots = 0, snapshotBytes = 0, outboundSnapshotBytes = 0, serializationMs = 0;
@@ -41,10 +42,16 @@ export function startRoom(
   const connections = new Map<WebSocket, { alive: boolean }>();
   let nextResetAt=0, resetting=false;
   const http=createServer(async (request,response)=>{
-    const path=request.url;
+    const path=request.url?.split('?')[0]??'';
     const method=request.method;
     const requestOrigin=request.headers.origin;
-    if(!authorizeAdmin || (path!=='/admin/status' && path!=='/admin/npcs/reset')){
+    if(method==='GET' && path==='/healthz'){
+      response.writeHead(200,{'Cache-Control':'no-store'}).end('ok');
+      return;
+    }
+    const handler=api?.get(path);
+    const admin=authorizeAdmin && (path==='/admin/status'||path==='/admin/npcs/reset');
+    if(!handler && !admin){
       response.writeHead(404).end();
       return;
     }
@@ -56,9 +63,10 @@ export function startRoom(
     response.setHeader('Vary','Origin');
     response.setHeader('Cache-Control','no-store');
     if(method==='OPTIONS'){
-      response.writeHead(204,{'Access-Control-Allow-Methods':'GET, POST','Access-Control-Allow-Headers':'Authorization','Access-Control-Max-Age':'300'}).end();
+      response.writeHead(204,{'Access-Control-Allow-Methods':'GET, POST','Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Max-Age':'300'}).end();
       return;
     }
+    if(handler){await handler(request,response);return;}
     function json(status:number,data:RoomAdminStatus|{error:string}|{ok:true}){
       response.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(data));
     }
@@ -68,7 +76,7 @@ export function startRoom(
     }
     const token=/^Bearer (\S+)$/i.exec(request.headers.authorization??'')?.[1];
     try {
-      if(!token || !await authorizeAdmin(token)){
+      if(!token || !await authorizeAdmin?.(token)){
         json(401,{error:'Войдите в аккаунт снова.'});
         return;
       }

@@ -11,6 +11,7 @@ import { generateCity } from '../src/modules/world-generation/headless.ts';
 import { ONLINE_DAY_MS, onlineDayHour, onlineDayPhase } from '../src/simulation/daylight.ts';
 import { PROTOCOL, readNpcFrame, readVehicle, type NpcFrame, type VehicleCommand, type VehicleSnapshot } from '../src/simulation/online-protocol.ts';
 import { startRoom } from './room.ts';
+import { createCharactersHandler } from './api/characters.ts';
 
 type Actor = { id: string; x: number; z: number; lastSequence: number; moving: boolean; vehicleId?: string; vehicleAnimation?: string };
 type Packet = { type: string; id: string; token: string; epoch: string; tick: number; dayPhaseMs: number; sequence: number;
@@ -292,8 +293,14 @@ test('room sends nearby NPC recipes and lets authenticated users reset the popul
   const npcs=await createRoomNpcs(nav,world);
   const collision={bounds:nav.bounds,spawn:nav.spawn,baseHeight:0,slopeX:0,floors:[],blockers:[]};
   let joins=0;
+  const characters=createCharactersHandler({
+    user:async token=>token==='session'?'owner':undefined,
+    list:async()=>[{id:'center',name:'Центр'}],
+    create:async(owner,name)=>({id:owner,name}),
+  });
   const room=startRoom(collision,world,0,origin,async()=>true,undefined,[],[],
-    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs,async token=>token==='session');
+    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs,async token=>token==='session',
+    new Map([['/api/characters',characters]]));
   try {
     await once(room.server,'listening');
     const address=room.server.address();
@@ -310,6 +317,16 @@ test('room sends nearby NPC recipes and lets authenticated users reset the popul
     for(const id of ids(local))assert.ok(!ids(remote).has(id),'far client must not receive central routes');
     const admin=`http://127.0.0.1:${address.port}/admin`;
     const headers={Origin:origin,Authorization:'Bearer session'};
+    const health=await fetch(new URL('/healthz',admin));
+    assert.equal(health.status,200);
+    const charactersUrl=new URL('/api/characters',admin);
+    assert.equal((await fetch(charactersUrl)).status,401);
+    const list=await fetch(charactersUrl,{headers});
+    assert.equal(list.headers.get('access-control-allow-origin'),origin);
+    assert.deepEqual(await list.json(),{characters:[{id:'center',name:'Центр'}]});
+    const created=await fetch(charactersUrl,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({name:'Новый герой'})});
+    assert.equal(created.status,201);
+    assert.deepEqual(await created.json(),{character:{id:'owner',name:'Новый герой'}});
     const preflight=await fetch(admin+'/status',{method:'OPTIONS',headers:{
       Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'authorization',
     }});

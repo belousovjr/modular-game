@@ -28,13 +28,31 @@ npm run preview
 
 Neon Auth хранит аккаунты и сеансы в `neon_auth`, миграция `npm run db:migrate` создаёт `public.characters` со ссылкой на аккаунт. У одного аккаунта может быть несколько персонажей. Каждый персонаж управляется одним подключением одновременно. Временный разрыв или перезагрузка восстанавливают выбранного персонажа, пока сессия действительна.
 
-Веб-приложению и игровому процессу нужны `DATABASE_URL`, `NEON_AUTH_BASE_URL` и `NEON_AUTH_JWKS_URL` одной ветки. Для миграций нужен `DATABASE_URL_UNPOOLED`. Локально эти переменные подтягивает `neon deploy`. Для Vercel дополнительно задать `VITE_GAME_WS_URL` с публичным WSS-адресом Node-процесса и добавить Origin деплоя в Neon Auth и `GAME_ORIGIN` игрового процесса. По умолчанию комната слушает `127.0.0.1:5177/room`. При смене порта задать `GAME_PORT` и `VITE_GAME_WS_URL`.
+Локально игровому серверу нужны `DATABASE_URL`, `NEON_AUTH_BASE_URL` и `NEON_AUTH_JWKS_URL` одной ветки. Для миграций нужен `DATABASE_URL_UNPOOLED`. Эти значения можно получить через `neon deploy`. По умолчанию Vite открывает `http://localhost:5175`, а игровая комната слушает `127.0.0.1:5177`. Vite проксирует локальный `/api` в игровой сервер. Если меняете порт комнаты, задайте `GAME_PORT` и `VITE_GAME_WS_URL` в `.env.local`. Для продакшена см. [деплой на Render и Vercel](#деплой-на-render-и-vercel).
 
 Онлайн использует фиксированный профиль окружения Чикаго и управления. Входные двери зданий общие для игроков. Neon хранит контрольные точки створок по `GAME_ROOM_ID` (по умолчанию `local`) и версии карты. На один ключ запускается один процесс authority. В комнате доступны общий автомобиль и NPC. После применения миграции `003-world-npcs.sql` через `npm run db:migrate` сиды NPC и остановившиеся повреждённые машины сохраняются по идентификатору комнаты и версии навигации. Сохранение позы героя после рестарта остаётся отдельной задачей. Тест живых сокетов — `npm run test:online`. Замер нагрузки комнаты — `npm run bench:room`. [Результаты и методика](docs/PERFORMANCE_BASELINE.md#серверная-комната-chicago-loop). См. [план мультиплеера](docs/MULTIPLAYER.md).
 
+## Деплой на Render и Vercel
+
+1. **Подготовьте Neon.** Возьмите `DATABASE_URL` (pooled), `NEON_AUTH_BASE_URL` и `NEON_AUTH_JWKS_URL` одной ветки. Для новой ветки задайте локально `DATABASE_URL_UNPOOLED` этой ветки и выполните `npm run db:migrate`. В Neon Auth добавьте точный Origin фронтенда, например `https://my-game.vercel.app`, без пути и завершающего слеша. [Trusted domains](https://neon.com/docs/auth/guides/configure-domains.md)
+2. **Поднимите сервер.** В Render выберите **New → Web Service**, подключите этот репозиторий и нужную ветку. Runtime — **Node**, Root Directory оставьте пустым. Build Command — `npm ci && npm run prepare:room`. Start Command — `npm start`. Health Check Path — `/healthz`. Оставьте один экземпляр комнаты. [Render Web Services](https://render.com/docs/web-services)
+3. **Задайте окружение Render** и запустите деплой.
+
+   | Переменная | Значение |
+   | --- | --- |
+   | `DATABASE_URL` | Pooled URL базы Neon |
+   | `NEON_AUTH_BASE_URL` | URL Neon Auth этой ветки |
+   | `NEON_AUTH_JWKS_URL` | JWKS URL той же ветки |
+   | `GAME_ORIGIN` | Точный Origin фронтенда Vercel, например `https://my-game.vercel.app`. Несколько Origins перечисляются через запятую |
+   | `GAME_ROOM_ID` | Существующий ID комнаты для сохранения дверей и NPC. Если раньше переменная не задавалась, использовался `local` |
+
+   Render передаёт `PORT` сам. Когда сервис станет Live, скопируйте его HTTPS-адрес и проверьте `/healthz` и `/api/db-health`. Если предыдущий сервер использует ту же БД и ID комнаты, штатно остановите его перед первым запуском Render, чтобы контрольные точки писал один процесс.
+4. **Подключите фронтенд.** В Vercel импортируйте тот же репозиторий или откройте существующий проект. Root Directory — корень репозитория. В окружении **Production** задайте `VITE_NEON_AUTH_URL` со значением `NEON_AUTH_BASE_URL` и `VITE_GAME_WS_URL`, например `wss://my-game-server.onrender.com/room`, подставив адрес Render из шага 3. Сделайте Redeploy. Через этот адрес фронтенд определяет и HTTPS-хост API. `DATABASE_URL`, `DATABASE_URL_UNPOOLED` и `NEON_AUTH_JWKS_URL` фронтенду не нужны. [Переменные и Redeploy в Vercel](https://vercel.com/docs/environment-variables/managing-environment-variables)
+5. **Проверьте запуск.** Откройте `/play`, войдите, выберите или создайте персонажа. Затем откройте `/admin` и убедитесь, что метрики приходят. Если домен Vercel узнали позже, добавьте его в Trusted Domains Neon и `GAME_ORIGIN` Render. Деплой Render переподключает клиентов. Free-инстансы засыпают без входящего трафика, поэтому для постоянно доступной комнаты нужен план без засыпания. [WebSockets на Render](https://render.com/docs/websocket) · [Ограничения Free](https://render.com/docs/free)
+
 ## Neon PostgreSQL
 
-`neon deploy` применяет конфигурацию `neon.ts` к связанной ветке и подтягивает параметры подключения. Сервер читает pooled `DATABASE_URL` из `.env.local`, `.env` или окружения. Для Vercel задайте `DATABASE_URL` в окружении проекта.
+`neon deploy` применяет конфигурацию `neon.ts` к связанной ветке и подтягивает параметры подключения. Сервер читает pooled `DATABASE_URL` из `.env.local`, `.env` или окружения. На Render задайте `DATABASE_URL` в окружении Web Service.
 
 Проверка после запуска `npm run dev`:
 
@@ -43,7 +61,7 @@ curl --fail-with-body http://127.0.0.1:5175/api/db-health
 # {"ok":true,"database":"postgres"}
 ```
 
-Маршрут выполняет `SELECT 1` и возвращает HTTP 503, если подключение отсутствует или недоступно. Игровые таблицы и сохранения будут добавлены вместе с первой схемой мира.
+Маршрут выполняет `SELECT 1` и возвращает HTTP 503, если подключение отсутствует или недоступно. Применяйте миграции к используемой ветке Neon перед первым запуском комнаты.
 
 ## Что уже есть
 

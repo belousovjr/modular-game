@@ -1,3 +1,4 @@
+import { roomHttpUrl } from './room-endpoint.ts';
 import { Badge, Box, Button, Callout, Card, Flex, Heading, Link, Popover, Text, TextField, Theme } from '@radix-ui/themes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPanels, usePanels } from './core/panels.ts';
@@ -14,13 +15,13 @@ function accountView(user: { id: string; email?: string; user_metadata: Record<s
 }
 
 async function characterRequest<T>(name?: string): Promise<T> {
-  const response = await fetch('/api/characters', {
+  const response = await fetch(roomHttpUrl('/api/characters'), {
     method: name === undefined ? 'GET' : 'POST',
     headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' },
     body: name === undefined ? undefined : JSON.stringify({ name }),
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? 'Сервис персонажей недоступен.');
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) throw new Error(data?.error ?? 'Сервис персонажей недоступен.');
   return data;
 }
 
