@@ -7,10 +7,10 @@ import { readNpcCheckpoint, type NpcFrame } from '../src/simulation/online-proto
 
 type Observer = Pick<CharacterSnapshot,'x'|'z'>;
 
-export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>, room:string, url?:string) {
+export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>, room:string, url?:string, population?:number) {
   const pool=url?new Pool({connectionString:url,max:1,connectionTimeoutMillis:5000,query_timeout:10000}):undefined;
   pool?.on('error',()=>console.error('NPC storage connection failed'));
-  let authority=createNpcAuthority(nav,0);
+  let authority=createNpcAuthority(nav,0,population);
   let offset=0, wrecks:NpcFrame['corrections']=[];
   try {
     const saved=await pool?.query<{state:unknown}>(
@@ -18,6 +18,10 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
     if(saved?.rows.length){
       const state=readNpcCheckpoint(saved.rows[0].state,nav.version);
       if(!state)throw new Error('Invalid world NPC checkpoint');
+      const savedPopulation=state.scenarios.length+state.crowds.reduce((total,group)=>total+group.count,0);
+      if (population!==undefined && savedPopulation>population) {
+        throw new Error('Saved NPC population exceeds GAME_NPC_POPULATION. Use a separate GAME_ROOM_ID or increase the limit.');
+      }
       authority.restore(state);
       offset=state.tick;
       wrecks=state.wrecks;
@@ -71,7 +75,7 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
     reset(){
       resetting??=(async()=>{
         await writing?.catch(()=>{});
-        const fresh=createNpcAuthority(nav,current);
+        const fresh=createNpcAuthority(nav,current,population);
         await save(fresh,[]);
         authority=fresh;
         traffic=makeTraffic();

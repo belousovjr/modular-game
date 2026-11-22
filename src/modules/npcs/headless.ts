@@ -22,13 +22,15 @@ const CELL = 32;
 const GRID = 2;
 export const NPC_RADIUS = 76;
 export const TRAFFIC_RADIUS = 155;
+export const DEFAULT_NPC_POPULATION = 13900;
 const LEAD_TICKS = 180;
 const TERRAIN_CELL = 8;
 const WALK_COVERAGE_CELL = 36;
 const SURFACES = new Map([['sidewalk', 1], ['park-path', 1], ['terrain', 1.45], ['urban-ground', 1.7], ['curb', 1.25], ['road', 3.2]]);
 export function isNpcSurface(surface: string) { return SURFACES.has(surface); }
 
-type Triangle = { a: Point; b: Point; c: Point; cost: number };
+const TRIANGLES_PER_BLOCK = 4096;
+const TRIANGLE_STRIDE = 10;
 const cellKey = (x: number, z: number) => `${x}/${z}`;
 function distance(a: Point,b: Point) {
   const dx=b[0]-a[0],dy=b[1]-a[1],dz=b[2]-a[2];
@@ -142,13 +144,15 @@ function search(start: Node, goal: Node, links: (node: Node) => readonly Node[],
   }
 }
 
-type NavigationSource = Pick<CitySource,'id'|'version'|'bounds'|'roads'|'trafficLayout'> &
-  {readonly chunks:readonly {readonly meshes:readonly CityMesh[]}[]};
+export type NavigationSource = Pick<CitySource,'id'|'version'|'bounds'|'roads'|'trafficLayout'> &
+  {readonly chunks:Iterable<{readonly meshes:readonly CityMesh[]}>};
 
 export function createNpcNavigation(city: NavigationSource, world: Pick<CollisionWorld,'spawn'|'blockers'|'doors'>, interiors: readonly BuildingInteriorSource[]) {
   const {bounds}=city;
   const within=(x: number,z: number) => x>=bounds.minX&&x<=bounds.maxX&&z>=bounds.minZ&&z<=bounds.maxZ;
-  const triangles=new Map<string,Triangle[]>(), boxes=new Map<string,CollisionBox[]>();
+  const triangles=new Map<string,number[]>(), boxes=new Map<string,CollisionBox[]>();
+  const triangleBlocks: Float64Array[]=[];
+  let triangleCount=0;
   const walkSites=new Map<string,{key:string;x:number;z:number;area:number;points:Point[]}>();
   const siteRandom=random(hash(city.id));
   // Derived building geometry can differ by a few ULPs between JavaScript runtimes.
@@ -163,7 +167,10 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
       const point=(i: number): Point => [mesh.positions[3*i],mesh.positions[3*i+1],mesh.positions[3*i+2]];
       for (let i=0; i<mesh.indices.length; i+=3) {
         const a=point(mesh.indices[i]), b=point(mesh.indices[i+1]), c=point(mesh.indices[i+2]);
-        const t={a,b,c,cost};
+        const triangle=triangleCount++;
+        const slot=triangle%TRIANGLES_PER_BLOCK;
+        if (slot===0) triangleBlocks.push(new Float64Array(TRIANGLES_PER_BLOCK*TRIANGLE_STRIDE));
+        triangleBlocks[triangleBlocks.length-1].set([...a,...b,...c,cost],slot*TRIANGLE_STRIDE);
         if (cost<=1.7) {
           const x=(a[0]+b[0]+c[0])/3,z=(a[2]+b[2]+c[2])/3;
           const ix=Math.floor(x/WALK_COVERAGE_CELL),iz=Math.floor(z/WALK_COVERAGE_CELL);
@@ -183,7 +190,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
           }
         }
         cells(Math.min(a[0],b[0],c[0]),Math.max(a[0],b[0],c[0]),Math.min(a[2],b[2],c[2]),Math.max(a[2],b[2],c[2]),
-          key=>add(triangles,key,t),TERRAIN_CELL);
+          key=>add(triangles,key,triangle),TERRAIN_CELL);
       }
     }
   }
@@ -192,10 +199,19 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
     cells(box.minX-2,box.maxX+2,box.minZ-2,box.maxZ+2,key=>add(boxes,key,box),TERRAIN_CELL);
   }
   const tile=(x: number,z: number)=>cellKey(Math.floor(x/TERRAIN_CELL),Math.floor(z/TERRAIN_CELL));
+  const a: [number,number,number]=[0,0,0], b: [number,number,number]=[0,0,0], c: [number,number,number]=[0,0,0];
   function ground(x: number,z: number,road=false) {
     let best: { point: Point; cost: number } | undefined;
-    for (const {a,b,c,cost} of triangles.get(tile(x,z))??[]) {
+    for (const triangle of triangles.get(tile(x,z))??[]) {
+      const block=triangleBlocks[Math.floor(triangle/TRIANGLES_PER_BLOCK)];
+      const offset=(triangle%TRIANGLES_PER_BLOCK)*TRIANGLE_STRIDE;
+      const cost=block[offset+9];
       if (road && cost!==3.2) continue;
+      for (let axis=0; axis<3; axis++) {
+        a[axis]=block[offset+axis];
+        b[axis]=block[offset+3+axis];
+        c[axis]=block[offset+6+axis];
+      }
       const y=heightAt(a,b,c,x,z);
       if (y!==undefined && (!best || y>best.point[1]+.005 || (Math.abs(y-best.point[1])<=.005 && cost<best.cost)))
         best={point:[x,y,z],cost};
@@ -1027,7 +1043,7 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
   };
 }
 
-export function createNpcAuthority(nav: NpcNavigation, startTick: number, population = 13900) {
+export function createNpcAuthority(nav: NpcNavigation, startTick: number, population = DEFAULT_NPC_POPULATION) {
   const detailed=Math.min(population,1200);
   const crowdTarget=population-detailed;
   const crowdSize=14;
@@ -1253,7 +1269,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
         seed:hash(id,hash(nav.mapVersion))||1,anchor:anchor.id,home:anchor.id,startTick:birth,navigation:nav.version});
       const full=deriveNpcCycle(nav,recipe)!;
       if (full.legs.at(-1)!.distance<55) return;
-      const target=Math.min(crowdSize,crowdTarget-crowdPopulation);
+      const target=Math.min(crowdSize,crowdTarget-crowdPopulation,population-entries.length-crowdPopulation);
       const outdoors=outdoorTracks(nav,full,recipe),slots:number[]=[];
       const tracks=[full,...outdoors],patterns=new Map<Cycle,Float64Array>();
       const assigned=tracks.map(()=>0);
@@ -1327,8 +1343,9 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   }
   let attempts=0,crowdAttempts=0,job=0,replacements=0;
   let revision=0,retryBirthAt=startTick;
-  const needsResident=()=>entries.length<detailed && tick>=retryBirthAt && (attempts<detailed*2||replacements>0);
-  const needsCrowd=()=>crowdPopulation<crowdTarget && available.length>0;
+  const hasSpace=()=>entries.length+crowdPopulation<population;
+  const needsResident=()=>hasSpace() && entries.length<detailed && tick>=retryBirthAt && (attempts<detailed*2||replacements>0);
+  const needsCrowd=()=>hasSpace() && crowdPopulation<crowdTarget && available.length>0;
   function birthResident(birth:number,local?:{x:number;z:number},hidden?:(point:Point)=>boolean) {
     const before=entries.length;
     spawn(attempts++,birth,local,hidden);
@@ -1418,10 +1435,10 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
     step(current: number) {
       tick=current;
       // Birth schedule stays deterministic across rendering cadences. Spread route generation over ticks.
-      while (entries.length<detailed && attempts<detailed*2 && startTick+1+attempts*2<=tick) {
+      while (hasSpace() && entries.length<detailed && attempts<detailed*2 && startTick+1+attempts*2<=tick) {
         birthResident(startTick+1+attempts*2);
       }
-      while (crowdPopulation<crowdTarget && available.length && startTick+2+crowdAttempts*2<=tick) {
+      while (needsCrowd() && startTick+2+crowdAttempts*2<=tick) {
         seedCrowd(startTick+2+crowdAttempts*2);
         crowdAttempts++;
       }

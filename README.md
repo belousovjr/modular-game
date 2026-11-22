@@ -50,6 +50,20 @@ Neon Auth хранит аккаунты и сеансы в `neon_auth`, мигр
 4. **Подключите фронтенд.** В Vercel импортируйте тот же репозиторий или откройте существующий проект. Root Directory — корень репозитория. В окружении **Production** задайте `VITE_NEON_AUTH_URL` со значением `NEON_AUTH_BASE_URL` и `VITE_GAME_WS_URL`, например `wss://my-game-server.onrender.com/room`, подставив адрес Render из шага 3. Сделайте Redeploy. Через этот адрес фронтенд определяет и HTTPS-хост API. `DATABASE_URL`, `DATABASE_URL_UNPOOLED` и `NEON_AUTH_JWKS_URL` фронтенду не нужны. [Переменные и Redeploy в Vercel](https://vercel.com/docs/environment-variables/managing-environment-variables)
 5. **Проверьте запуск.** Откройте `/play`, войдите, выберите или создайте персонажа. Затем откройте `/admin` и убедитесь, что метрики приходят. Если домен Vercel узнали позже, добавьте его в Trusted Domains Neon и `GAME_ORIGIN` Render. Деплой Render переподключает клиентов. Free-инстансы засыпают без входящего трафика, поэтому для постоянно доступной комнаты нужен план без засыпания. [WebSockets на Render](https://render.com/docs/websocket) · [Ограничения Free](https://render.com/docs/free)
 
+### Комната на Render Free
+
+Сборка `npm ci && npm run prepare:room` готовит коллизионные тайлы и входные данные навигации NPC. Для инстанса на 512 МБ задайте `GAME_NPC_POPULATION=24` и укажите Start Command `node --max-old-space-size=224 --max-semi-space-size=8 server/index.ts`. Флаги V8 применяются при запуске комнаты. Если сохранённая точка содержит больше 24 NPC, используйте для малой комнаты отдельный `GAME_ROOM_ID`. Новый ID создаёт отдельное состояние NPC и дверей.
+
+На Linux с пользовательским systemd можно проверить предел всего процесса отдельно от сборки. Запустите команды в корне репозитория:
+
+```sh
+npm run prepare:room
+systemd-run --user --scope -p MemoryMax=512M -p MemorySwapMax=0 \
+  env GAME_NPC_POPULATION=24 node --max-old-space-size=224 --max-semi-space-size=8 server/index.ts
+```
+
+В другом терминале `curl -fsS http://127.0.0.1:5177/healthz` должен вернуть `ok`, если порт остался стандартным. Для минутной проверки с 16 локальными WebSocket-игроками после подготовки карты выполните `node --max-old-space-size=224 --max-semi-space-size=8 scripts/benchmark-room.mjs limited`. Сценарий использует 24 NPC, выводит пиковый RSS и завершается ошибкой, если процесс достиг 512 МиБ. Для ограничения всей памяти сценария запустите его в таком же scope systemd.
+
 ## Neon PostgreSQL
 
 `neon deploy` применяет конфигурацию `neon.ts` к связанной ветке и подтягивает параметры подключения. Сервер читает pooled `DATABASE_URL` из `.env.local`, `.env` или окружения. На Render задайте `DATABASE_URL` в окружении Web Service.

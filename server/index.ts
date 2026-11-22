@@ -1,10 +1,6 @@
 import { createRoomNpcs } from './npcs.ts';
-import { createNpcNavigation } from '../src/modules/npcs/headless.ts';
-import { citySource } from '../src/modules/world/city.ts';
-import { cityCollision } from '../src/modules/world/headless.ts';
-import { getBuildingInteriorSources } from '../src/modules/world/building-profiles.ts';
-import { splitCityDetails } from '../src/modules/world/detail-assets.ts';
-import { generateCity } from '../src/modules/world-generation/headless.ts';
+import { DEFAULT_NPC_POPULATION } from '../src/modules/npcs/headless.ts';
+import { loadRoomNavigation } from './room-navigation.ts';
 import { readFileSync } from 'node:fs';
 import { openRoomMap } from './terrain-tiles.ts';
 import { createDoorStore } from './world-doors.ts';
@@ -15,9 +11,15 @@ import { createCharactersHandler } from './api/characters.ts';
 import { createDbHealth } from './api/db-health.ts';
 
 for (const file of ['.env.local', '.env']) if (existsSync(file)) process.loadEnvFile(file);
+const populationValue = process.env.GAME_NPC_POPULATION;
+const population = populationValue === undefined ? undefined : Number(populationValue);
+if (population !== undefined && (!Number.isInteger(population) || population < 0 || population > DEFAULT_NPC_POPULATION || !populationValue?.trim())) {
+  throw new Error(`GAME_NPC_POPULATION must be an integer from 0 to ${DEFAULT_NPC_POPULATION}.`);
+}
 const accounts = createAccounts(process.env);
 const maps = new URL('../artifacts/room-map/', import.meta.url);
-const map = openRoomMap(new URL(readFileSync(new URL('current',maps),'utf8'),maps));
+const directory = new URL(readFileSync(new URL('current', maps), 'utf8'), maps);
+const map = openRoomMap(directory);
 const port = Number(process.env.PORT ?? process.env.GAME_PORT ?? 5177);
 const host = process.env.GAME_HOST ?? (process.env.PORT ? '0.0.0.0' : '127.0.0.1');
 const origin = process.env.GAME_ORIGIN?.split(',').map(value=>value.trim()).filter(Boolean) ??
@@ -26,12 +28,7 @@ const { world } = map;
 const roomId = process.env.GAME_ROOM_ID ?? 'local';
 const store = process.env.DATABASE_URL && createDoorStore(process.env.DATABASE_URL, `${roomId}/${world}`);
 const restored = store ? await store.load() : [];
-function navigation() {
-  const city=generateCity(citySource);
-  if(`${city.id}/${city.version}`!==world)throw new Error('Room NPC map is out of date. Run npm run prepare:room.');
-  return createNpcNavigation(city,cityCollision(city),getBuildingInteriorSources(splitCityDetails(city,()=>'')));
-}
-const npcs=await createRoomNpcs(navigation(),`${roomId}/${world}`,process.env.DATABASE_URL);
+const npcs = await createRoomNpcs(loadRoomNavigation(directory, world), `${roomId}/${world}`, process.env.DATABASE_URL, population);
 const dbHealth=createDbHealth(process.env.DATABASE_URL);
 const api=new Map([['/api/characters',createCharactersHandler(accounts)],['/api/db-health',dbHealth.handle]]);
 const room = startRoom(map.collision, world, port, origin,
