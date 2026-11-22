@@ -43,15 +43,16 @@ const MAX_HANDOFF_DISTANCE = 2;
 export function createNpcPoseHandoff() {
   let id: string | undefined;
   let corrected = false;
+  let cycle: TrafficActor['cycle'] | undefined;
   let displayed: TrafficPose | undefined;
   let from: TrafficPose | undefined;
   let elapsed = 0;
   return {
     get active() { return from !== undefined; },
-    sample(actorId: string, target: TrafficPose, useCorrection: boolean, delta: number) {
+    sample(actorId: string, target: TrafficPose, useCorrection: boolean, delta: number, route?: TrafficActor['cycle']) {
       if (id !== actorId) {
         from = undefined;
-      } else if (corrected !== useCorrection && displayed) {
+      } else if (displayed && (corrected !== useCorrection || (!useCorrection && cycle !== route))) {
         const [x, y, z] = target.point;
         const [lastX, lastY, lastZ] = displayed.point;
         from = Math.hypot(lastX - x, lastY - y, lastZ - z) <= MAX_HANDOFF_DISTANCE ? displayed : undefined;
@@ -62,6 +63,7 @@ export function createNpcPoseHandoff() {
       }
       id = actorId;
       corrected = useCorrection;
+      cycle = route;
       displayed = from ? blendNpcPose(from, target, smoothCoverage(elapsed / HANDOFF_MS)) : target;
       return displayed;
     },

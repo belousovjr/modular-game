@@ -217,3 +217,18 @@ test('NPC contact handoff starts from the last rendered pose and catches up to t
   assert.equal(handoff.sample('other', pose(2), true, 16).point[0], 2);
   assert.equal(handoff.sample('other', pose(10), false, 16).point[0], 10);
 });
+
+test('late scripted route rollover blends from the rendered position without a contact', () => {
+  const handoff=createNpcPoseHandoff();
+  const a=[0,0,0] as const,b=[7,0,0] as const,c=[14,0,0] as const;
+  const cycle={legs:[{a,b,from:0,until:60,mode:'run' as const,distance:0,length:7,yaw:Math.PI/2,pitch:0,into:0,out:0}],
+    reservations:[],endTick:60,endAnchor:'end',heading:Math.PI/2};
+  const next={...cycle,legs:[{...cycle.legs[0],a:b,b:c,from:60,until:120}],endTick:120};
+  const before=displayNpcPose(cycle,62)!;
+  const after=displayNpcPose(next,62)!;
+  assert.ok(after.point[0]-before.point[0]>.2);
+  handoff.sample('walker',before,false,16,cycle);
+  assert.deepEqual(handoff.sample('walker',after,false,16,next).point,b);
+  const settled=displayNpcPose(next,70)!;
+  assert.deepEqual(handoff.sample('walker',settled,false,120,next).point,settled.point);
+});

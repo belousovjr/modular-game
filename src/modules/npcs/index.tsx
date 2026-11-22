@@ -127,10 +127,15 @@ export const npcsModule=defineModule({
         const frustum=camera?Frustum.GetPlanes(camera.getTransformationMatrix()):[];
         function consider(actor:Actor) {
           const {id}=actor;
-          const pose=latestPose(actor,tick,correctionTick);
+          let pose=latestPose(actor,tick,correctionTick);
+          const previous=views.get(id)?.actor;
+          if(core.play && !pose && previous && !previous.correctionOnly){
+            actor=previous;
+            pose=latestPose(actor,tick,correctionTick);
+          }
           if (!pose) return;
           const dx=x-pose.point[0],dy=flyover?0:y-pose.point[1],dz=z-pose.point[2];
-          const existing=views.has(id),limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
+          const existing=previous!==undefined,limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
           const d=dx*dx+dy*dy+dz*dz;
           if (d>limit*limit || !Number.isFinite(d)) return;
           probe.set(pose.point[0],pose.point[1]+.9,pose.point[2]);
@@ -172,7 +177,7 @@ export const npcsModule=defineModule({
         if ((updatePose || view.handoff?.active) && (!view.actor.correctionOnly || overrides.has(id))) {
           if (core.play) {
             view.handoff??=createNpcPoseHandoff();
-            pose=view.handoff.sample(id,pose,overrides.has(id),delta);
+            pose=view.handoff.sample(id,pose,overrides.has(id),delta,view.actor.cycle);
           }
           view.draw(pose,tick,id);
         }
