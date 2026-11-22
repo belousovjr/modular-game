@@ -1,3 +1,4 @@
+import type { RoomNpcs } from './npcs.ts';
 import { createVehicleAuthority } from '../src/modules/vehicles/headless.ts';
 import { createEntranceMotion, type DoorPose } from '../src/modules/building-interiors/headless.ts';
 import { onlineDayPhase } from '../src/simulation/daylight.ts';
@@ -18,6 +19,7 @@ export function startRoom(
   spawnAt: () => CollisionWorld['spawn'] = () => collision.spawn,
   terrain?: (x:number,z:number)=>TerrainTile,
   prefetchTerrain?: (x:number,z:number)=>void,
+  npcs?: RoomNpcs,
 ) {
   let ticks = 0, tickMs = 0, maxTickMs = 0, slowTicks = 0, maxPendingTicks = 0;
   let snapshots = 0, snapshotBytes = 0, outboundSnapshotBytes = 0, serializationMs = 0;
@@ -30,7 +32,7 @@ export function startRoom(
   const epoch = randomUUID();
   const dayStart = onlineDayPhase(Date.now());
   const startedAt = performance.now();
-  type Player = { id: string; token: string; actor: ReturnType<typeof makeActor>; socket?: WebSocket; expires: number };
+  type Player = { id: string; token: string; actor: ReturnType<typeof makeActor>; socket?: WebSocket; expires: number; npcPayload?: string };
   const players = new Map<string, Player>();
   const connections = new Map<WebSocket, { alive: boolean }>();
   const server = new WebSocketServer({
@@ -49,10 +51,22 @@ export function startRoom(
   }
 
   function frame() {
-    return { tick: clock.snapshot().tick, doors: doors.snapshot(), vehicle: vehicle.snapshot(), dayPhaseMs: onlineDayPhase(dayStart + performance.now() - startedAt), players: [...players.values()].map(player => {
+    return { tick: clock.snapshot().tick, npcTick: npcs?.tick, doors: doors.snapshot(), vehicle: vehicle.snapshot(), dayPhaseMs: onlineDayPhase(dayStart + performance.now() - startedAt), players: [...players.values()].map(player => {
       const { ownerId: _owner, ...state } = player.actor.snapshot();
       return { ...state, lastSequence: Math.max(state.lastSequence, vehicle.lastSequence(player.id)) };
     }) };
+  }
+
+  function publishNpcs(player:Player) {
+    if(!npcs||!player.socket)return;
+    const {tick,...area}=npcs.snapshot(player.actor.snapshot());
+    const payload=JSON.stringify(area);
+    if(payload===player.npcPayload)return;
+    const packet=JSON.stringify({type:'npcs',data:{tick,...area}});
+    if(send(player.socket,packet)){
+      player.npcPayload=payload;
+      outboundSnapshotBytes+=Buffer.byteLength(packet);
+    }
   }
 
   function spawnPlayer(id: string) {
@@ -139,6 +153,7 @@ export function startRoom(
       clearTimeout(handshake);
       const previous = player.socket;
       player.socket = socket;
+      player.npcPayload = undefined;
       player.expires = Infinity;
       if (previous) {
         player.actor.stopInput();
@@ -146,6 +161,7 @@ export function startRoom(
       }
       previous?.close(4001, 'replaced');
       send(socket, JSON.stringify({ type: 'welcome', protocol: PROTOCOL, world, epoch, token: player.token, id: player.id, ...frame() }));
+      publishNpcs(player);
     });
   });
 
@@ -155,17 +171,22 @@ export function startRoom(
     const poses = roster.map(player => player.actor.snapshot());
     const driverId = vehicle.driver();
     const bodies = poses.map(characterBody);
-    const [carX,,carZ] = vehicle.trafficOrigin();
+    const car = vehicle.trafficOrigin();
+    const [carX,,carZ] = car;
+    npcs?.step(tick,poses.filter((_,index)=>roster[index].socket),car);
     const nearbyHeroes: TrafficSample[] = poses
       .filter(pose => (!pose.vehicleId || pose.vehicleAnimation === 'approaching') && Math.hypot(pose.x-carX,pose.z-carZ)<12)
       .map(pose => ({ id: pose.id, car: false, point: [pose.x,pose.y,pose.z], yaw: 0, pitch: 0, velocity: [0,0,0] }));
-    const vehicleFrame = vehicle.step(tick, poses.find(pose => pose.id === driverId) ?? null, nearbyHeroes,
+    const vehicleFrame = vehicle.step(tick, poses.find(pose => pose.id === driverId) ?? null, [...nearbyHeroes,...(npcs?.traffic.around(car)??[])],
       bodies.filter((_,index) => poses[index].id !== driverId));
+    npcs?.traffic.contacts(vehicle.trafficContacts());
     makeActor.stepSharedDoors(poses.filter((pose,index) => roster[index].socket &&
       !(pose.id === driverId && vehicleFrame.pose)), [vehicleFrame.blocker]);
     for (const [index, { id, actor }] of roster.entries()) {
       actor.setVehicleFrame(id === driverId ? vehicleFrame : { blocker: vehicleFrame.blocker, pose: null, release: null });
-      actor.setTrafficBlockers(bodies.filter((_, other) => other !== index));
+      const pose=poses[index];
+      const npcBlockers=pose.vehicleId&&pose.vehicleAnimation!=='approaching'?[]:npcs?.traffic.step(npcs.tick,pose)??[];
+      actor.setTrafficBlockers([...bodies.filter((_, other) => other !== index),...npcBlockers]);
       actor.step(tick);
       // Later actors in the same tick collide with positions already committed by earlier actors.
       bodies[index] = characterBody(actor.snapshot());
@@ -177,7 +198,7 @@ export function startRoom(
     maxTickMs = Math.max(maxTickMs, duration);
   });
 
-  let publishedTick = 0;
+  let publishedTick = 0, publishedNpcTick = 0;
   let previous = performance.now();
   const timer = setInterval(() => {
     const now = performance.now();
@@ -204,6 +225,10 @@ export function startRoom(
     snapshots++;
     snapshotBytes += bytes;
     for (const player of players.values()) if (player.socket && send(player.socket, data)) outboundSnapshotBytes += bytes;
+    if(npcs && tick-publishedNpcTick>=6){
+      publishedNpcTick=tick;
+      for(const player of players.values())publishNpcs(player);
+    }
   }, STEP_MS);
   const heartbeat = setInterval(() => {
     for (const [socket, connection] of connections) {

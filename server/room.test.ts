@@ -1,3 +1,5 @@
+import { createRoomNpcs } from './npcs.ts';
+import { createNpcNavigation } from '../src/modules/npcs/headless.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -7,12 +9,12 @@ import { citySource } from '../src/modules/world/city.ts';
 import { cityCollision } from '../src/modules/world/headless.ts';
 import { generateCity } from '../src/modules/world-generation/headless.ts';
 import { ONLINE_DAY_MS, onlineDayHour, onlineDayPhase } from '../src/simulation/daylight.ts';
-import { PROTOCOL, readVehicle, type VehicleCommand, type VehicleSnapshot } from '../src/simulation/online-protocol.ts';
+import { PROTOCOL, readNpcFrame, readVehicle, type NpcFrame, type VehicleCommand, type VehicleSnapshot } from '../src/simulation/online-protocol.ts';
 import { startRoom } from './room.ts';
 
 type Actor = { id: string; x: number; z: number; lastSequence: number; moving: boolean; vehicleId?: string; vehicleAnimation?: string };
 type Packet = { type: string; id: string; token: string; epoch: string; tick: number; dayPhaseMs: number; sequence: number;
-  accepted: boolean; reason: string; players: Actor[]; vehicle: VehicleSnapshot };
+  accepted: boolean; reason: string; players: Actor[]; vehicle: VehicleSnapshot; data?: NpcFrame };
 
 async function connect(url: string, origin: string, world: string, characterId: string, token?: string) {
   const socket = new WebSocket(url, { origin });
@@ -280,4 +282,34 @@ test('two sockets share one authoritative car through contention, pedestrian con
     const expired = await b.next(packet => packet.type === 'frame' && packet.tick > drivingAgain.tick && packet.players.length === 1, 33_000);
     assert.equal(expired.vehicle.driverId, null);
   } finally { await room.close(); }
+});
+
+test('room sends different NPC recipes according to each character position', { timeout: 15_000 }, async () => {
+  const origin='http://localhost:5175';
+  const world='npc-test';
+  const city=generateCity(citySource);
+  const nav=createNpcNavigation(city,cityCollision(city),getBuildingInteriorSources(city));
+  const npcs=await createRoomNpcs(nav,world);
+  const collision={bounds:nav.bounds,spawn:nav.spawn,baseHeight:0,slopeX:0,floors:[],blockers:[]};
+  let joins=0;
+  const room=startRoom(collision,world,0,origin,async()=>true,undefined,[],[],
+    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs);
+  try {
+    await once(room.server,'listening');
+    const address=room.server.address();
+    assert.ok(address&&typeof address!=='string');
+    const url=`ws://127.0.0.1:${address.port}/room`;
+    const cityCenter=await connect(url,origin,world,'center');
+    const farAway=await connect(url,origin,world,'far');
+    const local=await cityCenter.next(packet=>packet.type==='npcs'&&!!packet.data&&
+      (packet.data.scenarios.length>0||packet.data.crowds.length>0),8000);
+    const remote=await farAway.next(packet=>packet.type==='npcs'&&!!packet.data&&packet.data.population>0,8000);
+    assert.ok(readNpcFrame(local.data));
+    assert.ok(readNpcFrame(remote.data));
+    const ids=(packet:Packet)=>new Set([...packet.data!.scenarios.map(seed=>seed.id),...packet.data!.crowds.map(group=>group.recipe.id)]);
+    for(const id of ids(local))assert.ok(!ids(remote).has(id),'far client must not receive central routes');
+  } finally {
+    await room.close();
+    await npcs.close();
+  }
 });

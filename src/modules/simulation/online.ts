@@ -1,13 +1,14 @@
+import { createNpcClock } from './npc-clock.ts';
 import { interpolateDoorPoses, readDoorPoses, type DoorPose } from '../building-interiors/index.ts';
 import { ONLINE_DAY_MS, onlineDayHour } from '../../simulation/daylight.ts';
 import type { PlaySession } from '../../core/context.ts';
 import type { CharacterSnapshot, MoveCommand, Receipt } from '../characters/index.ts';
 import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js';
-import { CAR_GUIDES, finiteRotation, MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, readVehicle, record, type VehicleCommand, type VehicleSnapshot } from '../../simulation/online-protocol.ts';
+import { CAR_GUIDES, finiteRotation, MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, readVehicle, readNpcFrame, record, type NpcFrame, type VehicleCommand, type VehicleSnapshot } from '../../simulation/online-protocol.ts';
 
 const KEY = 'modular-game/online';
 const BUFFER_MS = 100;
-type Frame = { tick: number; doors: readonly DoorPose[]; vehicle: VehicleSnapshot; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
+type Frame = { tick: number; npcTick?: number; doors: readonly DoorPose[]; vehicle: VehicleSnapshot; dayPhaseMs: number; players: CharacterSnapshot[]; arrival: number };
 
 function readPlayer(value: unknown, tick: number): value is Omit<CharacterSnapshot, 'ownerId'> {
   if (!record(value)) return false;
@@ -42,8 +43,10 @@ export function createOnlineConnection(play?: PlaySession) {
   let attempts = 0;
   let sequence = 0;
   let frames: Frame[] = [];
+  let npcs: NpcFrame|undefined;
   let presentation: ReturnType<typeof displayFrames>;
   let displayTick = -1;
+  const npcClock = createNpcClock();
   const receipts = new Map<number, (receipt: Receipt) => void>();
   function clearReceipts() {
     for (const resolve of receipts.values()) resolve({ accepted: false, reason: 'offline' });
@@ -80,6 +83,12 @@ export function createOnlineConnection(play?: PlaySession) {
     current.onmessage = event => {
       if (socket !== current || typeof event.data !== 'string') return;
       const packet = parsePacket(event.data);
+      if (welcomed && record(packet) && packet.type === 'npcs') {
+        const data=readNpcFrame(packet.data);
+        if(!data){current.close(4002);return;}
+        if(!npcs||data.tick>=npcs.tick)npcs=data;
+        return;
+      }
       if (welcomed && record(packet) && packet.type === 'receipt' &&
         typeof packet.sequence === 'number' && typeof packet.accepted === 'boolean' && typeof packet.reason === 'string') {
         const resolve = receipts.get(packet.sequence);
@@ -91,6 +100,10 @@ export function createOnlineConnection(play?: PlaySession) {
         typeof packet.dayPhaseMs !== 'number' || !Number.isFinite(packet.dayPhaseMs) || packet.dayPhaseMs < 0 || packet.dayPhaseMs >= ONLINE_DAY_MS ||
         !Array.isArray(packet.players) || packet.players.length > MAX_ROOM_PLAYERS) { current.close(4002); return; }
       const tick = packet.tick;
+      const npcTick=packet.npcTick;
+      if(npcTick!==undefined && (typeof npcTick!=='number'||!Number.isSafeInteger(npcTick)||npcTick<tick)){
+        current.close(4002);return;
+      }
       const doors = readDoorPoses(packet.doors);
       if (!doors || !readVehicle(packet.vehicle, tick)) { current.close(4002); return; }
       const players: CharacterSnapshot[] = [];
@@ -106,9 +119,11 @@ export function createOnlineConnection(play?: PlaySession) {
         const self = players.find(player => player.id === packet.id);
         if (!self) { current.close(4002); return; }
         id = self.id;
+        if (epoch !== packet.epoch) npcClock.reset();
         epoch = packet.epoch;
         sequence = self.lastSequence;
         frames = [];
+        npcs = undefined;
         displayTick = -1;
         welcomed = true;
         attempts = 0;
@@ -116,7 +131,7 @@ export function createOnlineConnection(play?: PlaySession) {
         save(packet.token);
         report('В сети');
       } else if (packet.type !== 'frame' || tick <= (frames.at(-1)?.tick ?? -1)) return;
-      frames.push({ tick, players, doors, vehicle: packet.vehicle, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
+      frames.push({ tick, npcTick, players, doors, vehicle: packet.vehicle, dayPhaseMs: packet.dayPhaseMs, arrival: performance.now() });
       if (frames.length > 16) frames.shift();
     };
     current.onclose = event => {
@@ -128,6 +143,7 @@ export function createOnlineConnection(play?: PlaySession) {
         desired = false;
         id = '';
         frames = [];
+        npcs = undefined;
         save(event.code === 4001 ? undefined : stored().token);
         report(event.code === 4001 || event.code === 4004 ? 'Этот персонаж уже в игре.' :
           event.code === 4003 ? 'Доступ к персонажу отклонён. Войдите снова.' : 'Не удалось подключиться к игровой комнате.');
@@ -141,7 +157,9 @@ export function createOnlineConnection(play?: PlaySession) {
     desired = false;
     id = '';
     frames = [];
+    npcs = undefined;
     presentation = undefined;
+    npcClock.reset();
     displayTick = -1;
     status = '';
     clearReceipts();
@@ -194,6 +212,15 @@ export function createOnlineConnection(play?: PlaySession) {
 
   return {
     endpoint,
+    npcs: () => npcs,
+    npcTick() {
+      const frame = frames.at(-1);
+      return frame?.npcTick === undefined ? 0 : npcClock.sample(frame.npcTick, frame.arrival, performance.now());
+    },
+    npcCorrectionTick() {
+      const frame = frames.at(-1);
+      return frame?.npcTick === undefined ? 0 : frame.npcTick - frame.tick + displayTick;
+    },
     connected: () => status === 'В сети',
     toggle(enabled: boolean, map: string) {
       if (!enabled) stop();

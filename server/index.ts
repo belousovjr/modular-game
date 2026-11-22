@@ -1,3 +1,10 @@
+import { createRoomNpcs } from './npcs.ts';
+import { createNpcNavigation } from '../src/modules/npcs/headless.ts';
+import { citySource } from '../src/modules/world/city.ts';
+import { cityCollision } from '../src/modules/world/headless.ts';
+import { getBuildingInteriorSources } from '../src/modules/world/building-profiles.ts';
+import { splitCityDetails } from '../src/modules/world/detail-assets.ts';
+import { generateCity } from '../src/modules/world-generation/headless.ts';
 import { readFileSync } from 'node:fs';
 import { openRoomMap } from './terrain-tiles.ts';
 import { createDoorStore } from './world-doors.ts';
@@ -17,8 +24,14 @@ const { world } = map;
 const roomId = process.env.GAME_ROOM_ID ?? 'local';
 const store = process.env.DATABASE_URL && createDoorStore(process.env.DATABASE_URL, `${roomId}/${world}`);
 const restored = store ? await store.load() : [];
+function navigation() {
+  const city=generateCity(citySource);
+  if(`${city.id}/${city.version}`!==world)throw new Error('Room NPC map is out of date. Run npm run prepare:room.');
+  return createNpcNavigation(city,cityCollision(city),getBuildingInteriorSources(splitCityDetails(city,()=>'')));
+}
+const npcs=await createRoomNpcs(navigation(),`${roomId}/${world}`,process.env.DATABASE_URL);
 const room = startRoom(map.collision, world, port, origin,
-  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch);
+  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch, npcs);
 const metricsTimer = setInterval(() => {
   const metrics = room.takeMetrics();
   if (metrics.players || metrics.outboundSnapshotBytes) {
@@ -53,7 +66,7 @@ function stop() {
       await writing?.catch(() => {});
       await checkpoint();
     } finally {
-      await Promise.all([accounts?.close(), store ? store.close() : undefined]);
+      await Promise.all([npcs.close(), accounts?.close(), store ? store.close() : undefined]);
     }
   })().catch(error => { console.error(error.message); process.exitCode = 1; });
 }

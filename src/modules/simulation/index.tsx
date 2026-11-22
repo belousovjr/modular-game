@@ -61,7 +61,7 @@ function createSimulation(onFrame: CoreContext['onFrame'], scope: Scope, play?: 
       registerSystem(step: (tick: number) => void, owner: Scope) { owner.onDispose(authority.addSystem(step)); },
       enableOnline(world: string, owner: Scope) { map = world; owner.onDispose(() => { map = ''; online.dispose(); }); },
       blockOnline(owner: Scope) { blockers++; online.dispose(); owner.onDispose(() => { blockers--; }); },
-      online: { connected: online.connected, vehicle: online.vehicle, displayVehicle: online.displayVehicle, displaySelf: online.displaySelf, doors: online.displayDoors, self: online.self, remote: online.remote, send: online.send, identity: online.identity },
+      online: { npcs: online.npcs, npcTick: online.npcTick, npcCorrectionTick: online.npcCorrectionTick, connected: online.connected, vehicle: online.vehicle, displayVehicle: online.displayVehicle, displaySelf: online.displaySelf, doors: online.displayDoors, self: online.self, remote: online.remote, send: online.send, identity: online.identity },
     },
   };
 }

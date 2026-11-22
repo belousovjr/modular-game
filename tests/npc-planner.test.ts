@@ -5,7 +5,7 @@ import { Worker } from 'node:worker_threads';
 import { createCharacterAuthority } from '../src/modules/characters/headless.ts';
 import {createLocalAuthority} from '../src/simulation/authority.ts';
 import { createNpcNavigation, createTrafficActors, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficRecovery } from '../src/modules/npcs/headless.ts';
-import { displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN } from '../src/modules/npcs/presentation.ts';
+import { createNpcPoseHandoff, displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN } from '../src/modules/npcs/presentation.ts';
 import { plannerPackets } from '../src/modules/npcs/planner-input.ts';
 import { plannerQueryDue, type PlannerRequest, type PlannerResponse } from '../src/modules/npcs/planner-protocol.ts';
 import type { CitySource } from '../src/modules/world-generation/headless.ts';
@@ -201,4 +201,19 @@ test('a settled NPC car waits at the crash site and rejoins without a positional
     const resumed=traffic.pose(actor,162)!;
     assert.ok(resumed.point[2]>10 && resumed.point[0]===0);
   }finally{character.dispose();}
+});
+
+test('NPC contact handoff starts from the last rendered pose and catches up to the moving target', () => {
+  const handoff = createNpcPoseHandoff();
+  const pose = (x: number) => ({
+    point: [x, 0, 0] as const, yaw: 0, pitch: 0, mode: 'drive' as const,
+    speed: 0, distance: 0, wheelDistance: 0, steering: 0, door: undefined, doorOpen: 0,
+  });
+  assert.equal(handoff.sample('car', pose(0), false, 16).point[0], 0);
+  assert.equal(handoff.sample('car', pose(1), true, 16).point[0], 0);
+  assert.equal(handoff.sample('car', pose(1.2), true, 60).point[0], .6);
+  assert.equal(handoff.sample('car', pose(1.4), true, 60).point[0], 1.4);
+  assert.equal(handoff.sample('car', pose(1.8), false, 16).point[0], 1.4);
+  assert.equal(handoff.sample('other', pose(2), true, 16).point[0], 2);
+  assert.equal(handoff.sample('other', pose(10), false, 16).point[0], 10);
 });

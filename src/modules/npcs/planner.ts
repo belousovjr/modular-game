@@ -1,3 +1,4 @@
+import type {NpcFrame} from '../../simulation/online-protocol.ts';
 import type {TrafficRecovery, TrafficRejoin} from './headless.ts';
 import type { Scope } from '../../core/modules.ts';
 import type { CitySource } from '../world-generation/index.ts';
@@ -13,6 +14,7 @@ export function createPlanner(city:CitySource,world:CollisionWorld,buildings:()=
   let pending=false,more=false,ready=false;
   let uploadTimer:ReturnType<typeof setTimeout>|undefined;
   let previous:PlannerQuery|undefined;
+  let previousRemote:NpcFrame|undefined;
   let upload:ReturnType<typeof plannerPackets>|undefined=plannerPackets(city,world,buildings);
   const close=()=>{
     clearTimeout(uploadTimer);
@@ -76,6 +78,11 @@ export function createPlanner(city:CitySource,world:CollisionWorld,buildings:()=
         previous=moved?query:{...previous!,tick:query.tick};
         send({type:'query',query:previous});
       } catch (cause) { failure(cause instanceof Error?cause.message:String(cause)); }
+    },
+    remote(frame:NpcFrame|undefined){
+      if(!worker||!ready||pending||previousRemote===frame)return;
+      previousRemote=frame;pending=true;
+      send({type:'remote',frame:frame??{tick:0,scenarios:[],crowds:[],population:0,corrections:[],suppressed:[]}});
     },
     recover(job:TrafficRecovery){send({type:'recover',job});},
     population:()=>population,

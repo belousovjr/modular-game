@@ -8,7 +8,7 @@ import { modules } from './registry.ts';
 
 const url = import.meta.env.VITE_NEON_AUTH_URL;
 const auth = url ? createAuthClient(url, { adapter: SupabaseAuthAdapter({ fetchOptions: { timeout: 12_000 } }) }) : undefined;
-const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution', 'vehicles'];
+const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution', 'vehicles', 'npcs'];
 type Character = { id: string; name: string };
 type User = { id: string; name: string };
 function accountView(user: { id: string; email?: string; user_metadata: Record<string, unknown> }): User {

@@ -3,10 +3,14 @@ import { test } from 'node:test';
 import { LOCOMOTION_SPEEDS } from '../src/modules/characters/headless.ts';
 import { streetSelection } from '../src/modules/npcs/spacing.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
-import { createNpcAuthority, createNpcNavigation, deriveNpcCycle, npcPose, trafficConflict, createStreetSchedule, sampleNpc, spreadWalkLeg, crowdTiming, crowdTrack, crowdCycles, type NpcCrowd, type NpcSeed } from '../src/modules/npcs/headless.ts';
+import { createNpcAuthority, createNpcNavigation, createTrafficActors, deriveNpcCycle, npcPose, trafficConflict, createStreetSchedule, sampleNpc, spreadWalkLeg, crowdTiming, crowdTrack, crowdCycles, type NpcCrowd, type NpcSeed } from '../src/modules/npcs/headless.ts';
 import { citySource } from '../src/modules/world/city.ts';
 import { getBuildingInteriorSources } from '../src/modules/world/building-profiles.ts';
+import { splitCityDetails } from '../src/modules/world/detail-assets.ts';
+import { splitStreetAssets } from '../src/modules/world/street-assets.ts';
+import { buildRoadRecipe, generateRoad } from '../src/modules/world/road-recipe.ts';
 import { cityCollision } from '../src/modules/world/headless.ts';
+import { readNpcCheckpoint } from '../src/simulation/online-protocol.ts';
 
 let navigation: ReturnType<typeof createNpcNavigation> | undefined;
 function city() {
@@ -302,4 +306,55 @@ test('a planned road trip cannot reserve the crossing occupied by a pedestrian',
   assert.equal(schedule.conflictsDetailed(driving,true,21),false);
   schedule.change(walking,false,-1);
   assert.equal(schedule.conflictsDetailed(driving,true),false);
+});
+
+test('room and optimized browser city derive the same NPC navigation version',()=>{
+  const details=splitCityDetails(citySource,()=>'');
+  const streamed=splitStreetAssets(details,128,()=>'');
+  const browser={...streamed,chunks:streamed.chunks.map(chunk=>({...chunk,meshes:chunk.meshes.map(mesh=>{
+    const recipe=buildRoadRecipe(mesh);
+    return recipe?generateRoad(recipe):mesh;
+  })}))};
+  const serverNav=createNpcNavigation(citySource,cityCollision(citySource),getBuildingInteriorSources(details));
+  const browserNav=createNpcNavigation(browser,cityCollision(browser),getBuildingInteriorSources(browser));
+  assert.equal(browserNav.version,serverNav.version);
+});
+
+test('room checkpoint restores recipes and reserves them on the same NPC clock',()=>{
+  const nav=city(), original=createNpcAuthority(nav,0,1214);
+  for(let work=0;work<26;work++)original.planNext(120,nav.spawn);
+  const checkpoint=readNpcCheckpoint(JSON.parse(JSON.stringify(original.checkpoint())),nav.version);
+  assert.ok(checkpoint);
+  assert.ok(checkpoint.scenarios.length>0);
+  assert.ok(checkpoint.crowds.length>0);
+  const restored=createNpcAuthority(nav,0,1214);
+  restored.restore(checkpoint);
+  assert.deepEqual(restored.checkpoint(),original.checkpoint());
+  const route=deriveNpcCycle(nav,checkpoint.scenarios[0])!;
+  const [x,,z]=route.legs[0].a;
+  assert.ok(restored.observe(x,z,120).scenarios.some(seed=>seed.id===checkpoint.scenarios[0].id));
+  assert.deepEqual(restored.observe(x,z,120),original.observe(x,z,120));
+  assert.deepEqual(restored.observe(nav.bounds.maxX+1000,z,120).scenarios,[]);
+  assert.equal(readNpcCheckpoint({...checkpoint,attempts:-1},nav.version),undefined);
+});
+
+test('a settled wreck needs a continuous hidden interval before it is retired',()=>{
+  const nav=city();
+  const seed:NpcSeed={id:'npc/wreck',personality:3,seed:0,anchor:'',home:'',startTick:0,navigation:nav.version};
+  const road=nav.roadNodes.find(node=>nav.parking(node));
+  assert.ok(road);
+  const cycle=deriveNpcCycle(nav,{...seed,anchor:road.id,home:road.id})!;
+  const pose=npcPose(cycle,0)!;
+  const traffic=createTrafficActors(()=>{});
+  traffic.restoreWreck({id:seed.id,cycle},pose);
+  const retired:string[]=[];
+  const retire=(id:string)=>{retired.push(id);return true;};
+  traffic.pruneWrecks(10,()=>false,retire);
+  traffic.pruneWrecks(185,()=>true,retire);
+  traffic.pruneWrecks(190,()=>false,retire);
+  traffic.pruneWrecks(369,()=>false,retire);
+  assert.deepEqual(retired,[]);
+  traffic.pruneWrecks(370,()=>false,retire);
+  assert.deepEqual(retired,[seed.id]);
+  assert.deepEqual(traffic.settledWrecks(),[]);
 });
