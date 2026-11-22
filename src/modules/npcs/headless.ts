@@ -408,7 +408,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   }
   const mapVersion=`${city.id}/${revision.toString(16)}`;
   return {
-    version:`${mapVersion}/16`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
+    version:`${mapVersion}/17`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
     node(id: string) {
       if (id.startsWith('r/')) return driving.get(id);
       const [kind,x,z]=id.split('/');
@@ -1501,13 +1501,24 @@ export function liveNpcPose({cycle,phase,pace}:TrafficActor,tick:number):Traffic
 }
 
 const idlePose=(pose:TrafficPose):TrafficPose=>({...pose,mode:pose.mode==='drive'?'drive':'idle',speed:0,steering:0,door:undefined,doorOpen:0});
-function nearHero(pose:TrafficPose,hero:CharacterSnapshot,margin:number) {
+function nearHero(pose:TrafficPose,hero:Pick<CharacterSnapshot,'x'|'y'|'z'>,margin:number) {
   const [x,y,z]=pose.point;
   if (hero.y+1.5<y || hero.y>y+1.65) return false;
   const dx=hero.x-x,dz=hero.z-z;
   if (pose.mode!=='drive') return dx*dx+dz*dz<(.70+margin)**2;
   const sin=Math.sin(pose.yaw),cos=Math.cos(pose.yaw);
   return Math.abs(dx*cos-dz*sin)<1.36+margin && Math.abs(dx*sin+dz*cos)<2.48+margin;
+}
+
+function nearNpc(a:TrafficPose,b:TrafficPose) {
+  if(a.mode==='drive' && b.mode==='drive'){
+    if(apart(a.point,a.point,b.point,b.point))return false;
+    const first=carBody(a.point,a.yaw),second=carBody(b.point,b.yaw);
+    return sweptDiscs(first,first,second,second);
+  }
+  const [x,y,z]=(a.mode==='drive'?b:a).point;
+  const blocker=a.mode==='drive'?a:b;
+  return nearHero(blocker,{x,y,z},blocker.mode==='drive'?.6:.16);
 }
 
 function trafficBlocker(id:string,pose:TrafficPose):CollisionBox {
@@ -1594,6 +1605,36 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void,
     }
     heroArea.tick=vehicleArea.tick=-Infinity;
   }
+  function yieldToNpcs(current:number) {
+    if(!reactions.size)return;
+    const blockers=new Map<string,{id:string;pose:TrafficPose}[]>();
+    const rejoining:TrafficActor[]=[];
+    for(const [id,state] of reactions){
+      const previous=pose(state.actor,current-1);
+      if(previous){
+        const [x,,z]=previous.point;
+        cells(x-CAR_CLEARANCE,x+CAR_CLEARANCE,z-CAR_CLEARANCE,z+CAR_CLEARANCE,key=>add(blockers,key,{id,pose:previous}));
+      }
+      if(state.rejoin)rejoining.push(state.actor);
+    }
+    for(const actor of new Set([...actors,...rejoining])){
+      let state=reactions.get(actor.id);
+      if(state?.lastContact===current || (state?.wreck && !state.rejoin))continue;
+      const next=pose(actor,current);
+      if(!next)continue;
+      const [x,,z]=next.point;
+      const nearby=blockers.get(cellKey(Math.floor(x/CELL),Math.floor(z/CELL)));
+      if(!nearby)continue;
+      const previous=pose(actor,current-1);
+      if(!previous || !nearby.some(blocker=>blocker.id!==actor.id && nearNpc(next,blocker.pose) &&
+        (distance(next.point,blocker.pose.point)<distance(previous.point,blocker.pose.point) ||
+          !nearNpc(previous,blocker.pose))))continue;
+      if(!state){state={actor,delay:0,contactUntil:current};reactions.set(actor.id,state);}
+      if(state.rejoin){state.rejoin.from++;state.rejoin.until++;}
+      else {state.delay++;state.contactUntil=current;}
+      state.lastContact=current;
+    }
+  }
   return {
     replace(next:readonly TrafficActor[]) {pending=next;},
     pose,
@@ -1628,6 +1669,7 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void,
       tick=current;
       if(pending){applyPlans(pending);pending=undefined;}
       for(const {id,token,target} of replies.splice(0))applyRejoin(id,token,target);
+      yieldToNpcs(current);
       for(const [id,state] of reactions) {
         if(state.rejoin && current>=state.rejoin.until){
           state.delay=current-state.rejoin.target.tick;
@@ -1654,8 +1696,9 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void,
         const previous=pose(actor,current-1);
         const closing=!previous || Math.hypot(next.point[0]-hero.x,next.point[2]-hero.z)<
           Math.hypot(previous.point[0]-hero.x,previous.point[2]-hero.z)+1e-7;
-        if(state?.rejoin && closing && nearHero(next,hero,.08)){
+        if(state?.rejoin && state.lastContact!==current && closing && nearHero(next,hero,.08)){
           state.rejoin.from++;state.rejoin.until++;
+          state.lastContact=current;
         } else if(!state?.wreck && closing && nearHero(next,hero,next.mode==='drive'?.6:.16)){
           if(!state){state={actor,delay:0,contactUntil:current};reactions.set(actor.id,state);}
           if(state.lastContact!==current){

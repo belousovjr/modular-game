@@ -14,7 +14,7 @@ import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { createTrafficCarAssets } from '../vehicles/index.tsx';
 import { crowdTiming, crowdTrack, createTrafficActors, npcCorrectionActor, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor } from './headless.ts';
 
-import { streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
+import { overlappingPedestrians, streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
 import { createPlanner } from './planner.ts';
 import { blendNpcPose, createNpcPoseHandoff, npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
 
@@ -22,7 +22,8 @@ type Pose = NonNullable<ReturnType<ReturnType<typeof createTrafficActors>['pose'
 type Actor = TrafficActor & {correctionOnly?:true};
 type Candidate = Actor & {d:number;car:boolean;cell:string;existing:boolean;onScreen:boolean};
 type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number; body?:ReturnType<typeof npcAppearance>['body'];
-  handoff?:ReturnType<typeof createNpcPoseHandoff>; draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
+  handoff?:ReturnType<typeof createNpcPoseHandoff>; drawnPoint?:Pose['point']; coverage?:number;
+  draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
 
 type Diagnostics = { population: number; subscribed: number; people: number; cars: number; ready: boolean; error: string };
 
@@ -164,6 +165,9 @@ export const npcsModule=defineModule({
           view.progress=Math.max(0,view.progress-step);
           if (view.progress===0) {
             views.delete(id);
+            view.fade(0);
+            view.drawnPoint=undefined;
+            view.coverage=0;
             if (view.car) view.owner.dispose(); else reusable.push(view);
             continue;
           }
@@ -172,7 +176,8 @@ export const npcsModule=defineModule({
       }
       function show(view:View,pose:Pose,updatePose:boolean) {
         const distance=Math.hypot(x-pose.point[0],flyover?0:y-pose.point[1],z-pose.point[2]);
-        view.fade(npcLodCoverage(view.progress,distance,view.car));
+        view.coverage=npcLodCoverage(view.progress,distance,view.car);
+        if(!core.play || view.car)view.fade(view.coverage);
         const id=view.actor.id;
         if ((updatePose || view.handoff?.active) && (!view.actor.correctionOnly || overrides.has(id))) {
           if (core.play) {
@@ -180,6 +185,7 @@ export const npcsModule=defineModule({
             pose=view.handoff.sample(id,pose,overrides.has(id),delta,view.actor.cycle);
           }
           view.draw(pose,tick,id);
+          view.drawnPoint=pose.point;
         }
       }
       for (const [id,view] of views) if (!selected.has(id)) {
@@ -233,6 +239,18 @@ export const npcsModule=defineModule({
           view.actor=actor;
           view.progress=needsView?0:Math.min(1,view.progress+step);
           show(view,pose,needsView||moved);
+        }
+      }
+      const visiblePedestrians:Pose['point'][]=[];
+      for(const view of views.values()){
+        if(!core.play || view.car)continue;
+        const {drawnPoint,coverage=0}=view;
+        if(!drawnPoint || !coverage){view.fade(0);continue;}
+        if(visiblePedestrians.some(point=>overlappingPedestrians(point,drawnPoint))){
+          view.fade(0);
+        }else{
+          visiblePedestrians.push(drawnPoint);
+          view.fade(coverage);
         }
       }
       while (reusable.length) reusable.pop()!.owner.dispose();

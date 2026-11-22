@@ -1,6 +1,10 @@
 type Candidate = {car:boolean;cell:string;existing:boolean;onScreen:boolean;d:number};
 export const PEOPLE_LIMIT=18,CAR_LIMIT=12;
 
+export function overlappingPedestrians(a:readonly [number,number,number],b:readonly [number,number,number]) {
+  return Math.abs(a[1]-b[1])<.75 && (a[0]-b[0])**2+(a[2]-b[2])**2<.48**2;
+}
+
 export function streetSelection<T extends Candidate>(input:T[]) {
   const selected:T[]=[],overflow:T[]=[],offscreen:T[]=[];
   const bins=new Map<string,number>();

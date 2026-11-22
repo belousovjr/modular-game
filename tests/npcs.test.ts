@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LOCOMOTION_SPEEDS } from '../src/modules/characters/headless.ts';
-import { streetSelection } from '../src/modules/npcs/spacing.ts';
+import { overlappingPedestrians, streetSelection } from '../src/modules/npcs/spacing.ts';
 import { createLocalAuthority, STEP_MS } from '../src/simulation/authority.ts';
 import { createNpcAuthority, createNpcNavigation, createTrafficActors, deriveNpcCycle, npcPose, trafficConflict, createStreetSchedule, sampleNpc, spreadWalkLeg, crowdTiming, crowdTrack, crowdCycles, type NpcCrowd, type NpcSeed } from '../src/modules/npcs/headless.ts';
 import { citySource } from '../src/modules/world/city.ts';
@@ -265,6 +265,13 @@ test('seeded pedestrians can diverge across a plaza and stay inside a narrow pav
   assert.equal(spreadWalkLeg(pavement(1.5),a,b,-1,.4,12),undefined);
 });
 
+
+test('pedestrian models overlap on the same floor but can pass beside or above each other',()=>{
+  assert.ok(overlappingPedestrians([0,0,0],[0,0,0]));
+  assert.ok(overlappingPedestrians([0,0,0],[.24,.1,.24]));
+  assert.equal(overlappingPedestrians([0,0,0],[.5,0,0]),false);
+  assert.equal(overlappingPedestrians([0,0,0],[0,3,0]),false);
+});
 
 test('visible slots spread across nearby street cells and preserve existing models',()=>{
   const crowded=Array.from({length:22},(_,i)=>({car:false,cell:'square',existing:i===0,onScreen:true,d:i}));
