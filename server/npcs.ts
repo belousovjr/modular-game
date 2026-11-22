@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import { Pool } from 'pg';
 import { createNpcAuthority, createNpcNavigation, createTrafficActors, crowdTiming, crowdTrack,
   NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor, type TrafficRecovery } from '../src/modules/npcs/headless.ts';
@@ -22,7 +23,7 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
       if (population!==undefined && savedPopulation>population) {
         throw new Error('Saved NPC population exceeds GAME_NPC_POPULATION. Use a separate GAME_ROOM_ID or increase the limit.');
       }
-      authority.restore(state);
+      await authority.restoreAsync(state,setImmediate);
       offset=state.tick;
       wrecks=state.wrecks;
     }

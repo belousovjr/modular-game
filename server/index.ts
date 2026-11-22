@@ -1,6 +1,7 @@
+import { openStartupServer } from './startup.ts';
 import { createRoomNpcs } from './npcs.ts';
 import { DEFAULT_NPC_POPULATION } from '../src/modules/npcs/headless.ts';
-import { loadRoomNavigation } from './room-navigation.ts';
+import { loadRoomNavigationAsync } from './room-navigation.ts';
 import { readFileSync } from 'node:fs';
 import { openRoomMap } from './terrain-tiles.ts';
 import { createDoorStore } from './world-doors.ts';
@@ -24,20 +25,23 @@ const port = Number(process.env.PORT ?? process.env.GAME_PORT ?? 5177);
 const host = process.env.GAME_HOST ?? (process.env.PORT ? '0.0.0.0' : '127.0.0.1');
 const origin = process.env.GAME_ORIGIN?.split(',').map(value=>value.trim()).filter(Boolean) ??
   (host === '127.0.0.1' ? ['http://127.0.0.1:5175', 'http://localhost:5175'] : []);
+const dbHealth=createDbHealth(process.env.DATABASE_URL);
+const api=new Map([['/api/characters',createCharactersHandler(accounts)],['/api/db-health',dbHealth.handle]]);
+const startup=await openStartupServer(port,host,origin,api);
+console.info(`Room HTTP listening on ${host}:${port}; preparing simulation`);
 const { world } = map;
 const roomId = process.env.GAME_ROOM_ID ?? 'local';
 const store = process.env.DATABASE_URL && createDoorStore(process.env.DATABASE_URL, `${roomId}/${world}`);
 console.info('Room startup: loading door checkpoint');
 const restored = store ? await store.load() : [];
 console.info('Room startup: building NPC navigation');
-const navigation = loadRoomNavigation(directory, world);
+const navigation = await loadRoomNavigationAsync(directory, world);
 console.info('Room startup: restoring NPC checkpoint');
 const npcs = await createRoomNpcs(navigation, `${roomId}/${world}`, process.env.DATABASE_URL, population);
 console.info('Room startup: NPC checkpoint restored', { population: npcs.population(), rss: process.memoryUsage().rss });
-const dbHealth=createDbHealth(process.env.DATABASE_URL);
-const api=new Map([['/api/characters',createCharactersHandler(accounts)],['/api/db-health',dbHealth.handle]]);
+startup.handoff();
 const room = startRoom(map.collision, world, port, origin,
-  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch, npcs, accounts?.user, api);
+  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch, npcs, accounts?.user, api, startup.server);
 const metricsTimer = setInterval(() => {
   const metrics = room.takeMetrics();
   if (metrics.players || metrics.outboundSnapshotBytes) {
@@ -58,7 +62,7 @@ function checkpoint() {
 const checkpointTimer = setInterval(() => {
   void checkpoint()?.catch(() => console.error('Could not save world door checkpoint'));
 }, 1000);
-room.server.on('listening', () => console.log(`Game room listening on ${host}:${port}/room for ${origin}`));
+console.log(`Game room ready on ${host}:${port}/room for ${origin}`);
 room.server.once('error', error => { console.error(error.message); process.exit(1); });
 let stopping = false;
 function stop() {

@@ -138,7 +138,7 @@ export function createOnlineConnection(play?: PlaySession) {
       clearTimeout(handshake);
       socket = undefined;
       clearReceipts();
-      if (!id || event.code === 4001 || event.code === 4003 || event.code === 4004 || event.code === 1008 || event.code === 4002) {
+      if (event.code === 4001 || event.code === 4003 || event.code === 4004 || event.code === 1008 || event.code === 4002) {
         desired = false;
         id = '';
         frames = [];
@@ -148,7 +148,7 @@ export function createOnlineConnection(play?: PlaySession) {
           event.code === 4003 ? 'Доступ к персонажу отклонён. Войдите снова.' : 'Не удалось подключиться к игровой комнате.');
         return;
       }
-      report('Соединение потеряно. Переподключение…');
+      report(id ? 'Соединение потеряно. Переподключение…' : 'Комната пока недоступна. Повторное подключение…');
       reconnect = setTimeout(connect, Math.min(8000, 500 * 2 ** Math.min(attempts++, 4)) + Math.random() * 200);
     };
   }

@@ -3,7 +3,7 @@ import { createVehicleAuthority } from '../src/modules/vehicles/headless.ts';
 import { createEntranceMotion, type DoorPose } from '../src/modules/building-interiors/headless.ts';
 import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { CharacterSpawnBlockedError, characterBody, createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
@@ -24,6 +24,7 @@ export function startRoom(
   npcs?: RoomNpcs,
   authorizeAdmin?: (accessToken:string)=>Promise<unknown>,
   api?: ReadonlyMap<string,(request:IncomingMessage,response:ServerResponse)=>Promise<void>>,
+  listeningServer?:Server,
 ) {
   let ticks = 0, tickMs = 0, maxTickMs = 0, slowTicks = 0, maxPendingTicks = 0;
   let snapshots = 0, snapshotBytes = 0, outboundSnapshotBytes = 0, serializationMs = 0;
@@ -41,11 +42,12 @@ export function startRoom(
   const players = new Map<string, Player>();
   const connections = new Map<WebSocket, { alive: boolean }>();
   let nextResetAt=0, resetting=false;
-  const http=createServer(async (request,response)=>{
+  const http=listeningServer??createServer();
+  http.on('request',async (request,response)=>{
     const path=request.url?.split('?')[0]??'';
     const method=request.method;
     const requestOrigin=request.headers.origin;
-    if(method==='GET' && path==='/healthz'){
+    if(method==='GET' && (path==='/healthz'||path==='/readyz')){
       response.writeHead(200,{'Cache-Control':'no-store'}).end('ok');
       return;
     }
@@ -112,7 +114,7 @@ export function startRoom(
     server:http, path: '/room', maxPayload: 4096, perMessageDeflate: false,
     verifyClient: ({ origin: requestOrigin }: { origin: string }) => origins.has(requestOrigin) && connections.size < MAX_ROOM_PLAYERS * 2,
   });
-  http.listen(port,host);
+  if(!http.listening)http.listen(port,host);
 
   function send(socket: WebSocket, data: string) {
     if (socket.readyState !== WebSocket.OPEN) return false;

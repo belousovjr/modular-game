@@ -148,6 +148,20 @@ export type NavigationSource = Pick<CitySource,'id'|'version'|'bounds'|'roads'|'
   {readonly chunks:Iterable<{readonly meshes:readonly CityMesh[]}>};
 
 export function createNpcNavigation(city: NavigationSource, world: Pick<CollisionWorld,'spawn'|'blockers'|'doors'>, interiors: readonly BuildingInteriorSource[]) {
+  const steps=navigationSteps(city,world,interiors);
+  let result=steps.next();
+  while(!result.done)result=steps.next();
+  return result.value;
+}
+
+export async function createNpcNavigationAsync(city: NavigationSource, world: Pick<CollisionWorld,'spawn'|'blockers'|'doors'>, interiors: readonly BuildingInteriorSource[], yieldControl:()=>Promise<void>) {
+  const steps=navigationSteps(city,world,interiors);
+  let result=steps.next();
+  while(!result.done){await yieldControl();result=steps.next();}
+  return result.value;
+}
+
+function* navigationSteps(city: NavigationSource, world: Pick<CollisionWorld,'spawn'|'blockers'|'doors'>, interiors: readonly BuildingInteriorSource[]) {
   const {bounds}=city;
   const within=(x: number,z: number) => x>=bounds.minX&&x<=bounds.maxX&&z>=bounds.minZ&&z<=bounds.maxZ;
   const triangles=new Map<string,{offset:number;count:number}>(), boxes=new Map<string,CollisionBox[]>();
@@ -197,12 +211,14 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
           },TERRAIN_CELL);
       }
     }
+    yield;
   }
   // Pack cell references once: boxed JS arrays otherwise dominate startup heap.
   let referenceCount=0;
   for (const cell of triangles.values()) { cell.offset=referenceCount; referenceCount+=cell.count; cell.count=0; }
   const references=new Uint32Array(referenceCount);
   for (let triangle=0;triangle<triangleCount;triangle++) {
+    if(triangle%4096===0)yield;
     const block=triangleBlocks[Math.floor(triangle/TRIANGLES_PER_BLOCK)];
     const offset=(triangle%TRIANGLES_PER_BLOCK)*TRIANGLE_STRIDE;
     cells(Math.min(block[offset],block[offset+3],block[offset+6]),Math.max(block[offset],block[offset+3],block[offset+6]),
@@ -306,6 +322,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
       }
       previous=node;
     }
+    yield;
   }
   const roadNodes=[...driving.values()].filter(node=>node.links.length);
   const roadCells=new Map<string,Node[]>();
@@ -349,7 +366,9 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   }
   const offRoad=new Map<Node,Node[]>();
   // A shortcut must fit the vehicle on dry paved ground, away from buildings and props.
-  for (const a of roadNodes) for (const b of roadsNear(a.point[0],a.point[2],19)) {
+  for (const a of roadNodes) {
+    yield;
+    for (const b of roadsNear(a.point[0],a.point[2],19)) {
     if (a.id>=b.id) continue;
     const length=distance(a.point,b.point);
     if (length<7 || length>19 || a.links.includes(b) || b.links.includes(a) ||
@@ -367,9 +386,11 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
     });
     if (pass && crossesPavement) {add(offRoad,a,b);add(offRoad,b,a);}
   }
+  }
   const visits: Visit[]=[];
   const doors=new Map(world.doors?.map(door=>[door.id,door]));
   for (const source of interiors) {
+    yield;
     const door=doors.get(source.id);
     if (!door || !within(door.x,door.z)) continue;
     const plan=interiorLayout(source);
@@ -1439,18 +1460,10 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
     return replace({id,personality,home,navigation,seed:hash(`${id}/${startTick}`,entry.seed.seed)||1,
       startTick,anchor:entry.cycle.endAnchor},entry)!;
   }
-  return {
-    population:()=>entries.length+crowdPopulation,
-    revision:()=>revision,
-    syncTick(current:number){tick=current;},
-    resident(id:string){
-      const entry=entries.find(entry=>entry.seed.id===id);
-      return entry&&{id,cycle:entry.cycle};
-    },
-    checkpoint() {return {tick,attempts,replacements,scenarios:entries.map(entry=>entry.seed),crowds:[...groups]};},
-    restore(state:NpcCheckpoint){
+  function* restoreSteps(state:NpcCheckpoint){
       tick=state.tick; attempts=state.attempts; replacements=state.replacements;
       for(const seed of state.scenarios){
+        yield;
         const entry=replace(seed,undefined,true);
         if(!entry)throw new Error('Invalid persisted NPC route');
         entries.push(entry);
@@ -1459,6 +1472,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
       for(const district of districts)district.roads=district.roads.filter(road=>!initialAnchors.has(road.id));
       const restoredSites=new Set<string>();
       for(const group of state.crowds){
+        yield;
         const tracks=crowdCycles(nav,group);
         if(!tracks)throw new Error('Invalid persisted NPC group');
         const patterns=new Map<Cycle,Float64Array>();
@@ -1474,6 +1488,19 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
       }
       for(let i=available.length-1;i>=0;i--)if(restoredSites.has(available[i].key))available.splice(i,1);
       crowdAttempts=groups.length;
+  }
+  return {
+    population:()=>entries.length+crowdPopulation,
+    revision:()=>revision,
+    syncTick(current:number){tick=current;},
+    resident(id:string){
+      const entry=entries.find(entry=>entry.seed.id===id);
+      return entry&&{id,cycle:entry.cycle};
+    },
+    checkpoint() {return {tick,attempts,replacements,scenarios:entries.map(entry=>entry.seed),crowds:[...groups]};},
+    restore(state:NpcCheckpoint){for(const _step of restoreSteps(state)){void _step;}},
+    async restoreAsync(state:NpcCheckpoint,yieldControl:()=>Promise<void>){
+      for(const _step of restoreSteps(state)){void _step;await yieldControl();}
     },
     retire(id:string){
       const index=entries.findIndex(entry=>entry.seed.id===id);

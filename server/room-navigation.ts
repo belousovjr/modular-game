@@ -1,7 +1,8 @@
+import { setImmediate } from 'node:timers/promises';
 import { readFileSync } from 'node:fs';
-import { createNpcNavigation, type NavigationSource } from '../src/modules/npcs/headless.ts';
+import { createNpcNavigation, createNpcNavigationAsync, type NavigationSource } from '../src/modules/npcs/headless.ts';
 
-export function loadRoomNavigation(directory: URL, worldId: string) {
+function source(directory: URL, worldId: string) {
   const file = new URL('npc.json', directory);
   const data: {
     city: Omit<NavigationSource, 'chunks'>;
@@ -18,5 +19,8 @@ export function loadRoomNavigation(directory: URL, worldId: string) {
       yield JSON.parse(readFileSync(new URL(`npc-${index}.json`, directory), 'utf8'));
     }
   }
-  return createNpcNavigation({ ...city, chunks: chunks() }, world, interiors);
+  return [{ ...city, chunks: chunks() }, world, interiors] as const;
 }
+
+export function loadRoomNavigation(directory:URL,worldId:string){return createNpcNavigation(...source(directory,worldId));}
+export function loadRoomNavigationAsync(directory:URL,worldId:string){return createNpcNavigationAsync(...source(directory,worldId),setImmediate);}
