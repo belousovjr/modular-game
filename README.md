@@ -36,6 +36,8 @@ Neon Auth хранит аккаунты и сеансы в `neon_auth`, мигр
 
 1. **Подготовьте Neon.** Возьмите `DATABASE_URL` (pooled), `NEON_AUTH_BASE_URL` и `NEON_AUTH_JWKS_URL` одной ветки. Для новой ветки задайте локально `DATABASE_URL_UNPOOLED` этой ветки и выполните `npm run db:migrate`. В Neon Auth добавьте точный Origin фронтенда, например `https://my-game.vercel.app`, без пути и завершающего слеша. [Trusted domains](https://neon.com/docs/auth/guides/configure-domains.md)
 2. **Поднимите сервер.** В Render выберите **New → Web Service**, подключите этот репозиторий и нужную ветку. Runtime — **Node**, Root Directory оставьте пустым. Build Command — `npm ci && npm run prepare:room`. Start Command — `npm start`. Health Check Path — `/healthz`. Оставьте один экземпляр комнаты. [Render Web Services](https://render.com/docs/web-services)
+`npm start` ограничивает old heap до 192 МиБ и semi-space до 1 МиБ, оставляя память под бинарные навигационные индексы и сокеты. Это не ограничение всего RSS. Локальная проверка 2026-11-22 на Node 24.12 восстановила реальный checkpoint из 13 900 NPC с пиком RSS 482 МиБ; это проверка старта, не гарантия памяти под нагрузкой игроков. В стартовых логах видны загрузка дверей, построение навигации и восстановление NPC. Проверять память нужно с полной контрольной точкой, а не пустой комнатой; большой локальный heap скрывает ошибки восстановления.
+
 3. **Задайте окружение Render** и запустите деплой.
 
    | Переменная | Значение |

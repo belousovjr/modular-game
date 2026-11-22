@@ -251,7 +251,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
     return (crossings.get(tile(x,z))??[]).some(({shape,direction})=>
       Math.abs(dx*direction[0]+dz*direction[1])<=1.8 && blocked(shape,x,z,0));
   }
-  const crossingCosts=new WeakMap<Node,Map<Node,number>>();
+  let crossingCosts=new WeakMap<Node,Map<Node,number>>();
   const walking=new Map<string,Node|null>();
   const connected=new Set<Node>();
   function foot(x: number,z: number) {
@@ -444,6 +444,11 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   const mapVersion=`${city.id}/${revision.toString(16)}`;
   return {
     version:`${mapVersion}/17`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
+    releaseWalkCache() {
+      for (const node of walking.values()) if (node) node.links.length=0;
+      walking.clear(); connected.clear(); crossingCosts=new WeakMap();
+      for (const visit of visits) walking.set(visit.node.id,visit.node);
+    },
     node(id: string) {
       if (id.startsWith('r/')) return driving.get(id);
       const [kind,x,z]=id.split('/');
@@ -607,6 +612,7 @@ export function deriveNpcCycle(nav: NpcNavigation, scenario: NpcSeed): Cycle|und
       !Number.isSafeInteger(scenario.seed) || scenario.seed<0 || scenario.seed>0xffffffff ||
       (scenario.wait!==undefined&&(!Number.isSafeInteger(scenario.wait)||scenario.wait<SCHEDULE_STEP||scenario.wait>4800)) ||
       typeof scenario.anchor!=='string' || typeof scenario.home!=='string' || typeof scenario.id!=='string' || !scenario.id) return;
+  nav.releaseWalkCache();
   const profile=profiles[scenario.personality], origin=nav.node(scenario.anchor), home=nav.node(scenario.home);
   if (!profile || !origin || !home || origin.id[0]!==home.id[0] ||
       origin.id.startsWith('r/')!==(profile.travel==='drive')) return;
@@ -964,10 +970,53 @@ type StreetBooking = {pattern:Float64Array;terminal:Uint32Array};
 export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
   const size=1, minX=bounds.minX-16,minZ=bounds.minZ-16;
   const stride=Math.ceil((bounds.maxZ-minZ+16)/size);
-  const ambient=new Map<number,Uint32Array>();
-  type Row = {counts:Uint8Array;used:number};
-  const people=new Map<number,Row>(),cars=new Map<number,Row>();
+  const words=Math.ceil(SCHEDULE_SLOTS/32), rowsPerBlock=4096;
+  function slots() {
+    type Page={base:number;values:Uint16Array|Int32Array};
+    const pages=new Map<number,Page>(),pageSize=128;
+    const pageKey=(key:number)=>Math.floor(key/pageSize);
+    const at=(key:number)=>key-pageKey(key)*pageSize;
+    const locations={
+      get(key:number) {
+        const page=pages.get(pageKey(key));
+        if(!page)return;
+        const value=page.values[at(key)];
+        return value<0||(value===65535&&page.values instanceof Uint16Array)?undefined:page.base+value;
+      },
+      has(key:number) {return this.get(key)!==undefined;},
+      set(key:number,value:number) {
+        const id=pageKey(key);
+        let page=pages.get(id);
+        if(!page){const values=new Uint16Array(pageSize);values.fill(65535);page={base:value,values};pages.set(id,page);}
+        if(page.values instanceof Uint16Array&&(value<page.base||value-page.base>=65535)){
+          const values=Int32Array.from(page.values,offset=>offset===65535?-1:page!.base+offset);
+          page.values=values;page.base=0;
+        }
+        page.values[at(key)]=value-page.base;
+      },
+      delete(key:number) {const page=pages.get(pageKey(key));if(page)page.values[at(key)]=page.values instanceof Uint16Array?65535:-1;},
+    };
+    return {locations,blocks:[] as Uint32Array[],used:[] as Uint32Array[],free:[] as number[],next:0};
+  }
+  type Slots=ReturnType<typeof slots>;
+  const ambient=slots(),people=slots(),cars=slots();
+  const overlaps=new Map<number,number>(),carOverlaps=new Map<number,number>();
   const parkedPeople=new Map<number,number>(),parkedCars=new Map<number,number>();
+  function locate(index:Slots,key:number) {
+    let location=index.locations.get(key);
+    if(location===undefined){
+      location=index.free.pop()??index.next++;
+      const block=Math.floor(location/rowsPerBlock);
+      if(!index.blocks[block]){index.blocks.push(new Uint32Array(rowsPerBlock*words));index.used.push(new Uint32Array(rowsPerBlock));}
+      index.locations.set(key,location);
+    }
+    return location;
+  }
+  const wordAt=(location:number,slot:number)=>(location%rowsPerBlock)*words+(slot>>>5);
+  function occupied(index:Slots,key:number,slot:number) {
+    const location=index.locations.get(key);
+    return location!==undefined && !!(index.blocks[Math.floor(location/rowsPerBlock)][wordAt(location,slot)]&(1<<(slot&31)));
+  }
   function raster(legs:readonly TrafficSegment[],car:boolean,origin:number,pace:number,repeats:number) {
     const pieces=new Set<number>();
     function cover(ax:number,az:number,bx:number,bz:number,radius:number,slot:number) {
@@ -1001,18 +1050,17 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
   function conflicts(pattern:Float64Array,shift:number,car=false) {
     for (const piece of pattern) {
       const key=Math.floor(piece/SCHEDULE_SLOTS),slot=(piece%SCHEDULE_SLOTS+shift)%SCHEDULE_SLOTS;
-      if ((ambient.get(key)?.[slot>>>5]??0)&(1<<(slot&31))) return true;
-      if (people.get(key)?.counts[slot] || parkedPeople.has(key) ||
-          (!car&&(cars.get(key)?.counts[slot] || parkedCars.has(key)))) return true;
+      if (occupied(ambient,key,slot)) return true;
+      if (occupied(people,key,slot) || parkedPeople.has(key) ||
+          (!car&&(occupied(cars,key,slot) || parkedCars.has(key)))) return true;
     }
     return false;
   }
   function markAmbient(pattern:Float64Array,shift:number) {
     for (const piece of pattern) {
       const key=Math.floor(piece/SCHEDULE_SLOTS),slot=(piece%SCHEDULE_SLOTS+shift)%SCHEDULE_SLOTS;
-      let bits=ambient.get(key);
-      if (!bits) ambient.set(key,bits=new Uint32Array(Math.ceil(SCHEDULE_SLOTS/32)));
-      bits[slot>>>5]|=1<<(slot&31);
+      const location=locate(ambient,key);
+      ambient.blocks[Math.floor(location/rowsPerBlock)][wordAt(location,slot)]|=1<<(slot&31);
     }
   }
   return {
@@ -1030,8 +1078,8 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
     conflicts,
     conflictsDetailed(booking:StreetBooking,car:boolean,shift=0) {
       for (const key of booking.terminal) {
-        if (ambient.has(key)||people.has(key)||parkedPeople.has(key)||
-            (!car&&(cars.has(key)||parkedCars.has(key)))) return true;
+        if (ambient.locations.has(key)||people.locations.has(key)||parkedPeople.has(key)||
+            (!car&&(cars.locations.has(key)||parkedCars.has(key)))) return true;
       }
       return conflicts(booking.pattern,shift,car);
     },
@@ -1049,14 +1097,18 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
         const count=(fixed.get(key)??0)+delta;
         if (count) fixed.set(key,count); else fixed.delete(key);
       }
-      const index=car?cars:people;
+      const index=car?cars:people,counts=car?carOverlaps:overlaps;
       for (const piece of booking.pattern) {
         const key=Math.floor(piece/SCHEDULE_SLOTS),slot=piece%SCHEDULE_SLOTS;
-        let row=index.get(key);
-        if (!row) index.set(key,row={counts:new Uint8Array(SCHEDULE_SLOTS),used:0});
-        row.counts[slot]+=delta;
-        row.used+=delta;
-        if (!row.used) index.delete(key);
+        const location=locate(index,key),block=Math.floor(location/rowsPerBlock);
+        const bits=index.blocks[block],used=index.used[block],row=location%rowsPerBlock;
+        const bit=1<<(slot&31),word=wordAt(location,slot);
+        const countKey=location*SCHEDULE_SLOTS+slot;
+        const count=(counts.get(countKey)??((bits[word]&bit)?1:0))+delta;
+        if (count>1) counts.set(countKey,count); else counts.delete(countKey);
+        if (count) bits[word]|=bit; else bits[word]&=~bit;
+        used[row]+=delta;
+        if (!used[row]) {index.locations.delete(key);index.free.push(location);}
       }
     },
   };
@@ -1069,6 +1121,14 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   let crowdPopulation=0;
   type CrowdEntry = {group:NpcCrowd;full:Cycle;outdoors:Cycle[]};
   const crowds=new Map<string,CrowdEntry[]>();
+  const crowdPlans=new Map<NpcCrowd,{full:Cycle;outdoors:Cycle[]}>();
+  function crowdPlan(group:NpcCrowd,prepared?:{full:Cycle;outdoors:Cycle[]}) {
+    const plan=prepared??crowdPlans.get(group)??crowdCycles(nav,group);
+    if(!plan)throw new Error('Invalid persisted NPC group');
+    crowdPlans.delete(group);crowdPlans.set(group,plan);
+    if(crowdPlans.size>256)crowdPlans.delete(crowdPlans.keys().next().value!);
+    return plan;
+  }
   const entries: Entry[]=[];
   const grid=new Map<string,Presence[]>();
   const occupied=new Map<string,Reservation[]>();
@@ -1242,7 +1302,8 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   function indexCrowd(group:NpcCrowd,full:Cycle,outdoors:Cycle[]) {
     groups.push(group);
     const count=group.count,tracks=[full,...outdoors];
-    const value={group,full,outdoors},keys=new Set<string>();
+    crowdPlan(group,{full,outdoors});
+    const value={group,get full(){return crowdPlan(group).full;},get outdoors(){return crowdPlan(group).outdoors;}},keys=new Set<string>();
     for (const track of tracks) {
       const period=track.endTick-track.legs[0].from;
       for (const leg of track.legs) {

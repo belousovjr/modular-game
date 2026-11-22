@@ -27,8 +27,13 @@ const origin = process.env.GAME_ORIGIN?.split(',').map(value=>value.trim()).filt
 const { world } = map;
 const roomId = process.env.GAME_ROOM_ID ?? 'local';
 const store = process.env.DATABASE_URL && createDoorStore(process.env.DATABASE_URL, `${roomId}/${world}`);
+console.info('Room startup: loading door checkpoint');
 const restored = store ? await store.load() : [];
-const npcs = await createRoomNpcs(loadRoomNavigation(directory, world), `${roomId}/${world}`, process.env.DATABASE_URL, population);
+console.info('Room startup: building NPC navigation');
+const navigation = loadRoomNavigation(directory, world);
+console.info('Room startup: restoring NPC checkpoint');
+const npcs = await createRoomNpcs(navigation, `${roomId}/${world}`, process.env.DATABASE_URL, population);
+console.info('Room startup: NPC checkpoint restored', { population: npcs.population(), rss: process.memoryUsage().rss });
 const dbHealth=createDbHealth(process.env.DATABASE_URL);
 const api=new Map([['/api/characters',createCharactersHandler(accounts)],['/api/db-health',dbHealth.handle]]);
 const room = startRoom(map.collision, world, port, origin,

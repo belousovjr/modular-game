@@ -383,3 +383,63 @@ test('packed navigation cells retain layered surfaces, negative boundaries and s
   }
   assert.equal(nav.roadPoint(100,100),undefined);
 });
+
+test('packed reservation slots preserve overlaps and reuse freed rows without leaking occupancy',()=>{
+  const schedule=createStreetSchedule({minX:-50,maxX:50,minZ:-50,maxZ:50});
+  const person=straight([0,0,-10],[0,0,10],'walk',0,480);
+  const crossing=straight([-14,0,0],[14,0,0],'drive',0,480);
+  const a=schedule.detailed(person,false),b=schedule.detailed(crossing,true);
+  schedule.change(a,false,1);schedule.change(a,false,1);
+  schedule.change(a,false,-1);assert.equal(schedule.conflictsDetailed(b,true),true);
+  schedule.change(a,false,-1);assert.equal(schedule.conflictsDetailed(b,true),false);
+  const elsewhere=schedule.detailed(straight([30,0,20],[30,0,40],'walk',0,480),false);
+  schedule.change(elsewhere,false,1);assert.equal(schedule.conflictsDetailed(b,true),false);
+  assert.equal(schedule.conflictsDetailed(elsewhere,false),true);
+  schedule.change(elsewhere,false,-1);assert.equal(schedule.conflictsDetailed(elsewhere,false),false);
+});
+
+test('releasing pedestrian query cache preserves seeded NPC routes and persistent anchors',()=>{
+  const bounds={minX:-40,maxX:40,minZ:-40,maxZ:40},spawn={x:0,z:0};
+  const mesh={surface:'sidewalk',positions:[-40,0,-40,40,0,-40,40,0,40,-40,0,40],indices:[0,1,2,0,2,3]};
+  const nav=createNpcNavigation({id:'cache-test',version:1,bounds,roads:[],chunks:[{meshes:[mesh]}]},{spawn,blockers:[]},[]);
+  const seed:NpcSeed={id:'cached',personality:0,seed:42,anchor:nav.findFoot(0,0)!.id,home:nav.findFoot(0,0)!.id,startTick:0,navigation:nav.version};
+  const expected=deriveNpcCycle(nav,seed);assert.ok(expected);
+  for(let i=0;i<5;i++){nav.findFoot(i*4,i*4);nav.releaseWalkCache();assert.deepEqual(deriveNpcCycle(nav,seed),expected);}
+});
+
+test('reservation location pages preserve sparse addresses and free-slot reuse',()=>{
+  const schedule=createStreetSchedule({minX:0,maxX:1000,minZ:0,maxZ:1000});
+  const booking=(keys:readonly number[])=>({pattern:Float64Array.from(keys,key=>key*360),terminal:new Uint32Array()});
+  const first=booking([0]),later=booking([1]),gap=booking([2]);
+  schedule.change(first,false,1);
+  const bulk=booking(Array.from({length:66000},(_,i)=>128+i));
+  schedule.change(bulk,false,1);
+  schedule.change(later,false,1);
+  assert.equal(schedule.conflictsDetailed(first,false),true);
+  assert.equal(schedule.conflictsDetailed(later,false),true);
+  assert.equal(schedule.conflictsDetailed(gap,false),false);
+  schedule.change(first,false,-1);schedule.change(gap,false,1);
+  assert.equal(schedule.conflictsDetailed(first,false),false);
+  assert.equal(schedule.conflictsDetailed(later,false),true);
+  assert.equal(schedule.conflictsDetailed(gap,false),true);
+  schedule.change(bulk,false,-1);schedule.change(later,false,-1);schedule.change(gap,false,-1);
+  assert.equal(schedule.conflictsDetailed(bulk,false),false);
+});
+
+
+test('evicted crowd plans reproduce their routes without removing residents or changing checkpoints',()=>{
+  const bounds={minX:-50,maxX:50,minZ:-50,maxZ:50},spawn={x:0,z:0};
+  const mesh={surface:'sidewalk',positions:[-50,0,-50,50,0,-50,50,0,50,-50,0,50],indices:[0,1,2,0,2,3]};
+  const nav=createNpcNavigation({id:'crowd-cache',version:1,bounds,roads:[],chunks:[{meshes:[mesh]}]},{spawn,blockers:[]},[]);
+  const groups:NpcCrowd[]=Array.from({length:257},(_,i)=>({count:1,slots:[0],recipe:{id:`street/${i}`,personality:0,crowd:true,seed:i+1,anchor:'p/0/0',home:'p/0/0',startTick:0,navigation:nav.version}}));
+  const authority=createNpcAuthority(nav,0);
+  const state={tick:0,attempts:0,replacements:0,scenarios:[],crowds:groups};
+  authority.restore(state);
+  const entries=authority.crowdPresentation(0,0,100);
+  assert.equal(entries.length,257);assert.equal(authority.population(),257);
+  const first=entries.find(entry=>entry.group===groups[0])!;
+  const expected=JSON.parse(JSON.stringify({full:first.full,outdoors:first.outdoors}));
+  for(const entry of entries){void entry.full;void entry.outdoors;}
+  assert.deepEqual(JSON.parse(JSON.stringify({full:first.full,outdoors:first.outdoors})),expected);
+  assert.deepEqual(authority.checkpoint(),state);
+});
