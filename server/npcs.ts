@@ -10,7 +10,7 @@ type Observer = Pick<CharacterSnapshot,'x'|'z'>;
 export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>, room:string, url?:string) {
   const pool=url?new Pool({connectionString:url,max:1,connectionTimeoutMillis:5000,query_timeout:10000}):undefined;
   pool?.on('error',()=>console.error('NPC storage connection failed'));
-  const authority=createNpcAuthority(nav,0);
+  let authority=createNpcAuthority(nav,0);
   let offset=0, wrecks:NpcFrame['corrections']=[];
   try {
     const saved=await pool?.query<{state:unknown}>(
@@ -28,8 +28,10 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
   }
   let current=offset, observers:readonly Observer[]=[], savedRevision=authority.revision();
   let writing:Promise<void>|undefined;
+  let resetting:Promise<void>|undefined;
   const recovery:TrafficRecovery[]=[];
-  const traffic=createTrafficActors(job=>recovery.push(job),true);
+  const makeTraffic=()=>createTrafficActors(job=>recovery.push(job),true);
+  let traffic=makeTraffic();
   for(const {id,pose} of wrecks){
     const actor=authority.resident(id);
     if(actor)traffic.restoreWreck(actor,pose);
@@ -38,21 +40,25 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
   const inRange=(hero:Observer,point:TrafficPoint,radius:number)=>Math.hypot(hero.x-point[0],hero.z-point[2])<=radius;
   // The server cannot see the camera frustum. Keep wrecks outside every possible player camera before retiring them.
   const hidden=(point:TrafficPoint)=>!observers.some(hero=>inRange(hero,point,TRAFFIC_RADIUS+18));
+  async function save(source:typeof authority,wrecks:NpcFrame['corrections']){
+    await pool?.query(
+      `INSERT INTO public.world_npc_checkpoints(room_id,navigation,state) VALUES($1,$2,$3::jsonb)
+       ON CONFLICT(room_id,navigation) DO UPDATE SET state=EXCLUDED.state,updated_at=now()`,
+      [room,nav.version,JSON.stringify({...source.checkpoint(),tick:current,wrecks})],
+    );
+  }
   function checkpoint(){
-    if(writing||!pool)return writing;
+    if(writing||!pool||resetting)return writing;
     const wrecks=traffic.settledWrecks();
     const serialized=JSON.stringify(wrecks);
     if(savedRevision===authority.revision()&&savedWrecks===serialized)return;
     const revision=authority.revision();
-    writing=pool.query(
-      `INSERT INTO public.world_npc_checkpoints(room_id,navigation,state) VALUES($1,$2,$3::jsonb)
-       ON CONFLICT(room_id,navigation) DO UPDATE SET state=EXCLUDED.state,updated_at=now()`,
-      [room,nav.version,JSON.stringify({...authority.checkpoint(),tick:current,wrecks})],
-    ).then(()=>{savedRevision=revision;savedWrecks=serialized;}).finally(()=>{writing=undefined;});
+    writing=save(authority,wrecks).then(()=>{savedRevision=revision;savedWrecks=serialized;}).finally(()=>{writing=undefined;});
     return writing;
   }
   // Route search and SQL run outside the fixed-step callback.
   const planner=setInterval(()=>{
+    if(resetting)return;
     const job=recovery.shift();
     if(job)traffic.rejoin(job.id,job.token,nav.recovery(job));
     else authority.planNext(current,nav.spawn,hidden,traffic.immobilized);
@@ -61,6 +67,20 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
     void checkpoint()?.catch(()=>console.error('Could not save NPC checkpoint'));
   },30_000);
   return {
+    population:()=>authority.population(),
+    reset(){
+      resetting??=(async()=>{
+        await writing?.catch(()=>{});
+        const fresh=createNpcAuthority(nav,current);
+        await save(fresh,[]);
+        authority=fresh;
+        traffic=makeTraffic();
+        recovery.length=0;
+        savedRevision=fresh.revision();
+        savedWrecks='[]';
+      })().finally(()=>{resetting=undefined;});
+      return resetting;
+    },
     snapshot(hero:Observer){
       const area=authority.observe(hero.x,hero.z,current);
       const deviations=traffic.corrections();
@@ -96,11 +116,12 @@ export async function createRoomNpcs(nav:ReturnType<typeof createNpcNavigation>,
       traffic.advance(current);
       traffic.pruneWrecks(current,point=>!hidden(point)||inRange({x:car[0],z:car[2]},point,16),authority.retire);
     },
-    traffic,
+    get traffic(){return traffic;},
     async close(){
       clearInterval(planner);
       clearInterval(saving);
       try {
+        await resetting?.catch(()=>{});
         await writing?.catch(()=>{});
         await checkpoint();
       } finally {await pool?.end();}

@@ -284,7 +284,7 @@ test('two sockets share one authoritative car through contention, pedestrian con
   } finally { await room.close(); }
 });
 
-test('room sends different NPC recipes according to each character position', { timeout: 15_000 }, async () => {
+test('room sends nearby NPC recipes and lets authenticated users reset the population', { timeout: 15_000 }, async () => {
   const origin='http://localhost:5175';
   const world='npc-test';
   const city=generateCity(citySource);
@@ -293,7 +293,7 @@ test('room sends different NPC recipes according to each character position', { 
   const collision={bounds:nav.bounds,spawn:nav.spawn,baseHeight:0,slopeX:0,floors:[],blockers:[]};
   let joins=0;
   const room=startRoom(collision,world,0,origin,async()=>true,undefined,[],[],
-    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs);
+    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs,async token=>token==='session');
   try {
     await once(room.server,'listening');
     const address=room.server.address();
@@ -308,8 +308,30 @@ test('room sends different NPC recipes according to each character position', { 
     assert.ok(readNpcFrame(remote.data));
     const ids=(packet:Packet)=>new Set([...packet.data!.scenarios.map(seed=>seed.id),...packet.data!.crowds.map(group=>group.recipe.id)]);
     for(const id of ids(local))assert.ok(!ids(remote).has(id),'far client must not receive central routes');
+    const admin=`http://127.0.0.1:${address.port}/admin`;
+    const headers={Origin:origin,Authorization:'Bearer session'};
+    const preflight=await fetch(admin+'/status',{method:'OPTIONS',headers:{
+      Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'authorization',
+    }});
+    assert.equal(preflight.status,204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'),origin);
+    assert.equal((await fetch(admin+'/status',{headers:{...headers,Origin:'https://elsewhere.example'}})).status,403);
+    assert.equal((await fetch(admin+'/npcs/reset',{method:'POST'})).status,401);
+    const status=await fetch(admin+'/status',{headers});
+    assert.equal(status.status,200);
+    const sample=await status.json();
+    assert.equal(sample.players,2);
+    assert.ok(sample.population>0);
+    const reset=await fetch(admin+'/npcs/reset',{method:'POST',headers});
+    assert.equal(reset.status,200);
+    const cleared=await cityCenter.next(packet=>packet.type==='npcs'&&packet.data?.population===0&&packet.data.tick>=local.data!.tick);
+    assert.equal(ids(cleared).size,0);
+    const regenerated=await cityCenter.next(packet=>packet.type==='npcs'&&
+      !!packet.data&&packet.data.tick>cleared.data!.tick&&packet.data.population>0);
+    assert.ok(readNpcFrame(regenerated.data));
+    assert.equal(cityCenter.socket.readyState,WebSocket.OPEN);
+    assert.equal((await fetch(admin+'/npcs/reset',{method:'POST',headers})).status,429);
   } finally {
-    await room.close();
-    await npcs.close();
+    try {await room.close();} finally {await npcs.close();}
   }
 });

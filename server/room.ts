@@ -3,6 +3,7 @@ import { createVehicleAuthority } from '../src/modules/vehicles/headless.ts';
 import { createEntranceMotion, type DoorPose } from '../src/modules/building-interiors/headless.ts';
 import { onlineDayPhase } from '../src/simulation/daylight.ts';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { CharacterSpawnBlockedError, characterBody, createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
@@ -11,6 +12,7 @@ import { MAX_ROOM_PLAYERS, parsePacket, PROTOCOL, record, SNAPSHOT_TICKS } from 
 import type { TrafficSample } from '../src/simulation/traffic.ts';
 import type { TerrainTile } from './terrain-tiles.ts';
 import type { BuildingInteriorSource, CollisionWorld } from '../src/modules/world/headless.ts';
+import type { RoomAdminStatus } from '../src/room-admin-status.ts';
 
 export function startRoom(
   collision: CollisionWorld, world: string, port: number, origin: string | readonly string[],
@@ -20,9 +22,11 @@ export function startRoom(
   terrain?: (x:number,z:number)=>TerrainTile,
   prefetchTerrain?: (x:number,z:number)=>void,
   npcs?: RoomNpcs,
+  authorizeAdmin?: (accessToken:string)=>Promise<unknown>,
 ) {
   let ticks = 0, tickMs = 0, maxTickMs = 0, slowTicks = 0, maxPendingTicks = 0;
   let snapshots = 0, snapshotBytes = 0, outboundSnapshotBytes = 0, serializationMs = 0;
+  let loopStart=performance.eventLoopUtilization();
   const origins = new Set(typeof origin === 'string' ? [origin] : origin);
   const doors = createEntranceMotion(collision.doors ?? []);
   doors.restore(restoredDoors);
@@ -35,10 +39,72 @@ export function startRoom(
   type Player = { id: string; token: string; actor: ReturnType<typeof makeActor>; socket?: WebSocket; expires: number; npcPayload?: string };
   const players = new Map<string, Player>();
   const connections = new Map<WebSocket, { alive: boolean }>();
+  let nextResetAt=0, resetting=false;
+  const http=createServer(async (request,response)=>{
+    const path=request.url;
+    const method=request.method;
+    const requestOrigin=request.headers.origin;
+    if(!authorizeAdmin || (path!=='/admin/status' && path!=='/admin/npcs/reset')){
+      response.writeHead(404).end();
+      return;
+    }
+    if(requestOrigin && !origins.has(requestOrigin)){
+      response.writeHead(403).end();
+      return;
+    }
+    if(requestOrigin)response.setHeader('Access-Control-Allow-Origin',requestOrigin);
+    response.setHeader('Vary','Origin');
+    response.setHeader('Cache-Control','no-store');
+    if(method==='OPTIONS'){
+      response.writeHead(204,{'Access-Control-Allow-Methods':'GET, POST','Access-Control-Allow-Headers':'Authorization','Access-Control-Max-Age':'300'}).end();
+      return;
+    }
+    function json(status:number,data:RoomAdminStatus|{error:string}|{ok:true}){
+      response.writeHead(status,{'Content-Type':'application/json; charset=utf-8'}).end(JSON.stringify(data));
+    }
+    if(method!==(path==='/admin/status'?'GET':'POST')){
+      json(405,{error:'Метод не поддерживается.'});
+      return;
+    }
+    const token=/^Bearer (\S+)$/i.exec(request.headers.authorization??'')?.[1];
+    try {
+      if(!token || !await authorizeAdmin(token)){
+        json(401,{error:'Войдите в аккаунт снова.'});
+        return;
+      }
+      if(path==='/admin/status'){
+        json(200,{
+          players:[...players.values()].filter(player=>player.socket?.readyState===WebSocket.OPEN).length,
+          population:npcs?.population()??null,
+          resetInMs:Math.max(0,nextResetAt-performance.now()),
+          tickMs:ticks?tickMs/ticks:0,maxTickMs,maxPendingTicks,
+          eventLoopPercent:performance.eventLoopUtilization(loopStart).utilization*100,
+          rssMiB:process.memoryUsage.rss()/1024**2,
+        });
+        return;
+      }
+      if(!npcs){json(503,{error:'NPC в комнате отключены.'});return;}
+      if(resetting || performance.now()<nextResetAt){
+        json(429,{error:'Сброс уже запущен или комната ещё заселяется.'});
+        return;
+      }
+      resetting=true;
+      try {
+        await npcs.reset();
+        nextResetAt=performance.now()+60_000;
+        for(const player of players.values())publishNpcs(player);
+        json(200,{ok:true});
+      } finally {resetting=false;}
+    } catch {
+      console.error('Room admin request failed',method,path);
+      json(503,{error:'Запрос к комнате не выполнен.'});
+    }
+  });
   const server = new WebSocketServer({
-    port, host, path: '/room', maxPayload: 4096, perMessageDeflate: false,
+    server:http, path: '/room', maxPayload: 4096, perMessageDeflate: false,
     verifyClient: ({ origin: requestOrigin }: { origin: string }) => origins.has(requestOrigin) && connections.size < MAX_ROOM_PLAYERS * 2,
   });
+  http.listen(port,host);
 
   function send(socket: WebSocket, data: string) {
     if (socket.readyState !== WebSocket.OPEN) return false;
@@ -255,11 +321,15 @@ export function startRoom(
         outboundSnapshotBytes, serializationMs,
       };
       ticks = tickMs = maxTickMs = slowTicks = maxPendingTicks = snapshots = snapshotBytes = outboundSnapshotBytes = serializationMs = 0;
+      loopStart=performance.eventLoopUtilization();
       return sample;
     },
-    close() {
+    async close() {
       for (const socket of connections.keys()) socket.terminate();
-      return new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      await Promise.all([
+        new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve())),
+        new Promise<void>((resolve,reject)=>http.close(error=>error?reject(error):resolve())),
+      ]);
     },
   };
 }

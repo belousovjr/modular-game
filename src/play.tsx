@@ -1,25 +1,16 @@
-import { createAuthClient } from '@neon/auth';
-import { SupabaseAuthAdapter } from '@neon/auth/vanilla/adapters';
-import { Badge, Box, Button, Callout, Card, Flex, Heading, Popover, Text, TextField, Theme } from '@radix-ui/themes';
+import { Badge, Box, Button, Callout, Card, Flex, Heading, Link, Popover, Text, TextField, Theme } from '@radix-ui/themes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPanels, usePanels } from './core/panels.ts';
 import { createViewport } from './core/scene.ts';
 import { modules } from './registry.ts';
+import { accessToken, auth } from './auth.ts';
 
-const url = import.meta.env.VITE_NEON_AUTH_URL;
-const auth = url ? createAuthClient(url, { adapter: SupabaseAuthAdapter({ fetchOptions: { timeout: 12_000 } }) }) : undefined;
 const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution', 'vehicles', 'npcs'];
 type Character = { id: string; name: string };
 type User = { id: string; name: string };
 function accountView(user: { id: string; email?: string; user_metadata: Record<string, unknown> }): User {
   const name = user.user_metadata.name;
   return { id: user.id, name: typeof name === 'string' ? name : user.email ?? '' };
-}
-
-async function accessToken() {
-  const result = await auth?.getSession();
-  if (!result?.data?.session?.access_token) throw new Error('Войдите в аккаунт снова.');
-  return result.data.session.access_token;
 }
 
 async function characterRequest<T>(name?: string): Promise<T> {
@@ -161,6 +152,7 @@ export function Play() {
       {error && <Callout.Root color="red" role="alert"><Callout.Text>{error}</Callout.Text></Callout.Root>}
       {user ? <>
         <Text color="gray">{user.name}</Text>
+        <Link href="/admin">Управление комнатой</Link>
         {characters.map(character => <Button key={character.id} disabled={busy} variant="soft" onClick={() => choose(character)}>{character.name}</Button>)}
         <form onSubmit={createCharacter}><Flex direction="column" gap="3">
           <Text as="label">Имя персонажа<TextField.Root name="character" required minLength={2} maxLength={32} /></Text>

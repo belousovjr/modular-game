@@ -31,7 +31,7 @@ function navigation() {
 }
 const npcs=await createRoomNpcs(navigation(),`${roomId}/${world}`,process.env.DATABASE_URL);
 const room = startRoom(map.collision, world, port, origin,
-  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch, npcs);
+  (token, id) => accounts?.owns(token, id) ?? Promise.resolve(false), host, [], restored, undefined, map.terrain, map.prefetch, npcs, accounts?.user);
 const metricsTimer = setInterval(() => {
   const metrics = room.takeMetrics();
   if (metrics.players || metrics.outboundSnapshotBytes) {
