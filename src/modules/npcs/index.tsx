@@ -12,16 +12,17 @@ import { objectRenderingModule } from '../object-rendering/index.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { buildingInteriorsModule } from '../building-interiors/index.ts';
 import { createTrafficCarAssets } from '../vehicles/index.tsx';
-import { crowdTiming, crowdTrack, createTrafficActors, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor } from './headless.ts';
+import { crowdTiming, crowdTrack, createTrafficActors, npcCorrectionActor, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficActor } from './headless.ts';
 
-import { streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
+import { overlappingPedestrians, streetSelection, PEOPLE_LIMIT, CAR_LIMIT } from './spacing.ts';
 import { createPlanner } from './planner.ts';
-import { npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
+import { blendNpcPose, createNpcPoseHandoff, npcLodCoverage, NPC_LOD_MARGIN, NPC_LOD_MS } from './presentation.ts';
 
 type Pose = NonNullable<ReturnType<ReturnType<typeof createTrafficActors>['pose']>>;
-type Actor = TrafficActor;
+type Actor = TrafficActor & {correctionOnly?:true};
 type Candidate = Actor & {d:number;car:boolean;cell:string;existing:boolean;onScreen:boolean};
 type View = {owner:ReturnType<typeof createScope>; actor:Actor; car:boolean; progress:number; body?:ReturnType<typeof npcAppearance>['body'];
+  handoff?:ReturnType<typeof createNpcPoseHandoff>; drawnPoint?:Pose['point']; coverage?:number;
   draw:(pose:Pose,tick:number,id:string)=>void; fade:(coverage:number)=>void};
 
 type Diagnostics = { population: number; subscribed: number; people: number; cars: number; ready: boolean; error: string };
@@ -74,7 +75,7 @@ export const npcsModule=defineModule({
         }
         traffic.replace(available);
       });
-    deps.characters.registerTrafficAuthority(traffic,scope);
+    if(!core.play)deps.characters.registerTrafficAuthority(traffic,scope);
     const cars=createTrafficCarAssets(core.scene,deps.geometry,scope);
     const views=new Map<string,View>();
     const reusable:View[]=[];
@@ -88,18 +89,38 @@ export const npcsModule=defineModule({
 
     const probe=Vector3.Zero();
     let displayed: Actor[]=[];
+    const online=deps.simulation.online;
+    let lastOnline=online.npcs();
+    let overrides=new Map(lastOnline?.corrections.map(({id,pose})=>[id,pose]));
+    let previousOverrides=overrides,previousTick=lastOnline?.tick??0;
+    function latestPose(actor:Actor,tick:number,correctionTick:number):Pose|undefined {
+      const target=overrides.get(actor.id);
+      if(!target)return traffic.pose(actor,tick);
+      const from=previousOverrides.get(actor.id),toTick=lastOnline?.tick??correctionTick;
+      if(!from||correctionTick>=toTick||toTick===previousTick)return target;
+      const alpha=Math.max(0,(correctionTick-previousTick)/(toTick-previousTick));
+      return blendNpcPose(from,target,alpha);
+    }
     let selected=new Set<string>();
-    let lastTick=-Infinity,lastX=Infinity,lastY=Infinity,lastZ=Infinity,lastFlyover=false,drawnTick=-1,lastRevision=-1;
+    let lastTick=-Infinity,lastX=Infinity,lastY=Infinity,lastZ=Infinity,lastFlyover=false,drawnTick=-1,drawnCorrectionTick=-1,lastRevision=-1;
     const observer=core.onFrame.add(delta=>{
       const origin=deps.rendering.getDistanceOrigin();
       const x=origin?.x??Infinity,y=origin?.y??Infinity,z=origin?.z??Infinity;
       const flyover=core.scene.activeCamera instanceof SceneCamera;
-      const tick=deps.simulation.snapshot().tick;
+      const tick=core.play?online.npcTick():deps.simulation.snapshot().tick;
+      const correctionTick=core.play?online.npcCorrectionTick():tick;
       const hero=deps.characters.snapshot();
       const contactOrigin=Math.hypot(hero.x-x,hero.z-z)>8?{x:hero.x,z:hero.z}:null;
-      planner.update({origin:origin?{x,z}:null,contactOrigin,tick});
+      const frame=online.npcs();
+      const updated=lastOnline!==frame;
+      if(updated){
+        previousOverrides=overrides;previousTick=lastOnline?.tick??0;
+        lastOnline=frame;overrides=new Map(frame?.corrections.map(({id,pose})=>[id,pose]));
+      }
+      if(core.play)planner.remote(frame);
+      else planner.update({origin:origin?{x,z}:null,contactOrigin,tick});
       const revision=planner.revision();
-      const refresh=revision!==lastRevision || tick-lastTick>=6 || Math.hypot(x-lastX,flyover?0:y-lastY,z-lastZ)>=4 || flyover!==lastFlyover;
+      const refresh=updated||revision!==lastRevision || tick-lastTick>=6 || Math.hypot(x-lastX,flyover?0:y-lastY,z-lastZ)>=4 || flyover!==lastFlyover;
       if (refresh) {
         lastTick=tick; lastX=x; lastY=y; lastZ=z; lastFlyover=flyover;
         const candidates: Candidate[]=[];
@@ -107,10 +128,15 @@ export const npcsModule=defineModule({
         const frustum=camera?Frustum.GetPlanes(camera.getTransformationMatrix()):[];
         function consider(actor:Actor) {
           const {id}=actor;
-          const pose=traffic.pose(actor,tick);
+          let pose=latestPose(actor,tick,correctionTick);
+          const previous=views.get(id)?.actor;
+          if(core.play && !pose && previous && !previous.correctionOnly){
+            actor=previous;
+            pose=latestPose(actor,tick,correctionTick);
+          }
           if (!pose) return;
           const dx=x-pose.point[0],dy=flyover?0:y-pose.point[1],dz=z-pose.point[2];
-          const existing=views.has(id),limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
+          const existing=previous!==undefined,limit=(pose.mode==='drive'?TRAFFIC_RADIUS:NPC_RADIUS)+(existing?NPC_LOD_MARGIN:0);
           const d=dx*dx+dy*dy+dz*dz;
           if (d>limit*limit || !Number.isFinite(d)) return;
           probe.set(pose.point[0],pose.point[1]+.9,pose.point[2]);
@@ -122,12 +148,15 @@ export const npcsModule=defineModule({
         lastRevision=revision;
         const current=new Map(available.map(actor=>[actor.id,actor]));
         for(const actor of traffic.exceptions())current.set(actor.id,actor);
+        for(const id of frame?.suppressed??[])current.delete(id);
+        for(const [id,pose] of overrides)if(!current.has(id))current.set(id,{...npcCorrectionActor(id,pose,tick),correctionOnly:true});
         for(const actor of current.values())consider(actor);
         displayed=streetSelection(candidates);
         selected=new Set(displayed.map(actor=>actor.id));
       }
-      const moved=refresh||drawnTick!==tick;
+      const moved=refresh||drawnTick!==tick||drawnCorrectionTick!==correctionTick;
       drawnTick=tick;
+      drawnCorrectionTick=correctionTick;
       if (moved) doorPoses.clear();
       let people=0,activeCars=0;
       const step=delta/NPC_LOD_MS;
@@ -136,6 +165,9 @@ export const npcsModule=defineModule({
           view.progress=Math.max(0,view.progress-step);
           if (view.progress===0) {
             views.delete(id);
+            view.fade(0);
+            view.drawnPoint=undefined;
+            view.coverage=0;
             if (view.car) view.owner.dispose(); else reusable.push(view);
             continue;
           }
@@ -144,17 +176,26 @@ export const npcsModule=defineModule({
       }
       function show(view:View,pose:Pose,updatePose:boolean) {
         const distance=Math.hypot(x-pose.point[0],flyover?0:y-pose.point[1],z-pose.point[2]);
-        view.fade(npcLodCoverage(view.progress,distance,view.car));
-        if (updatePose) view.draw(pose,tick,view.actor.id);
+        view.coverage=npcLodCoverage(view.progress,distance,view.car);
+        if(!core.play || view.car)view.fade(view.coverage);
+        const id=view.actor.id;
+        if ((updatePose || view.handoff?.active) && (!view.actor.correctionOnly || overrides.has(id))) {
+          if (core.play) {
+            view.handoff??=createNpcPoseHandoff();
+            pose=view.handoff.sample(id,pose,overrides.has(id),delta,view.actor.cycle);
+          }
+          view.draw(pose,tick,id);
+          view.drawnPoint=pose.point;
+        }
       }
       for (const [id,view] of views) if (!selected.has(id)) {
-        const pose=traffic.pose(view.actor,tick);
+        const pose=latestPose(view.actor,tick,correctionTick);
         if (pose) show(view,pose,moved);
       }
       let created=0;
       for (const actor of displayed) {
         const {id}=actor;
-        const pose=traffic.pose(actor,tick);
+        const pose=latestPose(actor,tick,correctionTick);
         if (!pose) continue;
         if (moved && pose.door) doorPoses.set(pose.door,Math.max(doorPoses.get(pose.door)??0,pose.doorOpen));
         let view=views.get(id);
@@ -198,6 +239,18 @@ export const npcsModule=defineModule({
           view.actor=actor;
           view.progress=needsView?0:Math.min(1,view.progress+step);
           show(view,pose,needsView||moved);
+        }
+      }
+      const visiblePedestrians:Pose['point'][]=[];
+      for(const view of views.values()){
+        if(!core.play || view.car)continue;
+        const {drawnPoint,coverage=0}=view;
+        if(!drawnPoint || !coverage){view.fade(0);continue;}
+        if(visiblePedestrians.some(point=>overlappingPedestrians(point,drawnPoint))){
+          view.fade(0);
+        }else{
+          visiblePedestrians.push(drawnPoint);
+          view.fade(coverage);
         }
       }
       while (reusable.length) reusable.pop()!.owner.dispose();

@@ -1,4 +1,4 @@
-import { createNpcAuthority, createNpcNavigation } from './headless.ts';
+import { createNpcAuthority, createNpcNavigation, crowdCycles, deriveNpcCycle } from './headless.ts';
 import { type PlannerData, type PlannerPlan, type PlannerQuery, type PlannerRequest, type PlannerResponse } from './planner-protocol.ts';
 
 type Init = Extract<PlannerRequest,{type:'init'}>;
@@ -12,6 +12,7 @@ let reply=false;
 let failed=false;
 let initialOrigin:PlannerQuery['origin']|undefined;
 const sent=new Map<string,object>();
+const remoteKeys=new Map<string,string>();
 
 const send=(response:PlannerResponse)=>self.postMessage(response);
 function fail(cause:unknown) {
@@ -85,6 +86,33 @@ function queuePump() {
   setTimeout(pump,0);
 }
 
+function remote(frame:Extract<PlannerRequest,{type:'remote'}>['frame']){
+  const nav=navigation;
+  if(!nav)return;
+  const ids=new Set<string>(),added:PlannerPlan[]=[];
+  for(const seed of frame.scenarios){
+    ids.add(seed.id);
+    const key=JSON.stringify(seed);
+    if(remoteKeys.get(seed.id)===key)continue;
+    const cycle=deriveNpcCycle(nav,seed);
+    if(!cycle)throw new Error('Несовместимый маршрут NPC. Сервер: '+seed.navigation+', клиент: '+nav.version);
+    remoteKeys.set(seed.id,key);
+    added.push({kind:'resident',id:seed.id,plan:{seed,cycle}});
+  }
+  for(const group of frame.crowds){
+    const id=group.recipe.id;ids.add(id);
+    const key=JSON.stringify(group);
+    if(remoteKeys.get(id)===key)continue;
+    const tracks=crowdCycles(nav,group);
+    if(!tracks)throw new Error('Несовместимая навигация фоновых NPC');
+    remoteKeys.set(id,key);
+    added.push({kind:'crowd',id,plan:{group,...tracks}});
+  }
+  const removed=[...remoteKeys.keys()].filter(id=>!ids.has(id));
+  for(const id of removed)remoteKeys.delete(id);
+  send({type:'frame',tick:frame.tick,population:frame.population,added,removed,more:false});
+}
+
 self.onmessage=({data:message}:MessageEvent<PlannerRequest>)=>{
   if (failed) return;
   if (message.type==='init') {
@@ -97,6 +125,9 @@ self.onmessage=({data:message}:MessageEvent<PlannerRequest>)=>{
       authority=prepare(init);
       send({type:'ready'});
     } catch (cause) { fail(cause); }
+  } else if(message.type==='remote'){
+    try{remote(message.frame);}
+    catch(cause){fail(cause);}
   } else if(message.type==='recover') {
     try {send({type:'recovered',id:message.job.id,token:message.job.token,target:navigation?.recovery(message.job)??null});}
     catch(cause){fail(cause);}

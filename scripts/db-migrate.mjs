@@ -11,7 +11,7 @@ try {
   await client.query('BEGIN');
   const directory = new URL('../db/', import.meta.url);
   const files = (await readdir(directory)).filter(file => /^\d+-.+\.sql$/.test(file)).sort();
-  // shortcut: both migrations are idempotent, track applied versions before adding one-time data migrations.
+  // shortcut: the migrations are idempotent, track applied versions before adding one-time data migrations.
   for (const file of files) await client.query(await readFile(new URL(file, directory), 'utf8'));
   await client.query('COMMIT');
   console.log('Applied: ' + files.join(', '));

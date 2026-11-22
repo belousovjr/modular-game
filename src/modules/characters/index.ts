@@ -11,7 +11,7 @@ import { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera.js';
 import { defineModule } from '../../core/context.ts';
 import { trackLocalCheckpoint } from '../../core/local-checkpoint.ts';
-import { createDisplayHeight } from './height-presentation.ts';
+import { createDisplayHeight, createOnlineJumpHeight } from './height-presentation.ts';
 import { readLocalPosition, saveLocalPosition } from './local-position.ts';
 import { simulationModule } from '../simulation/index.tsx';
 import { worldModule } from '../world/index.ts';
@@ -71,6 +71,7 @@ export const charactersModule = defineModule({
       },
     })));
     const sampleHeight=createDisplayHeight();
+    const sampleJumpHeight=createOnlineJumpHeight();
     let displayY=sampleHeight(snapshot(),0);
     let displayX=snapshot().x, displayZ=snapshot().z;
     let displayedIdentity='';
@@ -87,19 +88,21 @@ export const charactersModule = defineModule({
     });
     if(reset)scope.onDispose(()=>core.onResetView?.remove(reset));
     const smoothing=core.onFrame.add(delta=>{
-      const state=snapshot();
+      const vehicleDisplay=online.displaySelf();
+      const state=vehicleDisplay??snapshot();
       const identity=online.identity();
       const reset=identity!==displayedIdentity || Math.hypot(state.x-displayX,state.z-displayZ)>3;
       displayedIdentity=identity;
-      const blend=identity&&!reset ? 1-Math.exp(-delta/55) : 1;
+      const blend=identity&&!reset&&!vehicleDisplay ? 1-Math.exp(-delta/55) : 1;
       displayX+=(state.x-displayX)*blend;
       displayZ+=(state.z-displayZ)*blend;
-      displayY=sampleHeight(state,delta,reset);
+      const baseHeight=vehicleDisplay?state.y:sampleHeight(state,delta,reset);
+      displayY=sampleJumpHeight(state,baseHeight,delta,reset||!online.connected()||!!vehicleDisplay||!!state.vehicleId);
       deps.interiors.presentDoorSnapshot(core.play ? online.doors() : doors.snapshot());
     });
     scope.onDispose(()=>core.onFrame.remove(smoothing));
     const update = () => {
-      const state=snapshot();
+      const state=online.displaySelf()??snapshot();
       const interpolated=!!online.self();
       render(interpolated ? { ...state, x: displayX, z: displayZ } : state,displayY,interpolated);
       const remote=online.remote();

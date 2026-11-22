@@ -1,3 +1,4 @@
+import type { NpcFrame } from '../../simulation/online-protocol.ts';
 import type { CityMesh, CitySource } from '../world-generation/index.ts';
 import type { BuildingInteriorSource, BuildingDoor, CollisionBox, CollisionWorld } from '../world/index.ts';
 import type { createNpcAuthority, TrafficRecovery, TrafficRejoin } from './headless.ts';
@@ -30,6 +31,7 @@ export type PlannerRequest =
   | {type:'init';map:Metadata;spawn:CollisionWorld['spawn']}
   | {type:'data';batch:readonly PlannerData[]}
   | {type:'prepare'}
+  | {type:'remote';frame:NpcFrame}
   | {type:'query';query:PlannerQuery}
   | {type:'recover';job:TrafficRecovery};
 

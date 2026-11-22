@@ -5,7 +5,7 @@ import { Worker } from 'node:worker_threads';
 import { createCharacterAuthority } from '../src/modules/characters/headless.ts';
 import {createLocalAuthority} from '../src/simulation/authority.ts';
 import { createNpcNavigation, createTrafficActors, NPC_RADIUS, TRAFFIC_RADIUS, type TrafficRecovery } from '../src/modules/npcs/headless.ts';
-import { displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN } from '../src/modules/npcs/presentation.ts';
+import { createNpcPoseHandoff, displayNpcPose, npcLodCoverage, NPC_LOD_MARGIN } from '../src/modules/npcs/presentation.ts';
 import { plannerPackets } from '../src/modules/npcs/planner-input.ts';
 import { plannerQueryDue, type PlannerRequest, type PlannerResponse } from '../src/modules/npcs/planner-protocol.ts';
 import type { CitySource } from '../src/modules/world-generation/headless.ts';
@@ -135,6 +135,33 @@ test('NPC yields to a hero on the route, remains solid, then continues from its 
   }finally{character.dispose();}
 });
 
+test('a wreck holds an NPC queue until it clears the route',()=>{
+  const walker=(id:string,x:number)=>{
+    const a=[x,0,0] as const,b=[x+8,0,0] as const;
+    return {id,cycle:{
+      legs:[{a,b,from:0,until:240,mode:'walk' as const,distance:0,length:8,yaw:Math.PI/2,pitch:0,into:0,out:0}],
+      reservations:[],endTick:240,endAnchor:'end',heading:Math.PI/2,
+    }};
+  };
+  const first=walker('first',0),second=walker('second',-2);
+  const wreckActor=walker('wreck',5);
+  const traffic=createTrafficActors(()=>{});
+  traffic.replace([second,first]);
+  const wreck={point:[5,0,0] as const,yaw:Math.PI/2,pitch:0,mode:'drive' as const,
+    speed:0,steering:0,distance:0,wheelDistance:0,door:undefined,doorOpen:0};
+  traffic.restoreWreck(wreckActor,wreck);
+  for(let tick=1;tick<=140;tick++)traffic.advance(tick);
+  const front=traffic.pose(first,140)!,back=traffic.pose(second,140)!;
+  assert.equal(front.mode,'idle');
+  assert.equal(back.mode,'idle');
+  assert.ok(front.point[0]>1 && front.point[0]<2);
+  assert.ok(front.point[0]-back.point[0]>=.85);
+  traffic.restoreWreck(wreckActor,{...wreck,point:[5,0,10]});
+  for(let tick=141;tick<=150;tick++)traffic.advance(tick);
+  assert.ok(traffic.pose(first,150)!.point[0]>front.point[0]);
+  assert.ok(traffic.pose(second,150)!.point[0]>back.point[0]);
+});
+
 test('traffic recovery checks a pedestrian bypass against a planned surface and the hero',()=>{
   const nav=createNpcNavigation(city,world,[]);
   const target={point:[2.2,0,0],tick:150,yaw:Math.PI/2} as const;
@@ -201,4 +228,34 @@ test('a settled NPC car waits at the crash site and rejoins without a positional
     const resumed=traffic.pose(actor,162)!;
     assert.ok(resumed.point[2]>10 && resumed.point[0]===0);
   }finally{character.dispose();}
+});
+
+test('NPC contact handoff starts from the last rendered pose and catches up to the moving target', () => {
+  const handoff = createNpcPoseHandoff();
+  const pose = (x: number) => ({
+    point: [x, 0, 0] as const, yaw: 0, pitch: 0, mode: 'drive' as const,
+    speed: 0, distance: 0, wheelDistance: 0, steering: 0, door: undefined, doorOpen: 0,
+  });
+  assert.equal(handoff.sample('car', pose(0), false, 16).point[0], 0);
+  assert.equal(handoff.sample('car', pose(1), true, 16).point[0], 0);
+  assert.equal(handoff.sample('car', pose(1.2), true, 60).point[0], .6);
+  assert.equal(handoff.sample('car', pose(1.4), true, 60).point[0], 1.4);
+  assert.equal(handoff.sample('car', pose(1.8), false, 16).point[0], 1.4);
+  assert.equal(handoff.sample('other', pose(2), true, 16).point[0], 2);
+  assert.equal(handoff.sample('other', pose(10), false, 16).point[0], 10);
+});
+
+test('late scripted route rollover blends from the rendered position without a contact', () => {
+  const handoff=createNpcPoseHandoff();
+  const a=[0,0,0] as const,b=[7,0,0] as const,c=[14,0,0] as const;
+  const cycle={legs:[{a,b,from:0,until:60,mode:'run' as const,distance:0,length:7,yaw:Math.PI/2,pitch:0,into:0,out:0}],
+    reservations:[],endTick:60,endAnchor:'end',heading:Math.PI/2};
+  const next={...cycle,legs:[{...cycle.legs[0],a:b,b:c,from:60,until:120}],endTick:120};
+  const before=displayNpcPose(cycle,62)!;
+  const after=displayNpcPose(next,62)!;
+  assert.ok(after.point[0]-before.point[0]>.2);
+  handoff.sample('walker',before,false,16,cycle);
+  assert.deepEqual(handoff.sample('walker',after,false,16,next).point,b);
+  const settled=displayNpcPose(next,70)!;
+  assert.deepEqual(handoff.sample('walker',settled,false,120,next).point,settled.point);
 });

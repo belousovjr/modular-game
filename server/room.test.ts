@@ -1,3 +1,5 @@
+import { createRoomNpcs } from './npcs.ts';
+import { createNpcNavigation } from '../src/modules/npcs/headless.ts';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
@@ -7,12 +9,33 @@ import { citySource } from '../src/modules/world/city.ts';
 import { cityCollision } from '../src/modules/world/headless.ts';
 import { generateCity } from '../src/modules/world-generation/headless.ts';
 import { ONLINE_DAY_MS, onlineDayHour, onlineDayPhase } from '../src/simulation/daylight.ts';
-import { PROTOCOL } from '../src/simulation/online-protocol.ts';
+import { PROTOCOL, readNpcFrame, readVehicle, type NpcFrame, type VehicleCommand, type VehicleSnapshot } from '../src/simulation/online-protocol.ts';
 import { startRoom } from './room.ts';
+import { createCharactersHandler } from './api/characters.ts';
 
-type Actor = { id: string; x: number; lastSequence: number; moving: boolean };
+type Actor = { id: string; x: number; z: number; lastSequence: number; moving: boolean; vehicleId?: string; vehicleAnimation?: string };
 type Packet = { type: string; id: string; token: string; epoch: string; tick: number; dayPhaseMs: number; sequence: number;
-  accepted: boolean; reason: string; players: Actor[] };
+  accepted: boolean; reason: string; players: Actor[]; vehicle: VehicleSnapshot; data?: NpcFrame };
+
+async function connect(url: string, origin: string, world: string, characterId: string, token?: string) {
+  const socket = new WebSocket(url, { origin });
+  const packets: Packet[] = [];
+  socket.on('message', bytes => packets.push(JSON.parse(bytes.toString())));
+  await once(socket, 'open');
+  function send(value: object) { socket.send(JSON.stringify(value)); }
+  async function next(matches: (packet: Packet) => boolean, timeout = 3000) {
+    const end = performance.now() + timeout;
+    do {
+      const index = packets.findIndex(matches);
+      if (index >= 0) return packets.splice(index, 1)[0];
+      await new Promise(resolve => setTimeout(resolve, 10));
+    } while (performance.now() < end);
+    assert.fail('Expected room packet was not received');
+  }
+  send({ type: 'join', protocol: PROTOCOL, world, token, characterId, accessToken: 'test-'+characterId });
+  const welcome = await next(packet => packet.type === 'welcome');
+  return { socket, welcome, send, next };
+}
 
 test('two WebSockets share the city, reject invalid input and resume a player', { timeout: 15_000 }, async () => {
   const origin = 'http://127.0.0.1:5175';
@@ -34,27 +57,8 @@ test('two WebSockets share the city, reject invalid input and resume a player', 
       assert.equal((await closed)[0], expectedCode);
     }
     await rejected('one', 'test-two', 4003);
-    async function connect(characterId: string, token?: string) {
-      const socket = new WebSocket(url, { origin });
-      const packets: Packet[] = [];
-      socket.on('message', bytes => packets.push(JSON.parse(bytes.toString())));
-      await once(socket, 'open');
-      function send(value: object) { socket.send(JSON.stringify(value)); }
-      async function next(matches: (packet: Packet) => boolean) {
-        const end = performance.now() + 3000;
-        do {
-          const index = packets.findIndex(matches);
-          if (index >= 0) return packets.splice(index, 1)[0];
-          await new Promise(resolve => setTimeout(resolve, 10));
-        } while (performance.now() < end);
-        assert.fail('Expected room packet was not received');
-      }
-      send({ type: 'join', protocol: PROTOCOL, world, token, characterId, accessToken: 'test-'+characterId });
-      const welcome = await next(packet => packet.type === 'welcome');
-      return { socket, welcome, send, next };
-    }
-    const a = await connect('one');
-    const b = await connect('two');
+    const a = await connect(url, origin, world, 'one');
+    const b = await connect(url, origin, world, 'two');
     await rejected('one', 'test-one', 4004);
     assert.notEqual(a.welcome.id, b.welcome.id);
     assert.equal(a.welcome.epoch, b.welcome.epoch);
@@ -93,7 +97,7 @@ test('two WebSockets share the city, reject invalid input and resume a player', 
     await closed;
     await b.next(packet => packet.type === 'frame' && packet.players.some(actor =>
       actor.id === start.id && actor.lastSequence === 5 && !actor.moving));
-    const resumed = await connect(a.welcome.id, a.welcome.token);
+    const resumed = await connect(url, origin, world, a.welcome.id, a.welcome.token);
     assert.equal(resumed.welcome.id, a.welcome.id);
     assert.equal(resumed.welcome.epoch, a.welcome.epoch);
     assert.equal(resumed.welcome.players.find(actor => actor.id === start.id)?.lastSequence, 5);
@@ -148,7 +152,7 @@ test('two clients receive the same room-level entrance state', { timeout: 8000 }
 test('players cannot run through one another and can back away after contact', { timeout: 10_000 }, async () => {
   const origin='http://localhost:5175';
   const collision={
-    spawn:{x:-2,z:0},baseHeight:0,slopeX:0,bounds:{minX:-20,maxX:20,minZ:-20,maxZ:20},
+    spawn:{x:-2,z:6},baseHeight:0,slopeX:0,bounds:{minX:-20,maxX:20,minZ:-20,maxZ:20},
     floors:[],blockers:[],
   };
   let spawning=0;
@@ -207,4 +211,144 @@ test('players cannot run through one another and can back away after contact', {
     const retreated=await observe(packet=>packet.tick>held.tick&&poses(packet)[0].x<poses(contact)[0].x-.5);
     assert.equal(poses(retreated)[1].x,poses(contact)[1].x);
   } finally { await room.close(); }
+});
+
+test('two sockets share one authoritative car through contention, pedestrian contact and reconnect', { timeout: 65_000 }, async () => {
+  const origin = 'http://localhost:5175';
+  const world = 'vehicle-test';
+  const collision = {
+    spawn: { x: 0, z: 0 }, baseHeight: 0, slopeX: 0,
+    bounds: { minX: -40, maxX: 40, minZ: -40, maxZ: 40 }, floors: [],
+    blockers: [{ id: 'wall', minX: -3, maxX: 10, minY: 0, maxY: 4, minZ: 7, maxZ: 8 }],
+  };
+  let spawns = 0;
+  const room = startRoom(collision, world, 0, origin, async (token, id) => token === 'test-' + id,
+    undefined, [], [], () => spawns++ ? { x: 3.5, z: 5.8 } : { x: 0, z: 0 });
+  try {
+    await once(room.server, 'listening');
+    const address = room.server.address();
+    assert.ok(address && typeof address !== 'string');
+    const url = `ws://127.0.0.1:${address.port}/room`;
+    const a = await connect(url, origin, world, 'one');
+    const b = await connect(url, origin, world, 'two');
+    assert.ok(readVehicle(a.welcome.vehicle, a.welcome.tick));
+    function send(client: typeof a, command: VehicleCommand) {
+      client.send({ type: 'input', command });
+      return client.next(packet => packet.type === 'receipt' && packet.sequence === command.sequence);
+    }
+    const joined = await a.next(packet => packet.type === 'frame' && packet.players.length === 2 && packet.tick >= 120);
+    const base = { characterId: 'one', vehicleId: 'car/0', tick: joined.tick };
+    assert.equal((await send(b, { ...base, sequence: 101, type: 'enter' })).reason, 'invalid');
+    assert.equal((await send(a, { ...base, sequence: 2, type: 'enter' })).reason, 'accepted');
+    assert.equal((await send(b, { ...base, characterId: 'two', sequence: 102, type: 'enter' })).reason, 'unavailable');
+    // An earlier intent is delivered after the first accepted one.
+    assert.equal((await send(a, { ...base, sequence: 1, type: 'enter' })).reason, 'sequence');
+    const seated = await a.next(packet => packet.type === 'frame' && packet.vehicle.phase === 'driving');
+    const same = await b.next(packet => packet.type === 'frame' && packet.tick === seated.tick);
+    assert.deepEqual(same.vehicle, seated.vehicle);
+    assert.equal(same.vehicle.driverId, 'one');
+    assert.equal(same.players.find(actor => actor.id === 'one')?.vehicleAnimation, 'driving');
+    assert.equal(same.players.find(actor => actor.id === 'two')?.vehicleId, undefined);
+    const throttle = { ...base, type: 'drive' as const, throttle: 1, steer: 0, brake: false };
+    assert.equal((await send(b, { ...throttle, characterId: 'two', sequence: 103, tick: seated.tick })).reason, 'driver');
+    let driven = seated;
+    const footZ = same.players.find(actor => actor.id === 'two')!.z;
+    let sequence = 3; // The next accepted command also skips the dropped sequence 3.
+    for (let run = 0; run < 17; run++) {
+      assert.equal((await send(a, { ...throttle, tick: driven.tick, sequence: ++sequence })).accepted, true);
+      const nextTick = driven.tick + 6;
+      driven = await a.next(packet => packet.type === 'frame' && packet.tick >= nextTick);
+      assert.ok(driven.vehicle.position[2] < footZ - 1.9, 'driven car cannot cross the hero');
+    }
+    assert.ok(driven.vehicle.position[2] > seated.vehicle.position[2] + 2);
+    const stopped = await a.next(packet => packet.type === 'frame' && packet.tick >= driven.tick + 30 && packet.vehicle.speed < .8);
+    const closed = once(a.socket, 'close');
+    a.socket.close();
+    await closed;
+    const resumed = await connect(url, origin, world, 'one', a.welcome.token);
+    assert.equal(resumed.welcome.vehicle.driverId, 'one');
+    assert.equal(resumed.welcome.players.find(actor => actor.id === 'one')?.lastSequence, sequence);
+    assert.ok(resumed.welcome.tick >= stopped.tick);
+    assert.equal((await send(resumed, { ...base, tick: resumed.welcome.tick, sequence: ++sequence, type: 'exit' })).accepted, true);
+    const parked = await b.next(packet => packet.type === 'frame' && packet.tick > resumed.welcome.tick && packet.vehicle.phase === 'parked');
+    assert.equal(parked.vehicle.driverId, null);
+    assert.equal(parked.players.find(actor => actor.id === 'one')?.vehicleId, undefined);
+
+    const ready = await resumed.next(packet => packet.type === 'frame' && packet.tick >= parked.tick && packet.vehicle.speed < .6);
+    assert.equal((await send(resumed, { ...base, type: 'enter', tick: ready.tick, sequence: ++sequence })).reason, 'accepted');
+    const drivingAgain = await resumed.next(packet => packet.type === 'frame' && packet.tick > ready.tick && packet.vehicle.phase === 'driving');
+    const disconnected = once(resumed.socket, 'close');
+    resumed.socket.close();
+    await disconnected;
+    const expired = await b.next(packet => packet.type === 'frame' && packet.tick > drivingAgain.tick && packet.players.length === 1, 33_000);
+    assert.equal(expired.vehicle.driverId, null);
+  } finally { await room.close(); }
+});
+
+test('room sends nearby NPC recipes and lets authenticated users reset the population', { timeout: 15_000 }, async () => {
+  const origin='http://localhost:5175';
+  const world='npc-test';
+  const city=generateCity(citySource);
+  const nav=createNpcNavigation(city,cityCollision(city),getBuildingInteriorSources(city));
+  const npcs=await createRoomNpcs(nav,world);
+  const collision={bounds:nav.bounds,spawn:nav.spawn,baseHeight:0,slopeX:0,floors:[],blockers:[]};
+  let joins=0;
+  const characters=createCharactersHandler({
+    user:async token=>token==='session'?'owner':undefined,
+    list:async()=>[{id:'center',name:'Центр'}],
+    create:async(owner,name)=>({id:owner,name}),
+  });
+  const room=startRoom(collision,world,0,origin,async()=>true,undefined,[],[],
+    ()=>joins++?{x:nav.bounds.maxX-10,z:nav.bounds.maxZ-10}:nav.spawn,undefined,undefined,npcs,async token=>token==='session',
+    new Map([['/api/characters',characters]]));
+  try {
+    await once(room.server,'listening');
+    const address=room.server.address();
+    assert.ok(address&&typeof address!=='string');
+    const url=`ws://127.0.0.1:${address.port}/room`;
+    const cityCenter=await connect(url,origin,world,'center');
+    const farAway=await connect(url,origin,world,'far');
+    const local=await cityCenter.next(packet=>packet.type==='npcs'&&!!packet.data&&
+      (packet.data.scenarios.length>0||packet.data.crowds.length>0),8000);
+    const remote=await farAway.next(packet=>packet.type==='npcs'&&!!packet.data&&packet.data.population>0,8000);
+    assert.ok(readNpcFrame(local.data));
+    assert.ok(readNpcFrame(remote.data));
+    const ids=(packet:Packet)=>new Set([...packet.data!.scenarios.map(seed=>seed.id),...packet.data!.crowds.map(group=>group.recipe.id)]);
+    for(const id of ids(local))assert.ok(!ids(remote).has(id),'far client must not receive central routes');
+    const admin=`http://127.0.0.1:${address.port}/admin`;
+    const headers={Origin:origin,Authorization:'Bearer session'};
+    const health=await fetch(new URL('/healthz',admin));
+    assert.equal(health.status,200);
+    const charactersUrl=new URL('/api/characters',admin);
+    assert.equal((await fetch(charactersUrl)).status,401);
+    const list=await fetch(charactersUrl,{headers});
+    assert.equal(list.headers.get('access-control-allow-origin'),origin);
+    assert.deepEqual(await list.json(),{characters:[{id:'center',name:'Центр'}]});
+    const created=await fetch(charactersUrl,{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({name:'Новый герой'})});
+    assert.equal(created.status,201);
+    assert.deepEqual(await created.json(),{character:{id:'owner',name:'Новый герой'}});
+    const preflight=await fetch(admin+'/status',{method:'OPTIONS',headers:{
+      Origin:origin,'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'authorization',
+    }});
+    assert.equal(preflight.status,204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'),origin);
+    assert.equal((await fetch(admin+'/status',{headers:{...headers,Origin:'https://elsewhere.example'}})).status,403);
+    assert.equal((await fetch(admin+'/npcs/reset',{method:'POST'})).status,401);
+    const status=await fetch(admin+'/status',{headers});
+    assert.equal(status.status,200);
+    const sample=await status.json();
+    assert.equal(sample.players,2);
+    assert.ok(sample.population>0);
+    const reset=await fetch(admin+'/npcs/reset',{method:'POST',headers});
+    assert.equal(reset.status,200);
+    const cleared=await cityCenter.next(packet=>packet.type==='npcs'&&packet.data?.population===0&&packet.data.tick>=local.data!.tick);
+    assert.equal(ids(cleared).size,0);
+    const regenerated=await cityCenter.next(packet=>packet.type==='npcs'&&
+      !!packet.data&&packet.data.tick>cleared.data!.tick&&packet.data.population>0);
+    assert.ok(readNpcFrame(regenerated.data));
+    assert.equal(cityCenter.socket.readyState,WebSocket.OPEN);
+    assert.equal((await fetch(admin+'/npcs/reset',{method:'POST',headers})).status,429);
+  } finally {
+    try {await room.close();} finally {await npcs.close();}
+  }
 });

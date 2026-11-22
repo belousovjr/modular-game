@@ -1,10 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createAccounts, type AccountConfig } from '../server/account.ts';
-import { parsePacket, record } from '../src/simulation/online-protocol.ts';
+import type { createAccounts } from '../account.ts';
+import { parsePacket, record } from '../../src/simulation/online-protocol.ts';
 
-export function createCharactersHandler(config: AccountConfig) {
-  const accounts = createAccounts(config);
-  return async (request: IncomingMessage & { body?: unknown }, response: ServerResponse) => {
+export function createCharactersHandler(accounts: Pick<NonNullable<ReturnType<typeof createAccounts>>,'user'|'list'|'create'>|undefined) {
+  return async (request: IncomingMessage, response: ServerResponse) => {
     function reply(status: number, data: object) {
       response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(data));
     }
@@ -20,19 +19,15 @@ export function createCharactersHandler(config: AccountConfig) {
       if (!owner) return reply(401, { error: 'Сессия недействительна.' });
       if (request.method === 'GET') return reply(200, { characters: await accounts.list(owner) });
       if (Number(request.headers['content-length']) > 1024) return reply(413, { error: 'Запрос слишком большой.' });
-      let payload = request.body;
-      if (payload === undefined) {
-        const chunks: Buffer[] = [];
-        let length = 0;
-        for await (const chunk of request) {
-          const bytes = Buffer.from(chunk);
-          length += bytes.length;
-          if (length > 1024) return reply(413, { error: 'Запрос слишком большой.' });
-          chunks.push(bytes);
-        }
-        payload = Buffer.concat(chunks).toString('utf8');
+      const chunks: Buffer[] = [];
+      let length = 0;
+      for await (const chunk of request) {
+        const bytes = Buffer.from(chunk);
+        length += bytes.length;
+        if (length > 1024) return reply(413, { error: 'Запрос слишком большой.' });
+        chunks.push(bytes);
       }
-      if (typeof payload === 'string') payload = parsePacket(payload);
+      const payload = parsePacket(Buffer.concat(chunks).toString('utf8'));
       const name = record(payload) && typeof payload.name === 'string' ? payload.name.trim() : '';
       if (!/^[\p{L}\p{N}][\p{L}\p{N} _’-]{1,31}$/u.test(name))
         return reply(400, { error: 'Укажите имя из 2–32 букв, цифр, пробелов или дефисов.' });
@@ -42,5 +37,3 @@ export function createCharactersHandler(config: AccountConfig) {
     }
   };
 }
-
-export default createCharactersHandler(process.env);

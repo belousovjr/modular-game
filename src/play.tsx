@@ -1,14 +1,12 @@
-import { createAuthClient } from '@neon/auth';
-import { SupabaseAuthAdapter } from '@neon/auth/vanilla/adapters';
-import { Badge, Box, Button, Callout, Card, Flex, Heading, Text, TextField, Theme } from '@radix-ui/themes';
+import { roomHttpUrl } from './room-endpoint.ts';
+import { Badge, Box, Button, Callout, Card, Flex, Heading, Link, Popover, Text, TextField, Theme } from '@radix-ui/themes';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPanels, usePanels } from './core/panels.ts';
 import { createViewport } from './core/scene.ts';
 import { modules } from './registry.ts';
+import { accessToken, auth } from './auth.ts';
 
-const url = import.meta.env.VITE_NEON_AUTH_URL;
-const auth = url ? createAuthClient(url, { adapter: SupabaseAuthAdapter({ fetchOptions: { timeout: 12_000 } }) }) : undefined;
-const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution'];
+const playModules = ['world', 'lighting', 'player-control', 'materials', 'shadows', 'minimap', 'atmosphere', 'night-lighting', 'render-resolution', 'vehicles', 'npcs'];
 type Character = { id: string; name: string };
 type User = { id: string; name: string };
 function accountView(user: { id: string; email?: string; user_metadata: Record<string, unknown> }): User {
@@ -16,20 +14,14 @@ function accountView(user: { id: string; email?: string; user_metadata: Record<s
   return { id: user.id, name: typeof name === 'string' ? name : user.email ?? '' };
 }
 
-async function accessToken() {
-  const result = await auth?.getSession();
-  if (!result?.data?.session?.access_token) throw new Error('Войдите в аккаунт снова.');
-  return result.data.session.access_token;
-}
-
 async function characterRequest<T>(name?: string): Promise<T> {
-  const response = await fetch('/api/characters', {
+  const response = await fetch(roomHttpUrl('/api/characters'), {
     method: name === undefined ? 'GET' : 'POST',
     headers: { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' },
     body: name === undefined ? undefined : JSON.stringify({ name }),
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? 'Сервис персонажей недоступен.');
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) throw new Error(data?.error ?? 'Сервис персонажей недоступен.');
   return data;
 }
 
@@ -37,7 +29,9 @@ function Game({ character, leave }: { character: Character; leave(): void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [fps, setFps] = useState(0);
   const [panels] = useState(createPanels);
-  const minimap = usePanels(panels).find(panel => panel.id === 'minimap');
+  const entries = usePanels(panels);
+  const minimap = entries.find(panel => panel.id === 'minimap');
+  const vehicle = entries.find(panel => panel.id === 'vehicles');
   const [connection, setConnection] = useState({ message: 'Подключение…', inRoom: false });
   useEffect(() => {
     if (!canvas.current) return;
@@ -64,6 +58,10 @@ function Game({ character, leave }: { character: Character; leave(): void }) {
       <Badge role="status" color={connection.message === 'В сети' ? 'green' : 'amber'}>
         {connection.message}
       </Badge>
+      {connection.inRoom && vehicle && <Popover.Root>
+        <Popover.Trigger><Button color="gray" variant="soft">Автомобиль</Button></Popover.Trigger>
+        <Popover.Content>{vehicle.content}</Popover.Content>
+      </Popover.Root>}
       <Button color="gray" onClick={leave}>К персонажам</Button>
     </Flex>
   </main>;
@@ -155,6 +153,7 @@ export function Play() {
       {error && <Callout.Root color="red" role="alert"><Callout.Text>{error}</Callout.Text></Callout.Root>}
       {user ? <>
         <Text color="gray">{user.name}</Text>
+        <Link href="/admin">Управление комнатой</Link>
         {characters.map(character => <Button key={character.id} disabled={busy} variant="soft" onClick={() => choose(character)}>{character.name}</Button>)}
         <form onSubmit={createCharacter}><Flex direction="column" gap="3">
           <Text as="label">Имя персонажа<TextField.Root name="character" required minLength={2} maxLength={32} /></Text>

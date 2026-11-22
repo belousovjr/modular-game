@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { openRoomMap, partitionTerrain, type RoomMap } from '../server/terrain-tiles.ts';
+import { createVehicleAuthority } from '../src/modules/vehicles/headless.ts';
 import { createCharacterAuthorityFactory } from '../src/modules/characters/headless.ts';
 import type { CollisionWorld } from '../src/modules/world/headless.ts';
 
@@ -38,5 +39,17 @@ test('terrain tiles load on demand and preserve traversal and wall collision acr
     }
     assert.ok(full.snapshot().x>128 && full.snapshot().x<132);
     assert.equal(map.loadedTerrainTiles(),2);
+
+    const streamedCar=createVehicleAuthority(map.collision,0,map.terrain);
+    const fullCar=createVehicleAuthority(world);
+    try {
+      for(let tick=1;tick<=120;tick++){
+        assert.deepEqual(streamedCar.step(tick,null).blocker,fullCar.step(tick,null).blocker);
+      }
+      assert.deepEqual(streamedCar.snapshot(),fullCar.snapshot());
+    } finally {
+      streamedCar.dispose();
+      fullCar.dispose();
+    }
   } finally { await rm(path,{recursive:true,force:true}); }
 });

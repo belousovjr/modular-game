@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": { "node": "24.x" },
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "start": "node server/index.ts",
     "build": "npm run check && vite build",
     "check": "tsc --noEmit && node scripts/check-boundaries.mjs",
     "test": "node --max-old-space-size=2048 --test --test-isolation=none tests/*.test.ts",
@@ -27,7 +29,6 @@
     "@neon/config": "^1.14.6",
     "@neon/env": "^2.1.9",
     "@radix-ui/themes": "^3.3.0",
-    "@vercel/functions": "^3.11.3",
     "cannon-es": "^0.20.0",
     "javascript-astar": "0.4.1",
     "jose": "^6.2.18",

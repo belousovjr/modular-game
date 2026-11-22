@@ -151,12 +151,15 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   const triangles=new Map<string,Triangle[]>(), boxes=new Map<string,CollisionBox[]>();
   const walkSites=new Map<string,{key:string;x:number;z:number;area:number;points:Point[]}>();
   const siteRandom=random(hash(city.id));
+  // Derived building geometry can differ by a few ULPs between JavaScript runtimes.
+  const geometryJSON=(value:unknown)=>JSON.stringify(value,(_key,item:unknown)=>
+    typeof item==='number'?Math.round(item*1e6):item);
   let revision=hash(`npc/14/${city.id}/${city.version}/${world.spawn.x}/${world.spawn.z}`);
   for (const chunk of city.chunks) {
     for (const mesh of chunk.meshes) {
       const cost=SURFACES.get(mesh.surface);
       if (cost===undefined) continue;
-      revision=hash(JSON.stringify(mesh),revision);
+      revision=hash(JSON.stringify([mesh.surface,mesh.positions,mesh.indices]),revision);
       const point=(i: number): Point => [mesh.positions[3*i],mesh.positions[3*i+1],mesh.positions[3*i+2]];
       for (let i=0; i<mesh.indices.length; i+=3) {
         const a=point(mesh.indices[i]), b=point(mesh.indices[i+1]), c=point(mesh.indices[i+2]);
@@ -184,8 +187,8 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
       }
     }
   }
-  for (const box of world.blockers) {
-    revision=hash(JSON.stringify(box),revision);
+  for (const box of [...world.blockers].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0)) {
+    revision=hash(geometryJSON([box.id,box.minX,box.maxX,box.minY,box.maxY,box.minZ,box.maxZ,box.outline]),revision);
     cells(box.minX-2,box.maxX+2,box.minZ-2,box.maxZ+2,key=>add(boxes,key,box),TERRAIN_CELL);
   }
   const tile=(x: number,z: number)=>cellKey(Math.floor(x/TERRAIN_CELL),Math.floor(z/TERRAIN_CELL));
@@ -375,7 +378,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
       if (!samples(paths[level-1].at(-1)!,path[0],p=>lobby(p[0],p[2]))) break;
       paths.push([...paths[level-1],...path]);
     }
-    revision=hash(JSON.stringify([source.id,paths]),revision);
+    revision=hash(geometryJSON([source.id,paths]),revision);
     visits.push({id:source.id,node,paths});
   }
   function findFoot(x: number,z: number) {
@@ -405,7 +408,7 @@ export function createNpcNavigation(city: NavigationSource, world: Pick<Collisio
   }
   const mapVersion=`${city.id}/${revision.toString(16)}`;
   return {
-    version:`${mapVersion}/15`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
+    version:`${mapVersion}/17`, mapVersion, spawn: world.spawn, bounds, roadNodes, roadsNear, parking, visits, findFoot, walkingTree, walkSites:[...walkSites.values()],
     node(id: string) {
       if (id.startsWith('r/')) return driving.get(id);
       const [kind,x,z]=id.split('/');
@@ -868,6 +871,7 @@ export function crowdCycles(nav: NpcNavigation,group: NpcCrowd) {
 type Entry = { seed: NpcSeed; cycle: Cycle; keys: Set<string>; traffic: Map<string,TrafficSegment[]>; schedule:StreetBooking; car:boolean };
 type Presence = { entry: Entry; from: number; until: number };
 export type NpcSnapshot = { readonly tick: number; readonly scenarios: readonly NpcSeed[]; readonly crowds: readonly NpcCrowd[] };
+export type NpcCheckpoint = NpcSnapshot & {readonly attempts:number;readonly replacements:number};
 
 type TrafficSegment = Pick<Leg,'a'|'b'|'from'|'until'> & Partial<Pick<Leg,'yaw'|'into'|'out'>>;
 const CAR_CLEARANCE=5.9;
@@ -977,6 +981,7 @@ export function createStreetSchedule(bounds:NpcNavigation['bounds']) {
     }
   }
   return {
+    markAmbient,
     template(cycle:Cycle) {
       const start=cycle.legs[0].from,period=trackPeriod(cycle);
       return raster(cycle.legs,false,start,(cycle.endTick-start)/period,SCHEDULE_PERIOD/period);
@@ -1035,23 +1040,24 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   const traffic=new Map<string,TrafficSegment[]>();
   const schedule=createStreetSchedule(nav.bounds);
   let tick=startTick, nextDue=Infinity;
-  function replace(seed: NpcSeed, previous?: Entry) {
-    if (previous) {
-      schedule.change(previous.schedule,previous.car,-1);
-      for (const key of previous.keys) {
-        const remaining=grid.get(key)?.filter(p=>p.entry!==previous);
-        if (remaining?.length) grid.set(key,remaining); else grid.delete(key);
-      }
-      for (const [key,segments] of previous.traffic) {
-        const removed=new Set(segments);
-        const remaining=traffic.get(key)?.filter(leg=>!removed.has(leg));
-        if (remaining?.length) traffic.set(key,remaining); else traffic.delete(key);
-      }
-      for (const r of previous.cycle.reservations) {
-        const remaining=occupied.get(r.id)?.filter(p=>p!==r);
-        if (remaining?.length) occupied.set(r.id,remaining); else occupied.delete(r.id);
-      }
+  function remove(previous: Entry) {
+    schedule.change(previous.schedule,previous.car,-1);
+    for (const key of previous.keys) {
+      const remaining=grid.get(key)?.filter(p=>p.entry!==previous);
+      if (remaining?.length) grid.set(key,remaining); else grid.delete(key);
     }
+    for (const [key,segments] of previous.traffic) {
+      const removed=new Set(segments);
+      const remaining=traffic.get(key)?.filter(leg=>!removed.has(leg));
+      if (remaining?.length) traffic.set(key,remaining); else traffic.delete(key);
+    }
+    for (const r of previous.cycle.reservations) {
+      const remaining=occupied.get(r.id)?.filter(p=>p!==r);
+      if (remaining?.length) occupied.set(r.id,remaining); else occupied.delete(r.id);
+    }
+  }
+  function replace(seed: NpcSeed, previous?: Entry, restored=false) {
+    if (previous) remove(previous);
     let cycle=deriveNpcCycle(nav,seed);
     if (!cycle) return;
     const overlaps=(candidate: Cycle)=>{
@@ -1068,7 +1074,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
     };
     const car=profiles[seed.personality].travel==='drive';
     let pattern=schedule.detailed(cycle,car);
-    let blocked=overlaps(cycle)||schedule.conflictsDetailed(pattern,car);
+    let blocked=!restored&&(overlaps(cycle)||schedule.conflictsDetailed(pattern,car));
     for (let i=0;i<2&&blocked;i++) {
       if (cycle.legs.at(-1)!.distance>0) {
         const jitter=hash(seed.id,seed.seed+i)%3;
@@ -1139,7 +1145,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
     districts[iz*divisions+ix].roads.push(node);
   }
   const initialAnchors=new Set<string>();
-  function spawn(i: number,birth: number,local?:{x:number;z:number}) {
+  function spawn(i: number,birth: number,local?:{x:number;z:number},hidden?:(point:Point)=>boolean) {
     const id=`npc/${i}`,rng=random(hash(id));
     const localDistance=(d:typeof districts[number])=>local?Math.hypot(d.x+width/2-local.x,d.z+depth/2-local.z):0;
     const ordered=[...districts].sort((a,b)=>localDistance(a)-localDistance(b)||a.count/a.weight-b.count/b.weight||a.tie-b.tie);
@@ -1150,7 +1156,10 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
     if (district) {
       personality=3+Math.floor(rng()*2);
       while (district.roads.length) {
-        const [road]=district.roads.splice(Math.floor(rng()*district.roads.length),1);
+        const candidates=hidden?district.roads.filter(road=>hidden(nav.parking(road)?.point??road.point)):district.roads;
+        if(!candidates.length)break;
+        const road=candidates[Math.floor(rng()*candidates.length)];
+        district.roads.splice(district.roads.indexOf(road),1);
         if (!nav.parking(road)) continue;
         const entry=replace({id,personality,seed:1+Math.floor(rng()*0xfffffffe),anchor:road.id,
           home:road.id,startTick:birth,navigation:nav.version});
@@ -1172,7 +1181,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
           const x=candidate.x+((site%11+.5)/11)*width;
           const z=candidate.z+((Math.floor(site/11)+.5)/11)*depth;
           const node=nav.findFoot(x,z);
-          if (!node || initialAnchors.has(node.id)) continue;
+          if (!node || initialAnchors.has(node.id) || (hidden&&!hidden(node.point))) continue;
           const [nx,,nz]=node.point;
           if (nx<candidate.x || nx>=candidate.x+width || nz<candidate.z || nz>=candidate.z+depth) continue;
           anchor=node;
@@ -1180,7 +1189,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
           break;
         }
         if (anchor) break;
-        candidate.walkable=false;
+        if(!hidden)candidate.walkable=false;
       }
     }
     if (!anchor || !district) return;
@@ -1194,6 +1203,27 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   const coverage=new Map<string,number>();
   const available=[...nav.walkSites];
   const crowdRandom=random(hash(`crowds/${nav.mapVersion}`));
+  const groups:NpcCrowd[]=[];
+  function indexCrowd(group:NpcCrowd,full:Cycle,outdoors:Cycle[]) {
+    groups.push(group);
+    const count=group.count,tracks=[full,...outdoors];
+    const value={group,full,outdoors},keys=new Set<string>();
+    for (const track of tracks) {
+      const period=track.endTick-track.legs[0].from;
+      for (const leg of track.legs) {
+        trafficCells(leg,key=>keys.add(key));
+        const samples=Math.max(1,Math.ceil(leg.length/12));
+        const share=count*(leg.until-leg.from)/(tracks.length*period*samples);
+        for (let i=0;i<samples;i++) {
+          const [x,,z]=mix(leg.a,leg.b,(i+.5)/samples);
+          const key=cellKey(Math.floor(x/WALK_COVERAGE_CELL),Math.floor(z/WALK_COVERAGE_CELL));
+          coverage.set(key,(coverage.get(key)??0)+share);
+        }
+      }
+    }
+    for (const key of keys) add(crowds,key,value);
+    crowdPopulation+=count;
+  }
   function seedCrowd(birth:number,local?:{x:number;z:number}):void {
     if (!available.length) return;
     let chosen=-1,best=Infinity;
@@ -1247,22 +1277,7 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
       const count=slots.length;
       if (!count) return;
       const group=Object.freeze({recipe,count,slots:Object.freeze(slots)});
-      const value={group,full,outdoors},keys=new Set<string>();
-      for (const track of tracks) {
-        const period=track.endTick-track.legs[0].from;
-        for (const leg of track.legs) {
-          trafficCells(leg,key=>keys.add(key));
-          const samples=Math.max(1,Math.ceil(leg.length/12));
-          const share=count*(leg.until-leg.from)/(tracks.length*period*samples);
-          for (let i=0;i<samples;i++) {
-            const [x,,z]=mix(leg.a,leg.b,(i+.5)/samples);
-            const key=cellKey(Math.floor(x/WALK_COVERAGE_CELL),Math.floor(z/WALK_COVERAGE_CELL));
-            coverage.set(key,(coverage.get(key)??0)+share);
-          }
-        }
-      }
-      for (const key of keys) add(crowds,key,value);
-      crowdPopulation+=count;
+      indexCrowd(group,full,outdoors);
       return;
     }
   }
@@ -1272,19 +1287,55 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
       cells(x-radius,x+radius,z-radius,z+radius,key=>read(key,selected));
     return selected;
   }
-  const nearby=(x: number,z: number)=>selectNearby<Entry>(x,z,TRAFFIC_RADIUS+8,(key,selected)=>{
+  const nearby=(x: number,z: number,radius=TRAFFIC_RADIUS+8)=>selectNearby<Entry>(x,z,radius,(key,selected)=>{
     for (const p of grid.get(key)??[]) if (p.until>tick&&p.from<=tick+LEAD_TICKS) selected.add(p.entry);
   });
-  const nearbyCrowds=(x: number,z: number)=>selectNearby<CrowdEntry>(x,z,NPC_RADIUS+8,(key,selected)=>{
+  const nearbyCrowds=(x: number,z: number,radius=NPC_RADIUS+8)=>selectNearby<CrowdEntry>(x,z,radius,(key,selected)=>{
     for (const entry of crowds.get(key)??[]) selected.add(entry);
   });
 
-  let attempts=0,crowdAttempts=0,job=0;
-  const needsResident=()=>entries.length<detailed && attempts<detailed*2;
+  function passes(cycle:Cycle,from:number,until:number,x:number,z:number,radius:number){
+    if(until<cycle.legs[0].from)return false;
+    let low=0,high=cycle.legs.length-1;
+    while(low<high){
+      const mid=(low+high)>>1;
+      if(cycle.legs[mid].until<from)low=mid+1;else high=mid;
+    }
+    for(let i=low;i<cycle.legs.length;i++){
+      const leg=cycle.legs[i];
+      if(leg.from>until)break;
+      const start=trafficPosition(leg,Math.max(leg.from,Math.min(from,leg.until)));
+      const end=trafficPosition(leg,Math.min(leg.until,until));
+      const dx=end[0]-start[0],dz=end[2]-start[2];
+      const ratio=Math.max(0,Math.min(1,((x-start[0])*dx+(z-start[2])*dz)/(dx*dx+dz*dz||1)));
+      if(Math.hypot(x-start[0]-ratio*dx,z-start[2]-ratio*dz)<=radius)return true;
+    }
+    return false;
+  }
+  function crowdPasses(entry:CrowdEntry,x:number,z:number){
+    const {group,full,outdoors}=entry;
+    for(let slot=0;slot<group.count;slot++){
+      const cycle=crowdTrack(full,outdoors,group,slot);
+      const {phase,pace}=crowdTiming(cycle,group,slot);
+      const start=cycle.legs[0].from,span=cycle.endTick-start;
+      const offset=((tick-start)*pace+phase*span)%span;
+      const from=start+(offset+span)%span,until=from+LEAD_TICKS*pace;
+      if(passes(cycle,from,Math.min(until,cycle.endTick),x,z,NPC_RADIUS+8)||
+        (until>cycle.endTick&&passes(cycle,start,start+until-cycle.endTick,x,z,NPC_RADIUS+8)))return true;
+    }
+    return false;
+  }
+  let attempts=0,crowdAttempts=0,job=0,replacements=0;
+  let revision=0,retryBirthAt=startTick;
+  const needsResident=()=>entries.length<detailed && tick>=retryBirthAt && (attempts<detailed*2||replacements>0);
   const needsCrowd=()=>crowdPopulation<crowdTarget && available.length>0;
-  function birthResident(birth:number,local?:{x:number;z:number}) {
-    spawn(attempts++,birth,local);
-    if (!needsResident()) initialAnchors.clear();
+  function birthResident(birth:number,local?:{x:number;z:number},hidden?:(point:Point)=>boolean) {
+    const before=entries.length;
+    spawn(attempts++,birth,local,hidden);
+    if(replacements&&entries.length>before)replacements--;
+    else if(hidden)retryBirthAt=birth+60;
+    revision++;
+    if (!needsResident()&&!hidden) initialAnchors.clear();
   }
   function renew(entry:Entry,startTick:number) {
     const {id,personality,home,navigation}=entry.seed;
@@ -1293,21 +1344,63 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
   }
   return {
     population:()=>entries.length+crowdPopulation,
-    planNext(current:number,initialOrigin:{x:number;z:number}|null) {
+    revision:()=>revision,
+    syncTick(current:number){tick=current;},
+    resident(id:string){
+      const entry=entries.find(entry=>entry.seed.id===id);
+      return entry&&{id,cycle:entry.cycle};
+    },
+    checkpoint() {return {tick,attempts,replacements,scenarios:entries.map(entry=>entry.seed),crowds:[...groups]};},
+    restore(state:NpcCheckpoint){
+      tick=state.tick; attempts=state.attempts; replacements=state.replacements;
+      for(const seed of state.scenarios){
+        const entry=replace(seed,undefined,true);
+        if(!entry)throw new Error('Invalid persisted NPC route');
+        entries.push(entry);
+        initialAnchors.add(seed.home);
+      }
+      for(const district of districts)district.roads=district.roads.filter(road=>!initialAnchors.has(road.id));
+      const restoredSites=new Set<string>();
+      for(const group of state.crowds){
+        const tracks=crowdCycles(nav,group);
+        if(!tracks)throw new Error('Invalid persisted NPC group');
+        const patterns=new Map<Cycle,Float64Array>();
+        for(let slot=0;slot<group.count;slot++){
+          const cycle=crowdTrack(tracks.full,tracks.outdoors,group,slot);
+          if(!cycle)throw new Error('Invalid persisted NPC track');
+          let pattern=patterns.get(cycle);
+          if(!pattern){pattern=schedule.template(cycle);patterns.set(cycle,pattern);}
+          schedule.markAmbient(pattern,group.slots[slot]%SCHEDULE_SLOTS);
+        }
+        indexCrowd(group,tracks.full,tracks.outdoors);
+        restoredSites.add(group.recipe.id.slice('street/'.length));
+      }
+      for(let i=available.length-1;i>=0;i--)if(restoredSites.has(available[i].key))available.splice(i,1);
+      crowdAttempts=groups.length;
+    },
+    retire(id:string){
+      const index=entries.findIndex(entry=>entry.seed.id===id);
+      if(index<0)return false;
+      const [entry]=entries.splice(index,1);
+      remove(entry);replacements++;revision++;
+      return true;
+    },
+    planNext(current:number,initialOrigin:{x:number;z:number}|null,hidden?:(point:Point)=>boolean,held?:(id:string)=>boolean) {
       tick=current;
       // Interleave births with renewals so a burst of expirations cannot starve new districts.
       const turn=job++%3;
       if (needsCrowd() && crowdAttempts<8 && initialOrigin) {
-        seedCrowd(current,initialOrigin);
+        seedCrowd(current,initialOrigin);revision++;
         crowdAttempts++;
         return true;
       }
-      if (turn===0 && needsResident()) {birthResident(current,attempts<6?initialOrigin??undefined:undefined);return true;}
-      if (turn===1 && needsCrowd()) {seedCrowd(current);return true;}
-      if (current>=nextDue) {
+      if (turn===0 && needsResident()) {birthResident(current,attempts<6?initialOrigin??undefined:undefined,replacements?hidden:undefined);return true;}
+      if (turn===1 && needsCrowd()) {seedCrowd(current);revision++;return true;}
+      if (current>=nextDue || held) {
         let earliest=-1;
         nextDue=Infinity;
         for (let i=0;i<entries.length;i++) {
+          if(held?.(entries[i].seed.id))continue;
           const end=entries[i].cycle.endTick;
           if (end>current || (earliest>=0 && entries[earliest].cycle.endTick<=end)) {
             nextDue=Math.min(nextDue,end);
@@ -1316,10 +1409,10 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
             earliest=i;
           }
         }
-        if (earliest>=0) {entries[earliest]=renew(entries[earliest],current);return true;}
+        if (earliest>=0) {entries[earliest]=renew(entries[earliest],current);revision++;return true;}
       }
-      if (needsResident()) {birthResident(current,attempts<6?initialOrigin??undefined:undefined);return true;}
-      if (needsCrowd()) {seedCrowd(current);return true;}
+      if (needsResident()) {birthResident(current,attempts<6?initialOrigin??undefined:undefined,replacements?hidden:undefined);return true;}
+      if (needsCrowd()) {seedCrowd(current);revision++;return true;}
       return false;
     },
     step(current: number) {
@@ -1345,9 +1438,15 @@ export function createNpcAuthority(nav: NpcNavigation, startTick: number, popula
       return Object.freeze({tick,scenarios:Object.freeze([...nearby(x,z)].map(entry=>entry.seed)),
         crowds:Object.freeze([...nearbyCrowds(x,z)].map(entry=>entry.group))});
     },
+    observe(x:number,z:number,current:number):NpcSnapshot {
+      tick=current;
+      return {tick,scenarios:[...nearby(x,z)].filter(entry=>passes(entry.cycle,tick,tick+LEAD_TICKS,x,z,
+        (entry.car?TRAFFIC_RADIUS:NPC_RADIUS)+8)).map(entry=>entry.seed),
+        crowds:[...nearbyCrowds(x,z)].filter(entry=>crowdPasses(entry,x,z)).map(entry=>entry.group)};
+    },
     // The local presenter shares derived plans. A remote client can still rebuild from snapshot.scenarios.
-    presentation(x: number,z: number) { return [...nearby(x,z)].map(({seed,cycle})=>({seed,cycle})); },
-    crowdPresentation(x: number,z: number) { return [...nearbyCrowds(x,z)]; },
+    presentation(x: number,z: number,radius?:number) { return [...nearby(x,z,radius)].map(({seed,cycle})=>({seed,cycle})); },
+    crowdPresentation(x: number,z: number,radius?:number) { return [...nearbyCrowds(x,z,radius)]; },
   };
 }
 
@@ -1385,7 +1484,12 @@ function sweptDiscs(start:Body[],end:Body[],otherStart:Body[],otherEnd:Body[]) {
 
 
 export type TrafficActor = {id:string;cycle:Cycle;phase?:number;pace?:number};
-type TrafficPose = NonNullable<ReturnType<typeof sampleNpc>> & {rotation?:TrafficRotation};
+export type TrafficPose = NonNullable<ReturnType<typeof sampleNpc>> & {rotation?:TrafficRotation};
+export function npcCorrectionActor(id:string,pose:TrafficPose,tick:number):TrafficActor {
+  const cycle:Cycle={legs:[{a:pose.point,b:pose.point,mode:pose.mode,from:tick,until:tick+1,
+    distance:0,length:0,yaw:pose.yaw,pitch:pose.pitch,into:0,out:0}],reservations:[],endTick:tick+1,endAnchor:'',heading:pose.yaw};
+  return {id,cycle};
+}
 export type TrafficRejoin = {point:TrafficPoint;tick:number;yaw:number;via?:TrafficPoint};
 export type TrafficRecovery = {id:string;token:number;points:readonly TrafficRejoin[];origin:TrafficPoint;yaw:number;avoid?:TrafficPoint};
 
@@ -1397,13 +1501,24 @@ export function liveNpcPose({cycle,phase,pace}:TrafficActor,tick:number):Traffic
 }
 
 const idlePose=(pose:TrafficPose):TrafficPose=>({...pose,mode:pose.mode==='drive'?'drive':'idle',speed:0,steering:0,door:undefined,doorOpen:0});
-function nearHero(pose:TrafficPose,hero:CharacterSnapshot,margin:number) {
+function nearHero(pose:TrafficPose,hero:Pick<CharacterSnapshot,'x'|'y'|'z'>,margin:number) {
   const [x,y,z]=pose.point;
   if (hero.y+1.5<y || hero.y>y+1.65) return false;
   const dx=hero.x-x,dz=hero.z-z;
   if (pose.mode!=='drive') return dx*dx+dz*dz<(.70+margin)**2;
   const sin=Math.sin(pose.yaw),cos=Math.cos(pose.yaw);
   return Math.abs(dx*cos-dz*sin)<1.36+margin && Math.abs(dx*sin+dz*cos)<2.48+margin;
+}
+
+function nearNpc(a:TrafficPose,b:TrafficPose) {
+  if(a.mode==='drive' && b.mode==='drive'){
+    if(apart(a.point,a.point,b.point,b.point))return false;
+    const first=carBody(a.point,a.yaw),second=carBody(b.point,b.yaw);
+    return sweptDiscs(first,first,second,second);
+  }
+  const [x,y,z]=(a.mode==='drive'?b:a).point;
+  const blocker=a.mode==='drive'?a:b;
+  return nearHero(blocker,{x,y,z},blocker.mode==='drive'?.6:.16);
 }
 
 function trafficBlocker(id:string,pose:TrafficPose):CollisionBox {
@@ -1417,8 +1532,8 @@ function trafficBlocker(id:string,pose:TrafficPose):CollisionBox {
     minZ:Math.min(...outline.map(p=>p[1])),maxZ:Math.max(...outline.map(p=>p[1])),minY:y-.2,maxY:y+1.55};
 }
 
-export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void) {
-  type Reaction={actor:TrafficActor;delay:number;contactUntil:number;wreck?:TrafficPose;request?:number;waited?:number;
+export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void,retainReactions=false) {
+  type Reaction={actor:TrafficActor;delay:number;contactUntil:number;wreck?:TrafficPose;settled?:boolean;unseenSince?:number;request?:number;waited?:number;lastContact?:number;
     rejoin?:{target:TrafficRejoin;from:number;until:number}};
   const reactions=new Map<string,Reaction>();
   let actors:readonly TrafficActor[]=[];
@@ -1451,7 +1566,8 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
       if(current&&distance(current.point,point)<20)area.actors.push(actor);
     }
     for(const [id,state] of reactions){
-      if(state.wreck && distance(state.wreck.point,point)<20 && !area.actors.some(actor=>actor.id===id))area.actors.push(state.actor);
+      const current=state.wreck||(retainReactions?pose(state.actor,tick):undefined);
+      if(current && distance(current.point,point)<20 && !area.actors.some(actor=>actor.id===id))area.actors.push(state.actor);
     }
     return area.actors;
   }
@@ -1483,19 +1599,77 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
     for(const [id,state] of reactions){
       const actor=byId.get(id);
       if(state.wreck)continue;
-      if(!actor)reactions.delete(id);
-      else if(actor.cycle===state.actor.cycle)state.actor=actor;
+      if(!actor){
+        if(!retainReactions||tick-state.delay>state.actor.cycle.endTick+180)reactions.delete(id);
+      }else if(actor.cycle===state.actor.cycle)state.actor=actor;
     }
     heroArea.tick=vehicleArea.tick=-Infinity;
+  }
+  function yieldToNpcs(current:number) {
+    if(!reactions.size)return;
+    const blockers=new Map<string,{id:string;pose:TrafficPose}[]>();
+    const rejoining:TrafficActor[]=[];
+    for(const [id,state] of reactions){
+      const previous=pose(state.actor,current-1);
+      if(previous){
+        const [x,,z]=previous.point;
+        cells(x-CAR_CLEARANCE,x+CAR_CLEARANCE,z-CAR_CLEARANCE,z+CAR_CLEARANCE,key=>add(blockers,key,{id,pose:previous}));
+      }
+      if(state.rejoin)rejoining.push(state.actor);
+    }
+    for(const actor of new Set([...actors,...rejoining])){
+      let state=reactions.get(actor.id);
+      if(state?.lastContact===current || (state?.wreck && !state.rejoin))continue;
+      const next=pose(actor,current);
+      if(!next)continue;
+      const [x,,z]=next.point;
+      const nearby=blockers.get(cellKey(Math.floor(x/CELL),Math.floor(z/CELL)));
+      if(!nearby)continue;
+      const previous=pose(actor,current-1);
+      if(!previous || !nearby.some(blocker=>blocker.id!==actor.id && nearNpc(next,blocker.pose) &&
+        (distance(next.point,blocker.pose.point)<distance(previous.point,blocker.pose.point) ||
+          !nearNpc(previous,blocker.pose))))continue;
+      if(!state){state={actor,delay:0,contactUntil:current};reactions.set(actor.id,state);}
+      if(state.rejoin){state.rejoin.from++;state.rejoin.until++;}
+      else {state.delay++;state.contactUntil=current;}
+      state.lastContact=current;
+    }
   }
   return {
     replace(next:readonly TrafficActor[]) {pending=next;},
     pose,
+    immobilized:(id:string)=>!!reactions.get(id)?.wreck,
+    restoreWreck(actor:TrafficActor,pose:TrafficPose) {
+      reactions.set(actor.id,{actor,delay:0,contactUntil:0,wreck:pose,settled:true});
+    },
+    settledWrecks(){
+      return [...reactions.values()].flatMap(state=>state.wreck&&state.settled&&!state.rejoin?[{id:state.actor.id,pose:state.wreck}]:[]);
+    },
+    corrections() {
+      return [...reactions.values()].flatMap(state=>{
+        const current=pose(state.actor,tick);
+        return current?[{id:state.actor.id,pose:current}]:[];
+      });
+    },
+    pruneWrecks(current:number,visible:(point:TrafficPoint)=>boolean,retire:(id:string)=>boolean) {
+      for(const [id,state] of reactions){
+        if(!state.wreck || !state.settled || state.rejoin || visible(state.wreck.point)){
+          state.unseenSince=undefined;continue;
+        }
+        state.unseenSince??=current;
+        if(current-state.unseenSince>=180 && retire(id)){
+          reactions.delete(id);
+          actors=actors.filter(actor=>actor.id!==id);
+          heroArea.tick=vehicleArea.tick=-Infinity;
+        }
+      }
+    },
     exceptions() {return [...reactions.values()].filter(state=>state.wreck).map(state=>state.actor);},
-    step(current:number,hero:CharacterSnapshot) {
+    advance(current:number) {
       tick=current;
       if(pending){applyPlans(pending);pending=undefined;}
       for(const {id,token,target} of replies.splice(0))applyRejoin(id,token,target);
+      yieldToNpcs(current);
       for(const [id,state] of reactions) {
         if(state.rejoin && current>=state.rejoin.until){
           state.delay=current-state.rejoin.target.tick;
@@ -1507,6 +1681,9 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
           if(next){state.actor=next;state.delay=current-next.cycle.legs[0].from;}
         }
       }
+    },
+    step(current:number,hero:CharacterSnapshot) {
+      if(tick!==current||pending||replies.length)this.advance(current);
       if(hero.vehicleId && hero.vehicleAnimation!=='approaching'){
         for(const state of reactions.values())if(!state.wreck&&state.contactUntil>=current)state.delay++;
         return [];
@@ -1519,13 +1696,16 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
         const previous=pose(actor,current-1);
         const closing=!previous || Math.hypot(next.point[0]-hero.x,next.point[2]-hero.z)<
           Math.hypot(previous.point[0]-hero.x,previous.point[2]-hero.z)+1e-7;
-        if(state?.rejoin && closing && nearHero(next,hero,.08)){
+        if(state?.rejoin && state.lastContact!==current && closing && nearHero(next,hero,.08)){
           state.rejoin.from++;state.rejoin.until++;
+          state.lastContact=current;
         } else if(!state?.wreck && closing && nearHero(next,hero,next.mode==='drive'?.6:.16)){
           if(!state){state={actor,delay:0,contactUntil:current};reactions.set(actor.id,state);}
-          state.delay++;state.contactUntil=current+1;
-          state.waited=(state.waited??0)+1;
-          if(next.mode!=='drive' && state.waited%45===0 && !state.request){
+          if(state.lastContact!==current){
+            state.delay++;state.waited=(state.waited??0)+1;state.lastContact=current;
+          }
+          state.contactUntil=current+1;
+          if(next.mode!=='drive' && (state.waited??0)%45===0 && !state.request){
             state.request=++requestToken;
             const held=pose(actor,current)!;
             const points:TrafficRejoin[]=[];
@@ -1535,7 +1715,7 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
             }
             requestRecovery({id:actor.id,token:state.request,origin:held.point,yaw:held.yaw,points,avoid:[hero.x,hero.y,hero.z]});
           }
-        } else if(state && !state.wreck){
+        } else if(state && !state.wreck && state.lastContact!==current){
           if(state.contactUntil>=current)state.delay++;
           state.waited=0;
           state.request=undefined;
@@ -1573,6 +1753,7 @@ export function createTrafficActors(requestRecovery:(job:TrafficRecovery)=>void)
         const yaw=Math.atan2(2*(x*z+w*y),1-2*(x*x+y*y));
         const pitch=Math.asin(Math.max(-1,Math.min(1,2*(w*x-y*z))));
         state.wreck={...idlePose(current),point:hit.point,rotation:hit.rotation,yaw,pitch};
+        state.settled=hit.settled;
         if(!hit.settled){state.rejoin=undefined;state.request=undefined;continue;}
         if(state.request || up<.8)continue;
         state.request=++requestToken;
