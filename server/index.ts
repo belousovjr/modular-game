@@ -56,7 +56,10 @@ function checkpoint() {
 const checkpointTimer = setInterval(() => {
   void checkpoint()?.catch(() => console.error('Could not save world door checkpoint'));
 }, 1000);
-room.server.on('listening', () => console.log(`Game room listening on ${host}:${port}/room for ${origin}`));
+room.server.on('listening', () => {
+  console.log(`Game room listening on ${host}:${port}/room for ${origin}`);
+  if (process.connected) process.send?.('ready');
+});
 room.server.once('error', error => { console.error(error.message); process.exit(1); });
 let stopping = false;
 function stop() {
